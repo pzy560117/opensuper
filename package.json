@@ -15,7 +15,9 @@
   "publishConfig": {
     "access": "public"
   },
-  "bin": "./bin/opensuper.js",
+  "bin": {
+    "opensuper": "bin/opensuper.js"
+  },
   "files": [
     "dist",
     "bin",

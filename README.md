@@ -14,7 +14,7 @@
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" /></a>
 </p>
 
-# @pzy560117/opensuper
+# OpenSuper
 
 ```
  ██████╗ ██████╗ ███╗   ███╗███████╗████████╗
@@ -29,6 +29,10 @@
 > [B站视频介绍 ](https://www.bilibili.com/video/BV1y4Gi6CEo1/?spm_id_from=333.1387.homepage.video_card.click&vd_source=d22726fe6b108647dbebf1c5d8817377)
 
 **OpenSpec + Superpowers dual-star development workflow** — one command from idea to archive.
+
+- GitHub: [pzy560117/opensuper](https://github.com/pzy560117/opensuper)
+- npm: [@pzy560117/opensuper](https://www.npmjs.com/package/@pzy560117/opensuper)
+- Latest release: [v0.2.6](https://github.com/pzy560117/opensuper/releases/tag/v0.2.6)
 
 OpenSpec handles **WHAT** (outlines, proposals, spec lifecycle, archiving). Superpowers handles **HOW** (technical design, planning, execution, wrap-up). OpenSuper chains both into a five-phase automated pipeline.
 
@@ -47,6 +51,14 @@ The main entry `/opensuper` supports current Spec state detection, suitable for 
 ```bash
 npm install -g @pzy560117/opensuper
 ```
+
+## Release
+
+OpenSuper now ships through GitHub Actions release automation:
+
+- Trigger `release-opensuper` with a `version` input, or push a `v*` tag
+- The workflow runs build, tests, package dry-run, npm publish, and GitHub Release publishing
+- Published package: `@pzy560117/opensuper`
 
 ## Quick Start
 
