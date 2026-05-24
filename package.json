@@ -1,0 +1,62 @@
+{
+  "name": "opensuper",
+  "version": "0.2.6",
+  "description": "OpenSpec + Superpowers dual-star development workflow",
+  "keywords": [
+    "opensuper",
+    "openspec",
+    "superpowers",
+    "skills",
+    "workflow"
+  ],
+  "license": "MIT",
+  "author": "benym",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "opensuper": "./bin/opensuper.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "assets",
+    "scripts/postinstall.js",
+    "!dist/**/*.test.js",
+    "!dist/**/__tests__"
+  ],
+  "scripts": {
+    "build": "node build.js",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/",
+    "test:shell": "node scripts/run-bats.js test/shell/*.bats",
+    "prepare": "pnpm run build",
+    "prepublishOnly": "node scripts/prepublish-check.js && pnpm run build",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.2.0",
+    "@vitest/coverage-v8": "^4.1.6",
+    "eslint": "^10.4.0",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.59.3",
+    "vitest": "^4.1.6"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.4.3",
+    "commander": "^14.0.0"
+  }
+}

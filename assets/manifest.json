@@ -1,0 +1,21 @@
+{
+  "version": "0.2.6",
+  "skills": [
+    "opensuper/SKILL.md",
+    "opensuper/scripts/opensuper-guard.sh",
+    "opensuper/scripts/opensuper-state.sh",
+    "opensuper/scripts/opensuper-archive.sh",
+    "opensuper/scripts/opensuper-yaml-validate.sh",
+    "opensuper-open/SKILL.md",
+    "opensuper-design/SKILL.md",
+    "opensuper-build/SKILL.md",
+    "opensuper-verify/SKILL.md",
+    "opensuper-archive/SKILL.md",
+    "opensuper-hotfix/SKILL.md",
+    "opensuper-tweak/SKILL.md"
+  ],
+  "languages": [
+    { "id": "en", "name": "English", "skillsDir": "skills" },
+    { "id": "zh", "name": "中文", "skillsDir": "skills-zh" }
+  ]
+}
