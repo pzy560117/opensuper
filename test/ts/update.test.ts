@@ -116,7 +116,7 @@ describe('update command helpers', () => {
     await fs.mkdir(projectDir, { recursive: true });
     await fs.writeFile(
       path.join(projectDir, 'package.json'),
-      JSON.stringify({ devDependencies: { 'opensuper': '^0.2.4' } }),
+      JSON.stringify({ devDependencies: { '@pzy560117/opensuper': '^0.2.4' } }),
       'utf-8',
     );
 
@@ -131,13 +131,13 @@ describe('update command helpers', () => {
   });
 
   it('builds npm update args preserving package install scope', () => {
-    expect(buildNpmUpdateArgs('global')).toEqual(['install', '-g', 'opensuper@latest']);
-    expect(buildNpmUpdateArgs('project')).toEqual(['install', 'opensuper@latest']);
+    expect(buildNpmUpdateArgs('global')).toEqual(['install', '-g', '@pzy560117/opensuper@latest']);
+    expect(buildNpmUpdateArgs('project')).toEqual(['install', '@pzy560117/opensuper@latest']);
   });
 
   it('formats the npm update command for friendly console output', () => {
-    expect(formatNpmUpdateCommand('global')).toBe('npm install -g opensuper@latest');
-    expect(formatNpmUpdateCommand('project')).toBe('npm install opensuper@latest');
+    expect(formatNpmUpdateCommand('global')).toBe('npm install -g @pzy560117/opensuper@latest');
+    expect(formatNpmUpdateCommand('project')).toBe('npm install @pzy560117/opensuper@latest');
   });
 
   it('formats the skill update command with scope, platform, and language source', () => {

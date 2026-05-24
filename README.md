@@ -9,12 +9,12 @@
 
 <p align="center">
   <a href="https://github.com/pzy560117/opensuper/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/pzy560117/opensuper/actions/workflows/ci.yml/badge.svg" /></a>
-  <a href="https://www.npmjs.com/package/opensuper"><img alt="npm version" src="https://img.shields.io/npm/v/opensuper?style=flat-square" /></a>
-  <a href="https://www.npmjs.com/package/opensuper"><img alt="npm download count" src="https://img.shields.io/npm/dm/opensuper?style=flat-square&label=Downloads/mo" /></a>
+  <a href="https://www.npmjs.com/package/@pzy560117/opensuper"><img alt="npm version" src="https://img.shields.io/npm/v/%40pzy560117%2Fopensuper?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@pzy560117/opensuper"><img alt="npm download count" src="https://img.shields.io/npm/dm/%40pzy560117%2Fopensuper?style=flat-square&label=Downloads/mo" /></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" /></a>
 </p>
 
-# opensuper
+# @pzy560117/opensuper
 
 ```
  ██████╗ ██████╗ ███╗   ███╗███████╗████████╗
@@ -45,7 +45,7 @@ The main entry `/opensuper` supports current Spec state detection, suitable for 
 ## Install
 
 ```bash
-npm install -g opensuper
+npm install -g @pzy560117/opensuper
 ```
 
 ## Quick Start
@@ -68,7 +68,7 @@ opensuper init
 > [!TIP]
 > update version
 >
-> `opensuper update` or `npm install -g opensuper@latest` to get the latest features and fixes.
+> `opensuper update` or `npm install -g @pzy560117/opensuper@latest` to get the latest features and fixes.
 
 ## Screenshots
 

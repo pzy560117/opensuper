@@ -1,5 +1,5 @@
 {
-  "name": "opensuper",
+  "name": "@pzy560117/opensuper",
   "version": "0.2.6",
   "description": "OpenSpec + Superpowers dual-star development workflow",
   "keywords": [
@@ -15,9 +15,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "bin": {
-    "opensuper": "./bin/opensuper.js"
-  },
+  "bin": "./bin/opensuper.js",
   "files": [
     "dist",
     "bin",

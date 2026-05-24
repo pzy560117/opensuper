@@ -12,7 +12,7 @@ import type { InstallScope } from '../core/types.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../../package.json');
-const PACKAGE_NAME = 'opensuper';
+const PACKAGE_NAME = '@pzy560117/opensuper';
 
 interface UpdateOptions {
   json?: boolean;
