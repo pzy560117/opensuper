@@ -45,7 +45,10 @@ async function countTasks(tasksPath: string): Promise<{ done: number; total: num
   return { done, total };
 }
 
-async function readOpenSuperState(changesDir: string, changeName: string): Promise<OpenSuperState | null> {
+async function readOpenSuperState(
+  changesDir: string,
+  changeName: string,
+): Promise<OpenSuperState | null> {
   const yamlPath = path.join(changesDir, changeName, '.opensuper.yaml');
   if (!(await fileExists(yamlPath))) return null;
   const raw = await fs.readFile(yamlPath, 'utf-8');

@@ -8,6 +8,7 @@ describe('README assets', () => {
     const content = await fs.readFile(readmePath, 'utf-8');
 
     expect(content).not.toMatch(/\b(?:src|srcset)=["'](?:\.\/)?img\//);
-    expect(content).toContain('https://github.com/pzy560117/opensuper/blob/main/img/');
+    expect(content).not.toMatch(/\b(?:src|srcset)=["']https:\/\/github\.com\/pzy560117\/opensuper\/blob\/main\/img\//);
+    expect(content).toContain('https://raw.githubusercontent.com/pzy560117/opensuper/main/img/');
   });
 });

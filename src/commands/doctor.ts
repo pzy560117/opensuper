@@ -59,7 +59,11 @@ async function checkWorkingDirs(projectPath: string): Promise<CheckResult> {
     return { check: 'working directories', status: 'pass', message: 'present' };
   }
   if (!specsExist && !plansExist) {
-    return { check: 'working directories', status: 'fail', message: 'missing — run: opensuper init' };
+    return {
+      check: 'working directories',
+      status: 'fail',
+      message: 'missing — run: opensuper init',
+    };
   }
   const missing = [];
   if (!specsExist) missing.push('specs');

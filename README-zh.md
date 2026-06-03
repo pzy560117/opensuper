@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://github.com/pzy560117/opensuper/blob/main/img/title-log.png">
     <picture>
-      <source srcset="https://github.com/pzy560117/opensuper/blob/main/img/title-log.png">
-      <img src="https://github.com/pzy560117/opensuper/blob/main/img/title-log.png" alt="OpenSuper logo">
+      <source srcset="https://raw.githubusercontent.com/pzy560117/opensuper/main/img/title-log.png">
+      <img src="https://raw.githubusercontent.com/pzy560117/opensuper/main/img/title-log.png" alt="OpenSuper logo">
     </picture>
   </a>
 </p>
@@ -32,7 +32,7 @@
 
 - GitHub: [pzy560117/opensuper](https://github.com/pzy560117/opensuper)
 - npm: [@pzy560117/opensuper](https://www.npmjs.com/package/@pzy560117/opensuper)
-- 最新版本: [v0.2.6](https://github.com/pzy560117/opensuper/releases/tag/v0.2.6)
+- 最新版本: [GitHub Releases](https://github.com/pzy560117/opensuper/releases/latest)
 
 OpenSpec 处理 **WHAT**（大纲、提案、spec 生命周期、归档）。Superpowers 处理 **HOW**（技术设计、规划、执行、收尾）。OpenSuper 将二者串联为五阶段自动化流水线。
 
@@ -85,7 +85,7 @@ opensuper init
 ## 运行截图
 
 <p align="center">
-  <img src="https://github.com/pzy560117/opensuper/blob/main/img/runner.png" alt="runner">
+  <img src="https://raw.githubusercontent.com/pzy560117/opensuper/main/img/runner.png" alt="runner">
 </p>
 <p align="center">自动安装 OpenSpec、Superpowers，一键配置开发环境</p>
 <p align="center">多阶段 Skill 入口，自动识别当前 Spec 阶段，核心流程自动触发，关键节点人工审核</p>
@@ -329,6 +329,9 @@ your-project/
 
 - **如何让组合 Skill 多阶段自动流转** — 不是靠人工介入。OpenSuper 的 5 阶段流程，除必要的用户选择项外，核心流程能够自动进行 Skill 触发，同时**状态机机制**也能保障状态扭转的可靠性。
 
+如果你想把这套仓库和 `OpenSpec / Superpowers / CLAUDE.md / Harness Engineering` 的方法论一一对照，读 [docs/guide.zh.md](docs/guide.zh.md)。
+如果你想进一步理解“为什么 `pzy560117/opensuper` 不是简单工具拼装，而是作者自己工程实践的沉淀”，以及为什么它尤其适合 C/C++ 和 TS 项目，也读这份 Guide。
+
 ## 开发
 
 贡献流程、提交规范、PR 流程，以及新增平台或 Skill 的说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -355,7 +358,10 @@ pnpm test:shell         # bats shell 测试
 # Lint & format
 pnpm lint
 pnpm format
+pnpm format:check
 ```
+
+在 Windows 上，如果 `bash` 命中的是 WSL launcher，`pnpm test:shell` 会优先切到 Git Bash。若你的 Git Bash 在自定义路径，可先设置 `OPENSUPER_BASH`，例如 PowerShell：`$env:OPENSUPER_BASH='D:\Program Files\Git\bin\bash.exe'`。
 
 详见 [CHANGELOG.md](CHANGELOG.md) 了解版本历史与更新。
 
@@ -367,7 +373,7 @@ pnpm format
 
 ## License
 
-[MIT](LICENSE.md)
+[MIT](LICENSE)
 
 ## 友情链接
 [LINUX DO - 新的理想型社区](https://linux.do/)

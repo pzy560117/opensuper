@@ -1,11 +1,63 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
+import { existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
 const scriptsDir = path.resolve('assets', 'skills', 'opensuper', 'scripts');
-const bashUname = (spawnSync('bash', ['-lc', 'uname -s'], { encoding: 'utf-8' }).stdout || '').trim();
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function getGitBashCandidates(): string[] {
+  if (process.platform !== 'win32') return [];
+
+  const whereGit = spawnSync('where', ['git'], { encoding: 'utf-8' });
+  const gitPaths = `${whereGit.stdout || ''}\n${whereGit.stderr || ''}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const candidates: string[] = [];
+  for (const gitPath of gitPaths) {
+    const gitRoot = path.dirname(path.dirname(gitPath));
+    candidates.push(path.join(gitRoot, 'bin', 'bash.exe'));
+    candidates.push(path.join(gitRoot, 'usr', 'bin', 'bash.exe'));
+  }
+
+  return unique(candidates).filter((candidate) => existsSync(candidate));
+}
+
+function probeBash(command: string) {
+  const result = spawnSync(command, ['-lc', 'uname -s'], { encoding: 'utf-8' });
+  return {
+    error: result.error,
+    status: result.status,
+    stdout: (result.stdout || '').trim(),
+  };
+}
+
+function resolveBashCommand() {
+  const candidates: string[] = [];
+  if (process.env.OPENSUPER_BASH) candidates.push(process.env.OPENSUPER_BASH);
+  if (process.platform === 'win32') candidates.push(...getGitBashCandidates());
+  candidates.push('bash');
+
+  for (const candidate of unique(candidates)) {
+    const probe = probeBash(candidate);
+    if (probe.error) continue;
+    if (probe.status === 0 && probe.stdout) {
+      return { command: candidate, uname: probe.stdout };
+    }
+  }
+
+  return { command: process.env.OPENSUPER_BASH || 'bash', uname: '' };
+}
+
+const { command: bashCommand, uname: bashUname } = resolveBashCommand();
+const hasUsableBash = bashUname.length > 0;
 const isGitBash = /^(MINGW|MSYS|CYGWIN)/.test(bashUname);
 
 function toBashPath(filePath: string): string {
@@ -19,7 +71,7 @@ function toBashPath(filePath: string): string {
 }
 
 function runBash(cwd: string, script: string, args: string[] = []) {
-  return spawnSync('bash', [toBashPath(script), ...args], {
+  return spawnSync(bashCommand, [toBashPath(script), ...args], {
     cwd,
     encoding: 'utf-8',
   });
@@ -40,7 +92,7 @@ async function createChange(tmpDir: string, name: string, yaml: string, tasks = 
   return changeDir;
 }
 
-describe('opensuper shell scripts', () => {
+describe.skipIf(!hasUsableBash)('opensuper shell scripts', () => {
   let tmpDir: string;
   let guardScript: string;
   let stateScript: string;
@@ -510,7 +562,7 @@ describe('opensuper shell scripts', () => {
 
     expect(result.status).toBe(0);
     expect(mode.stdout.trim()).toBe('full');
-  });
+  }, 20_000);
 
   it('transitions full workflow from open to design', async () => {
     await createChange(

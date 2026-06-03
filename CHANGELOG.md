@@ -2,6 +2,24 @@
 
 All notable changes to opensuper will be documented in this file.
 
+## What's Changed [Unreleased]
+
+### Changed
+
+- **Windows shell test runtime selection**: `scripts/run-bats.js` and shell-script tests now prefer Git Bash on Windows before falling back to the WSL launcher `bash`, with `OPENSUPER_BASH` available for custom paths
+- **README release links**: English and Chinese README files now point to `releases/latest` instead of a hardcoded tag
+- **README asset URLs**: README images now use raw GitHub content URLs for more reliable npm and GitHub rendering
+- **Contribution docs**: `CONTRIBUTING.md` now reflects the real default branch (`main`), documents `format:check`, and adds Windows notes for shell testing
+- **Project rules and guide**: Root `AGENTS.md` and `CLAUDE.md` now describe OpenSuper's project-level execution model, and a new Chinese guide maps OpenSpec, Superpowers, worktree isolation, and Harness Engineering into this repository
+- **Author-perspective analysis**: The Chinese guide now explains `pzy560117/opensuper` as the author's own engineering sample, including its design motives, problem framing, and why it is useful as a methodology reference
+- **C/C++ and TS guidance**: The Chinese guide now explains why OpenSuper is particularly effective for C/C++ and TypeScript projects, including recommended verification patterns and `build_command` / `verify_command` examples
+
+### Fixed
+
+- **Windows shell-script flakiness**: Portable shell tests no longer fail on machines where `bash` resolves to the WSL launcher but no working Linux userland is installed
+- **Long-running shell-script test timeout**: The verification scaling integration test now uses an explicit timeout that matches its real runtime on Windows
+- **README license links**: English and Chinese README files now link to the actual `LICENSE` file
+
 ## What's Changed [0.2.6] - 2026-05-23
 
 ### Added

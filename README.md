@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://github.com/pzy560117/opensuper/blob/main/img/title-log.png">
     <picture>
-      <source srcset="https://github.com/pzy560117/opensuper/blob/main/img/title-log.png">
-      <img src="https://github.com/pzy560117/opensuper/blob/main/img/title-log.png" alt="OpenSuper logo">
+      <source srcset="https://raw.githubusercontent.com/pzy560117/opensuper/main/img/title-log.png">
+      <img src="https://raw.githubusercontent.com/pzy560117/opensuper/main/img/title-log.png" alt="OpenSuper logo">
     </picture>
   </a>
 </p>
@@ -32,7 +32,7 @@
 
 - GitHub: [pzy560117/opensuper](https://github.com/pzy560117/opensuper)
 - npm: [@pzy560117/opensuper](https://www.npmjs.com/package/@pzy560117/opensuper)
-- Latest release: [v0.2.6](https://github.com/pzy560117/opensuper/releases/tag/v0.2.6)
+- Latest release: [GitHub Releases](https://github.com/pzy560117/opensuper/releases/latest)
 
 OpenSpec handles **WHAT** (outlines, proposals, spec lifecycle, archiving). Superpowers handles **HOW** (technical design, planning, execution, wrap-up). OpenSuper chains both into a five-phase automated pipeline.
 
@@ -85,7 +85,7 @@ opensuper init
 ## Screenshots
 
 <p align="center">
-  <img src="https://github.com/pzy560117/opensuper/blob/main/img/runner.png" alt="runner">
+  <img src="https://raw.githubusercontent.com/pzy560117/opensuper/main/img/runner.png" alt="runner">
 </p>
 
 <p align="center">Auto-install OpenSpec & Superpowers, one-click dev environment setup</p>
@@ -356,7 +356,10 @@ pnpm test:shell         # bats shell tests
 # Lint & format
 pnpm lint
 pnpm format
+pnpm format:check
 ```
+
+On Windows, `pnpm test:shell` auto-prefers Git Bash when `bash` resolves to the WSL launcher. If your Git Bash lives in a custom path, set `OPENSUPER_BASH` first, for example in PowerShell: `$env:OPENSUPER_BASH='D:\Program Files\Git\bin\bash.exe'`.
 
 See [CHANGELOG.md](CHANGELOG.md) for version history and updates.
 
@@ -368,7 +371,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history and updates.
 
 ## License
 
-[MIT](LICENSE.md)
+[MIT](LICENSE)
 
 ## Reference
 [LINUX DO - 新的理想型社区](https://linux.do/)

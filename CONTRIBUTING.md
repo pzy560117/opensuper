@@ -17,9 +17,16 @@ pnpm build
 | `pnpm build` | Compile TypeScript |
 | `pnpm test` | Run unit tests |
 | `pnpm test:coverage` | Run tests with coverage |
-| `pnpm test:shell` | Run shell script tests (requires bats) |
+| `pnpm test:shell` | Run shell script tests (requires bash + bats) |
 | `pnpm lint` | Run ESLint |
 | `pnpm format` | Run Prettier |
+| `pnpm format:check` | Verify source formatting |
+
+## Windows Notes
+
+- `pnpm test:shell` now prefers Git Bash automatically when `bash` points at the WSL launcher.
+- If your Git Bash lives in a custom path, set `OPENSUPER_BASH` before running shell tests.
+- Example (PowerShell): `$env:OPENSUPER_BASH='D:\Program Files\Git\bin\bash.exe'`
 
 ## Commit Conventions
 
@@ -33,10 +40,10 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
 
 ## PR Process
 
-1. Create a feature branch from `master`
+1. Create a feature branch from `main`
 2. Implement with tests (80%+ coverage)
 3. Run `pnpm build && pnpm lint && pnpm format:check && pnpm test`
-4. Open a PR against `master`
+4. Open a PR against `main`
 
 ## Project Structure
 

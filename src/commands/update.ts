@@ -153,7 +153,10 @@ function getNpmExecutable(): string {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
-async function updateOpenSuperNpmPackage(scope: InstallScope, projectPath: string): Promise<boolean> {
+async function updateOpenSuperNpmPackage(
+  scope: InstallScope,
+  projectPath: string,
+): Promise<boolean> {
   const args = buildNpmUpdateArgs(scope);
   const cwd = scope === 'global' ? process.cwd() : projectPath;
 

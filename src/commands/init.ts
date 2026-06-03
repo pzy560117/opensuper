@@ -145,7 +145,8 @@ function displaySummary(results: PlatformResult[], scope: InstallScope): void {
   console.log(`\n  OpenSuper setup complete! (scope: ${scopeLabel})\n`);
 
   const installed = results.filter(
-    (r) => r.openspec === 'installed' || r.superpowers === 'installed' || r.opensuper === 'installed',
+    (r) =>
+      r.openspec === 'installed' || r.superpowers === 'installed' || r.opensuper === 'installed',
   );
   const skipped = results.filter(
     (r) => r.openspec === 'skipped' && r.superpowers === 'skipped' && r.opensuper === 'skipped',
