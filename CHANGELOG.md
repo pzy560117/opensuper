@@ -13,6 +13,8 @@ All notable changes to opensuper will be documented in this file.
 - **Project rules and guide**: Root `AGENTS.md` and `CLAUDE.md` now describe OpenSuper's project-level execution model, and a new Chinese guide maps OpenSpec, Superpowers, worktree isolation, and Harness Engineering into this repository
 - **Author-perspective analysis**: The Chinese guide now explains `pzy560117/opensuper` as the author's own engineering sample, including its design motives, problem framing, and why it is useful as a methodology reference
 - **C/C++ and TS guidance**: The Chinese guide now explains why OpenSuper is particularly effective for C/C++ and TypeScript projects, including recommended verification patterns and `build_command` / `verify_command` examples
+- **Origin and talk-track docs**: Added dedicated Chinese docs for OpenSuper's origin, evolution, and recommended external storytelling structure
+- **Presentation transcript**: Added a cleaned Chinese transcript doc based on the author's pasted presentation text, preserving original positioning and demo narrative
 
 ### Fixed
 

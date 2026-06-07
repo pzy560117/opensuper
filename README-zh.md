@@ -331,6 +331,9 @@ your-project/
 
 如果你想把这套仓库和 `OpenSpec / Superpowers / CLAUDE.md / Harness Engineering` 的方法论一一对照，读 [docs/guide.zh.md](docs/guide.zh.md)。
 如果你想进一步理解“为什么 `pzy560117/opensuper` 不是简单工具拼装，而是作者自己工程实践的沉淀”，以及为什么它尤其适合 C/C++ 和 TS 项目，也读这份 Guide。
+如果你想直接讲“这个项目怎么来的、一路做了什么、应该怎么对外讲”，读 [docs/talk-track.zh.md](docs/talk-track.zh.md) 和 [docs/origin-and-evolution.zh.md](docs/origin-and-evolution.zh.md)。
+如果你想看更接近作者原始口播表达的整理稿，读 [docs/presentation-transcript.zh.md](docs/presentation-transcript.zh.md)。
+如果你想直接拿一版可录视频、可现场讲的正式口播稿，读 [docs/speech-script-v2.zh.md](docs/speech-script-v2.zh.md)。
 
 ## 开发
 
