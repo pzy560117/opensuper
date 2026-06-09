@@ -4,6 +4,18 @@ All notable changes to opensuper will be documented in this file.
 
 ## What's Changed [Unreleased]
 
+## What's Changed [0.2.8] - 2026-06-09
+
+### Changed
+
+- **Output language contract**: Chinese OpenSuper skills now require Chinese prose for generated workflow documents, including proposal/design/tasks, delta specs, Design Docs, Plans, verification reports, and archive notes; English skills declare the corresponding English default
+- **External skill handoff**: OpenSuper now passes explicit output-language requirements when invoking OpenSpec and Superpowers skills so the selected OpenSuper language controls generated document prose
+- **README CLI docs**: English and Chinese READMEs now document that `init` / `update --language` controls the default prose language for OpenSuper-generated documents
+
+### Tests
+
+- Added static coverage to ensure all OpenSuper skills declare an output-language contract and external skill handoffs include language requirements
+
 ## What's Changed [0.2.7] - 2026-06-09
 
 ### Changed

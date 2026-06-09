@@ -77,6 +77,8 @@ opensuper init
 6. 将 OpenSuper 技能（你选择的语言）部署到所选平台
 7. 创建 `docs/superpowers/specs/` 和 `docs/superpowers/plans/` 工作目录
 
+OpenSuper 技能语言同时决定 OpenSuper 编排过程中生成文档的默认语言。选择中文时，`proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan 和验证报告正文默认中文；选择 English 时默认英文。命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
+
 > [!TIP]
 > 更新版本号
 >
@@ -130,7 +132,7 @@ opensuper init
 | 选项 | 描述 |
 |--------|-------------|
 | `--json` | 以 JSON 输出 npm 和 skill 更新结果 |
-| `--language <lang>` | 覆盖自动检测到的 skill 语言 (`en`, `zh`) |
+| `--language <lang>` | 覆盖自动检测到的 skill 语言 (`en`, `zh`)；同时决定 OpenSuper 生成文档的默认正文语言 |
 | `--scope <scope>` | 仅更新 `global` 或 `project` 范围 |
 
 ## 支持平台
@@ -157,6 +159,8 @@ opensuper init
 ## 技能
 
 `opensuper init` 完成后，三组技能将被安装到所选平台的 `skills/` 目录：
+
+安装中文 OpenSuper 技能时，OpenSuper 会在调用 OpenSpec 和 Superpowers 技能时传递中文产出要求，确保流程文档正文默认中文；安装英文技能时对应默认英文。
 
 ### OpenSuper 技能
 

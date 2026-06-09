@@ -5,6 +5,13 @@ description: "OpenSuper preset path: Non-bug small changes (tweak). Skip brainst
 
 # OpenSuper Preset Path: Tweak
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 Tweak is a preset workflow of OpenSuper's five-phase capabilities, not a separate parallel process. It reuses open, build, verify, archive capabilities, only skipping brainstorming and full plan.
 
 Applicable for small-scale non-bug changes, such as copy adjustments, configuration adjustments, documentation or prompt local optimization.
@@ -36,7 +43,7 @@ OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -p
 
 Reuse OpenSuper open capability to create change, but use tweak defaults: do not execute `openspec-explore` long exploration, directly enter streamlined change creation.
 
-**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 After the skill loads, follow its guidance to create streamlined artifacts:
   - `proposal.md` — change motivation + goals + scope

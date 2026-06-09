@@ -5,6 +5,13 @@ description: "OpenSuper preset path: Bug fix / hotfix. Skip brainstorming, direc
 
 # OpenSuper Preset Path: Hotfix
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 Quick bug fix workflow: open → build → verify → archive. Skip brainstorming and full plan, applicable for behavior fixes not involving new capability design.
 
 **Applicable conditions** (all must be met):
@@ -33,7 +40,7 @@ OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -p
 
 Reuse OpenSuper open capability to create change, but use hotfix defaults: do not execute `openspec-explore` long exploration, directly enter streamlined change creation.
 
-**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 After the skill loads, follow its guidance to create streamlined artifacts:
   - `proposal.md` — problem description + root cause analysis + fix goal (no solution comparison needed)

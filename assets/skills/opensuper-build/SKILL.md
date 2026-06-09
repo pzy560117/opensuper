@@ -5,6 +5,13 @@ description: "OpenSuper Phase 3: Plan and Build. Invoke with /opensuper-build. C
 
 # OpenSuper Phase 3: Plan and Build (Build)
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 ## Prerequisites
 
 - Design Doc has been created (Phase 2 complete)
@@ -27,11 +34,12 @@ Proceed to Step 1 after verification passes. The script outputs specific failure
 
 ### 1. Create Plan
 
-**Immediately execute:** Use the Skill tool to load the `superpowers:writing-plans` skill. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `superpowers:writing-plans` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 After the skill loads, follow its guidance to create a plan. Plan requirements:
 - Save to `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`
 - Reference design document, break down into executable tasks
+- Plan prose must be written in English; frontmatter keys, paths, commands, and code identifiers stay in their original form
 - **Plan file header must contain associated metadata**:
 
 ```yaml
@@ -125,7 +133,7 @@ bash "$OPENSUPER_STATE" set <name> build_mode direct
 
 Without `direct_override: true`, `build_mode=direct` in full workflow is blocked by both guard and state transition.
 
-Then, **immediately execute:** Use the Skill tool to load the corresponding skill. Skipping this step is prohibited.
+Then, **immediately execute:** Use the Skill tool to load the corresponding skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 If the selected Superpowers skill is unavailable, stop the process and prompt to install or enable the corresponding skill. Do not substitute this step with normal conversation.
 

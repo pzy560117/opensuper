@@ -5,6 +5,13 @@ description: "OpenSuper — OpenSpec + Superpowers dual-star development workflo
 
 # OpenSuper — OpenSpec + Superpowers Dual-Star Development Workflow
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 OpenSpec and Superpowers orbit the same goal like a binary star system. OpenSpec handles WHAT, Superpowers handles HOW.
 
 ```

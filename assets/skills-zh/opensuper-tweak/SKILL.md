@@ -5,6 +5,13 @@ description: "OpenSuper 预设路径：非 bug 的小改动（tweak）。跳过 
 
 # OpenSuper 预设路径：Tweak
 
+## 产出语言契约
+
+- 产出语言：中文。
+- 本 skill 的所有面向用户输出和生成文档默认使用中文，包括 `proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan、verification report 和归档说明。
+- 命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
+- 只有用户明确要求英文时才改用英文正文。
+
 Tweak 是 OpenSuper 五阶段能力的预设工作流，不是独立的平行流程。它复用 open、build、verify、archive 能力，仅跳过 brainstorming 和完整 plan。
 
 适用于非 bug 的小范围变更，例如文案调整、配置调整、文档或 prompt 的局部优化。
@@ -36,7 +43,7 @@ OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -p
 
 复用 OpenSuper open 能力创建 change，但使用 tweak 默认值：不执行 `openspec-explore` 长探索，直接进入精简 change 创建。
 
-**立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能。禁止跳过此步骤。
+**立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能，并传入要求：`产出语言：中文`。禁止跳过此步骤。
 
 技能加载后，按其指引创建精简版产物：
   - `proposal.md` — 变更动机 + 目标 + 范围

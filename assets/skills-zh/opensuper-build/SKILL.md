@@ -5,6 +5,13 @@ description: "OpenSuper 阶段 3：计划与构建。用 /opensuper-build 调用
 
 # OpenSuper 阶段 3：计划与构建（Build）
 
+## 产出语言契约
+
+- 产出语言：中文。
+- 本 skill 的所有面向用户输出和生成文档默认使用中文，包括 `proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan、verification report 和归档说明。
+- 命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
+- 只有用户明确要求英文时才改用英文正文。
+
 ## 前置条件
 
 - Design Doc 已创建（阶段 2 完成）
@@ -27,11 +34,12 @@ bash "$OPENSUPER_STATE" check <name> build
 
 ### 1. 制定计划
 
-**立即执行：** 使用 Skill 工具加载 `superpowers:writing-plans` 技能。禁止跳过此步骤。
+**立即执行：** 使用 Skill 工具加载 `superpowers:writing-plans` 技能，并传入要求：`产出语言：中文`。禁止跳过此步骤。
 
 技能加载后，按其指引制定计划。计划要求：
 - 保存至 `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`
 - 引用设计文档，拆分为可执行任务
+- Plan 正文必须使用中文；frontmatter key、路径、命令和代码标识符保持原文
 - **Plan 文件头必须包含关联元数据**：
 
 ```yaml
@@ -125,7 +133,7 @@ bash "$OPENSUPER_STATE" set <name> build_mode direct
 
 没有 `direct_override: true` 时，full workflow 的 `build_mode=direct` 会被 guard 和状态转换同时拦截。
 
-然后，**立即执行：** 使用 Skill 工具加载对应技能。禁止跳过此步骤。
+然后，**立即执行：** 使用 Skill 工具加载对应技能，并传入要求：`产出语言：中文`。禁止跳过此步骤。
 
 如所选 Superpowers 技能不可用，停止流程并提示安装或启用对应技能，不要用普通对话替代该步骤。
 

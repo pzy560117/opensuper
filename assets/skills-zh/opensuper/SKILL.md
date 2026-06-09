@@ -5,6 +5,13 @@ description: "OpenSuper — OpenSpec + Superpowers 双星开发流程。用 /ope
 
 # OpenSuper — OpenSpec + Superpowers 双星开发流程
 
+## 产出语言契约
+
+- 产出语言：中文。
+- 本 skill 的所有面向用户输出和生成文档默认使用中文，包括 `proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan、verification report 和归档说明。
+- 命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
+- 只有用户明确要求英文时才改用英文正文。
+
 OpenSpec 与 Superpowers 如双星系统围绕同一目标运转。
 
 ```

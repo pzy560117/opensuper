@@ -5,6 +5,13 @@ description: "OpenSuper 预设路径：Bug fix / 热修复。跳过 brainstormin
 
 # OpenSuper 预设路径：Hotfix
 
+## 产出语言契约
+
+- 产出语言：中文。
+- 本 skill 的所有面向用户输出和生成文档默认使用中文，包括 `proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan、verification report 和归档说明。
+- 命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
+- 只有用户明确要求英文时才改用英文正文。
+
 快速 bug fix 工作流：open → build → verify → archive。跳过 brainstorming 和完整 plan，适用于行为修复、不涉及新 capability 设计的场景。
 
 **适用条件**（必须全部满足）：
@@ -33,7 +40,7 @@ OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -p
 
 复用 OpenSuper open 能力创建 change，但使用 hotfix 默认值：不执行 `openspec-explore` 长探索，直接进入精简 change 创建。
 
-**立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能。禁止跳过此步骤。
+**立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能，并传入要求：`产出语言：中文`。禁止跳过此步骤。
 
 技能加载后，按其指引创建精简版产物：
   - `proposal.md` — 问题描述 + 根因分析 + 修复目标（无需方案对比）

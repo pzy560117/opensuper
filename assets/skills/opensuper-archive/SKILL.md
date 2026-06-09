@@ -5,6 +5,13 @@ description: "OpenSuper Phase 5: Archive. Invoke with /opensuper-archive. Sync d
 
 # OpenSuper Phase 5: Archive (Archive)
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 ## Prerequisites
 
 - Verification passed (Phase 4 complete)

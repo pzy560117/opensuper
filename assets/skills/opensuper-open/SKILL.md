@@ -5,6 +5,13 @@ description: "OpenSuper Phase 1: Open. Invoke with /opensuper-open. Explore idea
 
 # OpenSuper Phase 1: Open
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 ## Prerequisites
 
 - No active change, or user wishes to create a new change
@@ -28,13 +35,15 @@ fi
 
 ### 1. Explore Idea
 
-**Immediately execute:** Use the Skill tool to load the `openspec-explore` skill. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `openspec-explore` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
-After the skill loads, freely explore the problem space following its guidance.
+After the skill loads, freely explore the problem space following its guidance. Exploration notes, problem breakdowns, and candidate solutions must be written in English.
 
 ### 2. Create Change Structure
 
-**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill. If user intent is unclear and needs to form a proposal first, load `openspec-propose` instead. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. If user intent is unclear and needs to form a proposal first, load `openspec-propose` instead and pass the same English output requirement. Skipping this step is prohibited.
+
+The generated `proposal.md`, `design.md`, and `tasks.md` prose must be written in English; commands, paths, field names, and code identifiers stay in their original form.
 
 Confirm the following artifacts have been created:
 

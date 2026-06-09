@@ -5,6 +5,13 @@ description: "OpenSuper Phase 4: Verify and Complete. Invoke with /opensuper-ver
 
 # OpenSuper Phase 4: Verify and Complete (Verify)
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 ## Prerequisites
 
 - Code has been committed (Phase 3 complete)
@@ -79,7 +86,7 @@ bash "$OPENSUPER_STATE" transition <name> verify-fail
 
 When scale assessment result is "large":
 
-**Immediately execute:** Use the Skill tool to load the `openspec-verify-change` skill. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `openspec-verify-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 After the skill loads, follow its guidance to verify. Check items:
 1. All tasks in tasks.md completed (`[x]`)
@@ -104,7 +111,7 @@ bash "$OPENSUPER_STATE" transition <name> verify-fail
 
 ### 3. Completion (Superpowers)
 
-**Immediately execute:** Use the Skill tool to load the `superpowers:finishing-a-development-branch` skill. Skipping this step is prohibited.
+**Immediately execute:** Use the Skill tool to load the `superpowers:finishing-a-development-branch` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 If `superpowers:finishing-a-development-branch` is unavailable, stop the process and prompt to install or enable Superpowers skills. Do not substitute this step with normal conversation.
 

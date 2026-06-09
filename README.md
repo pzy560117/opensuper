@@ -77,6 +77,8 @@ opensuper init
 6. Deploy OpenSuper skills (in your chosen language) to selected platforms
 7. Create `docs/superpowers/specs/` and `docs/superpowers/plans/` working directories
 
+The OpenSuper skill language also determines the default language for documents generated during OpenSuper orchestration. Choosing 中文 makes `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, and verification reports default to Chinese prose; choosing English makes them default to English prose. Commands, paths, frontmatter keys, code identifiers, package names, and API names stay in their original form.
+
 > [!TIP]
 > update version
 >
@@ -131,7 +133,7 @@ When multiple existing components are found on the same platform, interactive in
 | Option | Description |
 |--------|-------------|
 | `--json` | Output npm and skill update results as JSON |
-| `--language <lang>` | Override detected skill language (`en`, `zh`) |
+| `--language <lang>` | Override detected skill language (`en`, `zh`); also determines the default prose language for OpenSuper-generated documents |
 | `--scope <scope>` | Update only `global` or `project` scope |
 
 ## Supported Platforms
@@ -158,6 +160,8 @@ When multiple existing components are found on the same platform, interactive in
 ## Skills
 
 After `opensuper init`, three groups of skills are installed to the selected platform's `skills/` directory:
+
+When Chinese OpenSuper skills are installed, OpenSuper passes Chinese output requirements to the OpenSpec and Superpowers skills it invokes, so workflow document prose defaults to Chinese. Installing English skills applies the corresponding English default.
 
 ### OpenSuper Skills
 

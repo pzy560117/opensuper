@@ -5,6 +5,13 @@ description: "OpenSuper 阶段 1：开启。用 /opensuper-open 调用。通过 
 
 # OpenSuper 阶段 1：开启（Open）
 
+## 产出语言契约
+
+- 产出语言：中文。
+- 本 skill 的所有面向用户输出和生成文档默认使用中文，包括 `proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan、verification report 和归档说明。
+- 命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
+- 只有用户明确要求英文时才改用英文正文。
+
 ## 前置条件
 
 - 无活跃 change，或用户希望创建新 change
@@ -13,13 +20,15 @@ description: "OpenSuper 阶段 1：开启。用 /opensuper-open 调用。通过 
 
 ### 1. 探索想法
 
-**立即执行：** 使用 Skill 工具加载 `openspec-explore` 技能。禁止跳过此步骤。
+**立即执行：** 使用 Skill 工具加载 `openspec-explore` 技能，并传入要求：`产出语言：中文`。禁止跳过此步骤。
 
-技能加载后，按其指引自由探索问题空间。
+技能加载后，按其指引自由探索问题空间。探索结论、问题拆解和候选方案正文必须使用中文。
 
 ### 2. 创建 Change 结构 + 初始化状态
 
-**立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能。若用户意图未明确、需要先形成建议，改为加载 `openspec-propose`。禁止跳过此步骤。
+**立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能，并传入要求：`产出语言：中文`。若用户意图未明确、需要先形成建议，改为加载 `openspec-propose`，同样传入中文产出要求。禁止跳过此步骤。
+
+创建的 `proposal.md`、`design.md`、`tasks.md` 正文必须使用中文；命令、路径、字段名、代码标识符保持原文。
 
 确认以下产物已创建：
 

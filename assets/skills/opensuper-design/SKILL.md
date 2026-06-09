@@ -5,6 +5,13 @@ description: "OpenSuper Phase 2: Deep Design. Invoke with /opensuper-design. Pro
 
 # OpenSuper Phase 2: Deep Design (Design)
 
+## Output Language Contract
+
+- Output language: English.
+- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
+- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
+- Use another prose language only when the user explicitly requests it.
+
 ## Prerequisites
 
 - Active change exists (proposal.md, design.md, tasks.md)
@@ -37,9 +44,11 @@ Read `proposal.md` and `design.md` under the active change, organize core conten
 
 ```
 Change: <change-name>
+Output language: English
 Proposal summary: <proposal core content>
 Design summary: <design.md architectural decisions>
 Skip context exploration, proceed directly to design questioning.
+Generated Design Docs, delta specs, discussion summaries, and follow-up task prose must be written in English; commands, paths, frontmatter keys, and code identifiers stay in their original form.
 ```
 
 Skipping this step is prohibited, and continuing without loading this skill is prohibited.

@@ -13,6 +13,17 @@ import type { Platform } from '../../src/core/platforms.js';
 
 describe('skills', () => {
   let tmpDir: string;
+  const zhSkillNames = [
+    'opensuper',
+    'opensuper-open',
+    'opensuper-design',
+    'opensuper-build',
+    'opensuper-verify',
+    'opensuper-archive',
+    'opensuper-hotfix',
+    'opensuper-tweak',
+  ];
+  const enSkillNames = zhSkillNames;
 
   beforeEach(async () => {
     tmpDir = path.join(os.tmpdir(), `opensuper-skills-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -106,6 +117,56 @@ describe('skills', () => {
       // Chinese SKILL.md should exist
       const zhSkillPath = path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md');
       expect(await fileExists(zhSkillPath)).toBe(true);
+    });
+  });
+
+  describe('output language contracts', () => {
+    it.each(zhSkillNames)('declares Chinese as the default output language in %s', async (skillName) => {
+      const skillPath = path.join('assets', 'skills-zh', skillName, 'SKILL.md');
+      const content = await fs.readFile(skillPath, 'utf-8');
+
+      expect(content).toContain('## 产出语言契约');
+      expect(content).toContain('默认使用中文');
+    });
+
+    it.each(enSkillNames)('declares English as the default output language in %s', async (skillName) => {
+      const skillPath = path.join('assets', 'skills', skillName, 'SKILL.md');
+      const content = await fs.readFile(skillPath, 'utf-8');
+
+      expect(content).toContain('## Output Language Contract');
+      expect(content).toContain('English by default');
+    });
+
+    it('passes Chinese output requirements to external skills', async () => {
+      const skillPaths = [
+        path.join('assets', 'skills-zh', 'opensuper-open', 'SKILL.md'),
+        path.join('assets', 'skills-zh', 'opensuper-design', 'SKILL.md'),
+        path.join('assets', 'skills-zh', 'opensuper-build', 'SKILL.md'),
+        path.join('assets', 'skills-zh', 'opensuper-verify', 'SKILL.md'),
+        path.join('assets', 'skills-zh', 'opensuper-hotfix', 'SKILL.md'),
+        path.join('assets', 'skills-zh', 'opensuper-tweak', 'SKILL.md'),
+      ];
+
+      for (const skillPath of skillPaths) {
+        const content = await fs.readFile(skillPath, 'utf-8');
+        expect(content).toContain('产出语言：中文');
+      }
+    });
+
+    it('passes English output requirements to external skills', async () => {
+      const skillPaths = [
+        path.join('assets', 'skills', 'opensuper-open', 'SKILL.md'),
+        path.join('assets', 'skills', 'opensuper-design', 'SKILL.md'),
+        path.join('assets', 'skills', 'opensuper-build', 'SKILL.md'),
+        path.join('assets', 'skills', 'opensuper-verify', 'SKILL.md'),
+        path.join('assets', 'skills', 'opensuper-hotfix', 'SKILL.md'),
+        path.join('assets', 'skills', 'opensuper-tweak', 'SKILL.md'),
+      ];
+
+      for (const skillPath of skillPaths) {
+        const content = await fs.readFile(skillPath, 'utf-8');
+        expect(content).toContain('Output language: English');
+      }
     });
   });
 });
