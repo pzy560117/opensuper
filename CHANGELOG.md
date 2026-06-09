@@ -4,6 +4,8 @@ All notable changes to opensuper will be documented in this file.
 
 ## What's Changed [Unreleased]
 
+## What's Changed [0.2.7] - 2026-06-09
+
 ### Changed
 
 - **Windows shell test runtime selection**: `scripts/run-bats.js` and shell-script tests now prefer Git Bash on Windows before falling back to the WSL launcher `bash`, with `OPENSUPER_BASH` available for custom paths
