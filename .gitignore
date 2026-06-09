@@ -60,6 +60,10 @@ ehthumbs.db
 
 # Claude Code
 .claude/
+.codex/
+
+# Local code index
+.codegraph/
 
 # OpenCode
 .opencode/

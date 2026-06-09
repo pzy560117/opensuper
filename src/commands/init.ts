@@ -41,14 +41,17 @@ const LANGUAGES: LanguageConfig[] = [
 ];
 
 const OPENSUPER_BANNER = [
-  `   ██████╗ ██████╗ ███╗   ███╗███████╗████████╗`,
-  `  ██╔════╝██╔═══██╗████╗ ████║██╔════╝╚══██╔══╝`,
-  `  ██║     ██║   ██║██╔████╔██║█████╗     ██║   `,
-  `  ██║     ██║   ██║██║╚██╔╝██║██╔══╝     ██║   `,
-  `  ╚██████╗╚██████╔╝██║ ╚═╝ ██║███████╗   ██║   `,
-  `   ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝   ╚═╝   `,
-  `            OpenSpec + Superpowers Workflow       `,
+  `  +------------------------------------------------+`,
+  `  |                   OpenSuper                   |`,
+  `  |        OpenSpec + Superpowers Workflow        |`,
+  `  +------------------------------------------------+`,
 ].join('\n');
+
+function getSetupTargetLabel(targetPath: string): string {
+  return path.resolve(targetPath) === path.resolve(process.cwd())
+    ? 'current directory'
+    : 'selected project';
+}
 
 async function selectScope(options: InitOptions): Promise<InstallScope> {
   if (options.yes) return 'project';
@@ -183,7 +186,7 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
   const log = options.json ? () => undefined : console.log;
 
   log(`\n${OPENSUPER_BANNER}\n`);
-  log(`  Setting up OpenSuper in ${projectPath}\n`);
+  log(`  Setting up OpenSuper for ${getSetupTargetLabel(targetPath)}\n`);
 
   const detected = await detectPlatforms(projectPath);
   const scope = await selectScope(options);
@@ -347,4 +350,4 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
   displaySummary(results, scope);
 }
 
-export { applyBulkOverwriteChoice };
+export { OPENSUPER_BANNER, applyBulkOverwriteChoice, getSetupTargetLabel };
