@@ -1,87 +1,93 @@
-# OpenSuper 项目规约
+## 测试
 
-本文件是 OpenSuper 的项目层 Guide，面向 Claude Code、Codex 和其他支持仓库级规则文件的 AI Coding Agent。
+```bash
+npx vitest run test/ts/OpenSuper-scripts.test.ts   # shell 脚本测试
+npx vitest run                                   # 全量测试
+```
 
-## 1. 三层 Guide 结构
+## 提交前检查
 
-### 全局层
+仓库已配置 Git pre-commit 钩子（husky + lint-staged），每次 `git commit` 会自动对 `src/` 下的暂存源文件运行 `prettier --write`（与 CI `format:check` 范围一致），编辑器无关，所有贡献者生效。
 
-- 遵守平台默认安全边界，不跳过验证，不伪造完成。
-- 先读仓库事实来源，再决定改动。
-- 复杂改动遵循“澄清 → 设计 → 计划 → 实现 → 验证”。
+提交前建议手动确认（CI 会强制检查）：
 
-### 团队层
+```bash
+pnpm format:check   # Prettier 格式检查
+pnpm lint           # ESLint
+pnpm build          # TypeScript 构建
+pnpm test           # 单元测试
+```
 
-- AI 不是孤立工具，而是完整工程流程的一部分。
-- Guides 负责告诉模型“该怎么做”；Sensors 负责证明“做得对不对”。
-- 人类主要负责定义边界、选择隔离方式、审查结果和校准方向，而不是替模型完成每一步执行。
+注：本地 Windows 若 `core.autocrlf=true`，未改动的旧文件可能因 CRLF 被 `prettier --check` 误报；钩子只处理暂存文件，不受影响，旧文件下次编辑时会自动转为 LF。
 
-### 项目层
+## Shell 脚本规范
 
-- OpenSuper 的核心目标：把 OpenSpec 与 Superpowers 放进同一条可恢复、可校验、可归档的工程链路。
-- 中文文档和中文技能优先维护，英文内容随后同步。
-- 行为变更不能只改 Prompt 或 README，必须落到脚本、测试、文档三者之一的可验证组合里。
+脚本位于 `assets/skills/OpenSuper/scripts/`，必须跨平台兼容（macOS / Linux / Windows Git Bash）：
 
-## 2. 推荐工作方式
+- **禁止** `sed -i`（GNU/BSD 不兼容），用 `awk` 做字段替换
+- 必须兼容 `sha256sum`（GNU）和 `shasum -a 256`（BSD/macOS）
+- 所有可选 grep 结果加 `|| true` 防止 `pipefail` 误杀
+- 新增脚本必须加入 `beforeEach` 的拷贝列表和 manifest.json
 
-### 启动顺序
+## 脚本依赖关系
 
-1. 阅读 [README-zh.md](README-zh.md) 相关章节。
-2. 阅读 [AGENTS.md](AGENTS.md) 了解目录地图和校验要求。
-3. 如果改动命令行为，阅读 `src/commands/`、`src/core/` 和相关测试。
-4. 如果改动工作流语义，阅读 `assets/skills-zh/opensuper*/` 与 `assets/skills/opensuper*/`。
-5. 如果改动状态机或归档逻辑，优先阅读 `assets/skills/opensuper/scripts/` 与对应测试。
+```
+OpenSuper-state.sh ← OpenSuper-guard.sh, OpenSuper-handoff.sh, OpenSuper-archive.sh
+OpenSuper-yaml-validate.sh ← OpenSuper-guard.sh (preflight 阶段)
+OpenSuper-handoff.sh ← OpenSuper-state.sh (写入 handoff_context/handoff_hash)
+OpenSuper-hook-guard.sh ← (独立脚本，由 .claude/settings.local.json 的 PreToolUse hook 调用)
+```
 
-### 隔离策略
+新增共享工具函数时（如 hash、yaml 解析），如果两个脚本都需要，允许在各自脚本中独立实现，不强制抽共享文件。
 
-- 小改动、单条修复：可以使用分支。
-- 高风险修改、并行实现、需要反复试验时：优先使用 worktree。
-- 单个会话只处理一个清晰目标，不把多条互不相关的工作混到同一会话。
+## .OpenSuper.yaml 状态机
 
-### Agentic 与人工介入点
+每个 change 的状态文件，字段变更需要同步三处：
+1. `OpenSuper-state.sh` — `cmd_set` 白名单 + enum 验证
+2. `OpenSuper-yaml-validate.sh` — schema 校验 + KNOWN_KEYS
+3. `test/ts/OpenSuper-scripts.test.ts` — 测试中的 yaml 字符串
 
-- Agent 可以自动推进澄清、设计、计划、实现、验证。
-- 以下节点必须显式留给人判断或确认：
-  - 选择 `branch` 还是 `worktree`
-  - 选择 `build_mode`
-  - 接受设计偏差或规格漂移
-  - 处理分支收尾与归档前的最终判断
+## 双语言 Skill
 
-## 3. Harness Engineering 在本仓库中的落点
+skill 优化时先写中文版本（`assets/skills-zh/`），用户确认后再修改英文版本（`assets/skills/`）。
 
-### Agent = Model + Harness
+## Skill 触发表述规范
 
-- Model：负责理解需求、编写代码、组织文档。
-- Harness：负责把仓库规约、状态脚本、测试与发布链路接到模型外面，限制错误自由度。
+修改 skill 时，新增或调整依赖 skill 的触发方式必须和既有写法保持一致：
 
-### Guides
+- 中文统一使用：`**立即执行：** 使用 Skill 工具加载 <skill-name> 技能。禁止跳过此步骤。`
+- 英文统一使用：`**Immediately execute:** Use the Skill tool to load the <skill-name> skill. Skipping this step is prohibited.`
+- 后续输入、上下文或执行要求写在“技能加载后 / After the skill loads”段落，不要把 `ARGUMENTS`、`fast-forward` 等另一套调用术语混入触发句。
 
-- [README-zh.md](README-zh.md)：工作流与架构总览。
-- [AGENTS.md](AGENTS.md)：仓库启动顺序与全局边界。
-- 本文件：项目级执行规约。
-- `assets/skills-zh/` / `assets/skills/`：技能指令本体。
-- [CONTRIBUTING.md](CONTRIBUTING.md)：开发与发布流程。
+## Changelog 规范
 
-### Sensors
+每次代码产生变更你都应该在完成后写Changelog，并确定是否需要升级版本号，版本号只会比master分支的版本号大一个版本，你需要确定一下当前master的版本号后做决定
 
-- `npm test`：CLI、安装、README 资产与工作流行为测试。
-- `npm run test:shell`：状态脚本、guard、archive 脚本回归。
-- `npm run lint`：源码静态检查。
-- `npm run format:check`：源码格式约束。
-- GitHub Actions：CI、PR 标题校验、release 流程。
+如果当前已经有了一个比master大的版本Changelog，则应该追加到同一个版本的Changelog条目下
 
-## 4. OpenSuper 的项目级硬约束
+如果修改的是Skill内容，则需要等中英文完全同步之后再写Changelog
 
-- 修改 `.opensuper.yaml` 字段、状态迁移条件、guard 逻辑时，必须补测试。
-- 修改用户可见工作流、命令行为或文档承诺时，必须同步 README / CHANGELOG / CONTRIBUTING 中至少一处相关入口。
-- 修改中文技能时，英文技能必须保持语义一致，不允许长期漂移。
-- shell 相关改动要默认考虑 Windows 上 `bash` 可能来自 WSL launcher 或 Git Bash。
-- 不要把知识沉淀只留在聊天里：可复用的项目经验应写入 `docs/` 或相关规则文件。
+文件：`CHANGELOG.md`，新版本条目置顶。
 
-## 5. 知识沉淀
+```
+## What's Changed [x.y.z] - YYYY-MM-DD
 
-- 项目个性化知识：写入 `docs/` 或本文件。
-- 可执行规约：写入 `AGENTS.md`、`CLAUDE.md`、技能文件、脚本或测试。
-- 团队共性经验：先在本仓库沉淀，再考虑提炼到模板或上游技能。
+### Added / Changed / Fixed / Tests / Removed / Security
 
-“知识库”负责解释背景；“可执行规约”负责约束下一次改动。两者不要混写成一团。
+- **功能名**: 描述做了什么以及为什么
+```
+
+要点：
+- 版本号与 `package.json` 的 `version` 字段一致
+- 每条以 `- **粗体关键词**: ` 开头，后接具体变更内容
+- 按类型分组：Added → Changed → Fixed → Tests → Removed → Security
+- 描述侧重 **行为变更**（what + why），不是实现细节
+- `### Tests` 条目汇总新增测试覆盖的场景，不逐条列出测试用例
+
+## 修改Skill规范
+
+不能够直接修改Superpowers和OpenSpec的原始Skill
+
+## github规范
+
+不能未经过同意直接在github上评论或者提交PR

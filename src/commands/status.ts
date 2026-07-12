@@ -2,7 +2,7 @@ import path from 'path';
 import { fileExists, readDir } from '../utils/file-system.js';
 import { promises as fs } from 'fs';
 
-type OpenSuperState = Record<string, string>;
+type opensuperState = Record<string, string>;
 
 interface ChangeStatus {
   name: string;
@@ -45,14 +45,14 @@ async function countTasks(tasksPath: string): Promise<{ done: number; total: num
   return { done, total };
 }
 
-async function readOpenSuperState(
+async function readopensuperState(
   changesDir: string,
   changeName: string,
-): Promise<OpenSuperState | null> {
+): Promise<opensuperState | null> {
   const yamlPath = path.join(changesDir, changeName, '.opensuper.yaml');
   if (!(await fileExists(yamlPath))) return null;
   const raw = await fs.readFile(yamlPath, 'utf-8');
-  const state: OpenSuperState = {};
+  const state: opensuperState = {};
   for (const line of raw.split('\n')) {
     const stripped = line.replace(/\s+#.*$/, '');
     const match = stripped.match(/^(\w[\w_]*):\s*(.*)/);
@@ -73,7 +73,7 @@ async function getActiveChanges(projectPath: string): Promise<ChangeStatus[]> {
     const stat = await fs.stat(changeDir);
     if (!stat.isDirectory()) continue;
 
-    const state = await readOpenSuperState(changesDir, entry);
+    const state = await readopensuperState(changesDir, entry);
     if (!state) continue;
     if (state.archived === 'true') continue;
 

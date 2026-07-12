@@ -1,21 +1,26 @@
 import path from 'path';
 import os from 'os';
 import { checkbox, select } from '@inquirer/prompts';
-import { PLATFORMS, type Platform } from '../core/platforms.js';
+import { PLATFORMS, getPlatformSkillsDir, type Platform } from '../core/platforms.js';
 import { detectPlatforms, hasSkills, getBaseDir, type InstallScope } from '../core/detect.js';
 import {
-  copyOpenSuperSkillsForPlatform,
+  copyopensuperSkillsForPlatform,
+  copyopensuperRulesForPlatform,
+  installopensuperHooksForPlatform,
   createWorkingDirs,
   type LanguageConfig,
 } from '../core/skills.js';
 import { installOpenSpec } from '../core/openspec.js';
 import { installSuperpowersForPlatforms } from '../core/superpowers.js';
+import { installCodegraph } from '../core/codegraph.js';
+import { printVersionInfo } from '../core/version.js';
 
 type InitOptions = {
   yes?: boolean;
   skipExisting?: boolean;
   overwrite?: boolean;
   json?: boolean;
+  scope?: InstallScope;
 };
 
 type InstallStatus = 'installed' | 'skipped' | 'failed';
@@ -27,6 +32,7 @@ interface PlatformResult {
   openspec: InstallStatus;
   superpowers: InstallStatus;
   opensuper: InstallStatus;
+  codegraph: InstallStatus;
 }
 
 type ComponentPlan = {
@@ -54,6 +60,7 @@ function getSetupTargetLabel(targetPath: string): string {
 }
 
 async function selectScope(options: InitOptions): Promise<InstallScope> {
+  if (options.scope) return options.scope;
   if (options.yes) return 'project';
 
   return select({
@@ -69,7 +76,7 @@ async function selectLanguage(options: InitOptions): Promise<LanguageConfig> {
   if (options.yes) return LANGUAGES[0];
 
   const langId = await select({
-    message: 'Language for OpenSuper skills:',
+    message: 'Language for opensuper skills:',
     choices: LANGUAGES.map((lang) => ({ name: lang.name, value: lang.id })),
   });
 
@@ -121,13 +128,16 @@ async function promptBulkOverwriteChoice(
 function applyBulkOverwriteChoice<T extends ComponentPlan>(
   plan: T,
   choice: Exclude<BulkOverwriteChoice, 'choose'>,
+  hasExisting?: { os?: boolean; sp?: boolean; cm?: boolean },
 ): T {
   const action = choice === 'overwrite-all' ? 'overwrite' : 'skip';
+  const shouldApply = (actionState: ComponentAction, exists?: boolean) =>
+    actionState === 'install' && (hasExisting === undefined || exists === true);
   return {
     ...plan,
-    osAction: plan.osAction === 'install' ? action : plan.osAction,
-    spAction: plan.spAction === 'install' ? action : plan.spAction,
-    cmAction: plan.cmAction === 'install' ? action : plan.cmAction,
+    osAction: shouldApply(plan.osAction, hasExisting?.os) ? action : plan.osAction,
+    spAction: shouldApply(plan.spAction, hasExisting?.sp) ? action : plan.spAction,
+    cmAction: shouldApply(plan.cmAction, hasExisting?.cm) ? action : plan.cmAction,
   };
 }
 
@@ -145,23 +155,34 @@ function resolveAction(
 function displaySummary(results: PlatformResult[], scope: InstallScope): void {
   const scopeLabel = scope === 'global' ? os.homedir() : 'project';
 
-  console.log(`\n  OpenSuper setup complete! (scope: ${scopeLabel})\n`);
+  console.log(`\n  opensuper setup complete! (scope: ${scopeLabel})\n`);
 
   const installed = results.filter(
     (r) =>
-      r.openspec === 'installed' || r.superpowers === 'installed' || r.opensuper === 'installed',
+      r.openspec === 'installed' ||
+      r.superpowers === 'installed' ||
+      r.opensuper === 'installed' ||
+      r.codegraph === 'installed',
   );
   const skipped = results.filter(
-    (r) => r.openspec === 'skipped' && r.superpowers === 'skipped' && r.opensuper === 'skipped',
+    (r) =>
+      r.openspec === 'skipped' &&
+      r.superpowers === 'skipped' &&
+      r.opensuper === 'skipped' &&
+      r.codegraph === 'skipped',
   );
   const failed = results.filter(
-    (r) => r.openspec === 'failed' || r.superpowers === 'failed' || r.opensuper === 'failed',
+    (r) =>
+      r.openspec === 'failed' ||
+      r.superpowers === 'failed' ||
+      r.opensuper === 'failed' ||
+      r.codegraph === 'failed',
   );
 
   if (installed.length > 0) {
     console.log(`  Installed:`);
     for (const r of installed) {
-      console.log(`    ${r.platform.name} -> ${r.platform.skillsDir}/skills/`);
+      console.log(`    ${r.platform.name} -> ${getPlatformSkillsDir(r.platform, scope)}/skills/`);
     }
   }
   if (skipped.length > 0) {
@@ -186,6 +207,9 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
   const log = options.json ? () => undefined : console.log;
 
   log(`\n${OPENSUPER_BANNER}\n`);
+  if (!options.json) {
+    await printVersionInfo(log);
+  }
   log(`  Setting up OpenSuper for ${getSetupTargetLabel(targetPath)}\n`);
 
   const detected = await detectPlatforms(projectPath);
@@ -228,9 +252,9 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
   const plans: PlatformPlan[] = [];
 
   for (const platform of selectedPlatforms) {
-    const hasOS = await hasSkills(baseDir, platform, 'openspec', selectedPlatforms);
-    const hasSP = await hasSkills(baseDir, platform, 'superpowers', selectedPlatforms);
-    const hasCM = await hasSkills(baseDir, platform, 'opensuper', selectedPlatforms);
+    const hasOS = await hasSkills(baseDir, platform, 'openspec', selectedPlatforms, scope);
+    const hasSP = await hasSkills(baseDir, platform, 'superpowers', selectedPlatforms, scope);
+    const hasCM = await hasSkills(baseDir, platform, 'opensuper', selectedPlatforms, scope);
 
     let osAction = resolveAction(hasOS, options);
     let spAction = resolveAction(hasSP, options);
@@ -240,7 +264,7 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
       const existingComponents = [
         hasOS && osAction === 'install' ? 'OpenSpec' : null,
         hasSP && spAction === 'install' ? 'Superpowers' : null,
-        hasCM && cmAction === 'install' ? 'OpenSuper' : null,
+        hasCM && cmAction === 'install' ? 'opensuper' : null,
       ].filter((component): component is string => Boolean(component));
 
       if (existingComponents.length > 1) {
@@ -249,6 +273,7 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
           ({ osAction, spAction, cmAction } = applyBulkOverwriteChoice(
             { osAction, spAction, cmAction },
             bulkChoice,
+            { os: hasOS, sp: hasSP, cm: hasCM },
           ));
         }
       }
@@ -260,7 +285,7 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
         spAction = await promptOverwriteChoice('Superpowers', platform.name);
       }
       if (cmAction === 'install' && hasCM) {
-        cmAction = await promptOverwriteChoice('OpenSuper', platform.name);
+        cmAction = await promptOverwriteChoice('opensuper', platform.name);
       }
     }
 
@@ -295,20 +320,49 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
 
   for (const plan of plans) {
     const { platform, cmAction } = plan;
-    const skillsPath = `${scope === 'global' ? '~/' : ''}${platform.skillsDir}/skills/`;
+    const platformSkillsDir = getPlatformSkillsDir(platform, scope);
+    const skillsPath = `${scope === 'global' ? '~/' : ''}${platformSkillsDir}/skills/`;
 
     let cmStatus: InstallStatus = 'skipped';
     if (cmAction !== 'skip') {
-      const { copied } = await copyOpenSuperSkillsForPlatform(
+      const { copied } = await copyopensuperSkillsForPlatform(
         baseDir,
         platform,
         cmAction === 'overwrite',
         language.skillsDir,
+        scope,
       );
       cmStatus = copied > 0 ? 'installed' : 'skipped';
-      log(`  OpenSuper -> ${platform.name}: ${cmStatus} (${copied} files) -> ${skillsPath}`);
+      log(`  opensuper -> ${platform.name}: ${cmStatus} (${copied} files) -> ${skillsPath}`);
     } else {
-      log(`  OpenSuper -> ${platform.name}: skipped (already exists)`);
+      log(`  opensuper -> ${platform.name}: skipped (already exists)`);
+    }
+
+    // Distribute anti-drift rules to platforms that support them
+    if (cmAction !== 'skip') {
+      const { copied: ruleCopied } = await copyopensuperRulesForPlatform(
+        baseDir,
+        platform,
+        cmAction === 'overwrite',
+        scope,
+      );
+      if (ruleCopied > 0) {
+        log(`  opensuper rules -> ${platform.name}: ${ruleCopied} rule(s) installed`);
+      }
+    }
+
+    // Install hooks for platforms that support them
+    if (cmAction !== 'skip' && platform.supportsHooks) {
+      const { installed, reason } = await installopensuperHooksForPlatform(
+        baseDir,
+        platform,
+        scope,
+      );
+      if (installed) {
+        log(`  opensuper hooks -> ${platform.name}: phase guard hook installed`);
+      } else if (reason) {
+        log(`  opensuper hooks -> ${platform.name}: skipped (${reason})`);
+      }
     }
 
     results.push({
@@ -316,7 +370,31 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
       openspec: osToolIds.includes(platform.openspecToolId) ? osGlobalStatus : 'skipped',
       superpowers: plan.spAction !== 'skip' ? spGlobalStatus : 'skipped',
       opensuper: cmStatus,
+      codegraph: 'skipped',
     });
+  }
+
+  let cgGlobalStatus: InstallStatus;
+  const shouldInstallCodegraph =
+    !options.json &&
+    (options.yes ||
+      (await select({
+        message: 'Install CodeGraph for semantic code intelligence?',
+        choices: [
+          { name: 'Yes (recommended — saves ~16% cost · cuts ~58% tool calls)', value: true },
+          { name: 'No', value: false },
+        ],
+      })));
+
+  if (shouldInstallCodegraph) {
+    log('\n  Installing CodeGraph...');
+    cgGlobalStatus = await installCodegraph(projectPath, scope);
+    log(`  CodeGraph: ${cgGlobalStatus}`);
+    for (const r of results) {
+      r.codegraph = cgGlobalStatus;
+    }
+  } else {
+    log('\n  CodeGraph: skipped');
   }
 
   if (scope === 'project') {
@@ -337,6 +415,7 @@ export async function initCommand(targetPath: string, options: InitOptions = {})
             openspec: result.openspec,
             superpowers: result.superpowers,
             opensuper: result.opensuper,
+            codegraph: result.codegraph,
           })),
           workingDirsCreated: scope === 'project',
         },

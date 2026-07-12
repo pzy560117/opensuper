@@ -18,8 +18,20 @@ const SECRET_PATTERNS = [
   { pattern: /AKIA[0-9A-Z]{16}/, name: 'AWS access key' },
 ];
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist']);
-const TEXT_EXTENSIONS = new Set(['.js', '.ts', '.json', '.md', '.txt', '.yml', '.yaml', '.toml']);
+const SKIP_DIRS = new Set(['node_modules', '.git']);
+const TEXT_EXTENSIONS = new Set([
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.sh',
+  '.json',
+  '.md',
+  '.txt',
+  '.yml',
+  '.yaml',
+  '.toml',
+]);
 const README_IMAGE_PATTERN = /\b(?:src|srcset)=["'](?:\.\/)?img\//;
 
 function* walkFiles(dir) {
@@ -37,8 +49,9 @@ function* walkFiles(dir) {
 }
 
 let found = 0;
+const scanRoot = process.argv[2] ?? '.';
 
-for (const filePath of walkFiles('.')) {
+for (const filePath of walkFiles(scanRoot)) {
   const ext = extname(filePath);
   if (!TEXT_EXTENSIONS.has(ext)) continue;
 

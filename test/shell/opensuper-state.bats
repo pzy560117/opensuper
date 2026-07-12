@@ -23,6 +23,8 @@ teardown() {
   grep -q "verify_mode: null" "openspec/changes/my-change/.opensuper.yaml"
   grep -q "verification_report: null" "openspec/changes/my-change/.opensuper.yaml"
   grep -q "branch_status: pending" "openspec/changes/my-change/.opensuper.yaml"
+  grep -q "opentest_gate: null" "openspec/changes/my-change/.opensuper.yaml"
+  grep -q "opentest_strict_result: null" "openspec/changes/my-change/.opensuper.yaml"
 }
 
 @test "init creates .opensuper.yaml with hotfix workflow defaults" {
@@ -117,6 +119,22 @@ teardown() {
 @test "set validates branch_status enum" {
   bash "$SCRIPT_PATH" init my-change full
   run bash "$SCRIPT_PATH" set my-change branch_status maybe
+  [ "$status" -ne 0 ]
+}
+
+@test "set validates OpenTest gate fields" {
+  bash "$SCRIPT_PATH" init my-change full
+
+  run bash "$SCRIPT_PATH" set my-change opentest_gate required
+  [ "$status" -eq 0 ]
+
+  run bash "$SCRIPT_PATH" set my-change opentest_strict_result docs/opentest/strict.json
+  [ "$status" -eq 0 ]
+
+  run bash "$SCRIPT_PATH" set my-change opentest_gate optional
+  [ "$status" -ne 0 ]
+
+  run bash "$SCRIPT_PATH" set my-change opentest_strict_result ../strict.json
   [ "$status" -ne 0 ]
 }
 

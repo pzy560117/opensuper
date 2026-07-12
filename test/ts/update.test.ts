@@ -2,16 +2,21 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import type { Platform } from '../../src/core/platforms.js';
+import { PLATFORMS, type Platform } from '../../src/core/platforms.js';
 import {
   buildNpmUpdateArgs,
-  detectOpenSuperPackageScope,
-  detectInstalledOpenSuperLanguage,
-  detectInstalledOpenSuperTargets,
+  detectopensuperPackageScope,
+  detectInstalledopensuperLanguage,
+  detectInstalledopensuperTargets,
   formatNpmUpdateCommand,
   formatSkillUpdateCommand,
   updateCommand,
 } from '../../src/commands/update.js';
+
+// Mock the interactive select prompt so tests don't hang on CI (no TTY).
+vi.mock('@inquirer/prompts', () => ({
+  select: vi.fn().mockResolvedValue(false),
+}));
 
 const claudePlatform: Platform = {
   id: 'claude',
@@ -39,22 +44,28 @@ describe('update command helpers', () => {
     await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'opensuper'), { recursive: true });
     await fs.writeFile(
       path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md'),
-      '# OpenSuper\n\n当用户提出需求时，先澄清目标再执行。',
+      '# opensuper\n\n当用户提出需求时，先澄清目标再执行。',
       'utf-8',
     );
 
-    await expect(detectInstalledOpenSuperLanguage(tmpDir, claudePlatform)).resolves.toBe('zh');
+    await expect(detectInstalledopensuperLanguage(tmpDir, claudePlatform)).resolves.toBe('zh');
   });
 
   it('detects English installed opensuper skills from existing skill content', async () => {
     await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'opensuper'), { recursive: true });
     await fs.writeFile(
       path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md'),
-      '# OpenSuper\n\nUse this skill when starting a new change.',
+      '# opensuper\n\nUse this skill when starting a new change.',
       'utf-8',
     );
 
-    await expect(detectInstalledOpenSuperLanguage(tmpDir, claudePlatform)).resolves.toBe('en');
+    await expect(detectInstalledopensuperLanguage(tmpDir, claudePlatform)).resolves.toBe('en');
+  });
+
+  it('defaults installed opensuper language to English when the skills directory is missing', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+    await expect(detectInstalledopensuperLanguage(tmpDir, claudePlatform)).resolves.toBe('en');
   });
 
   it('finds only scopes and platforms that already have opensuper skills installed', async () => {
@@ -64,7 +75,7 @@ describe('update command helpers', () => {
     await fs.mkdir(path.join(projectDir, '.claude', 'skills', 'opensuper'), { recursive: true });
     await fs.writeFile(
       path.join(projectDir, '.claude', 'skills', 'opensuper', 'SKILL.md'),
-      '# OpenSuper\n\nUse this skill.',
+      '# opensuper\n\nUse this skill.',
       'utf-8',
     );
 
@@ -73,11 +84,11 @@ describe('update command helpers', () => {
     await fs.mkdir(path.join(globalDir, '.codex', 'skills', 'opensuper'), { recursive: true });
     await fs.writeFile(
       path.join(globalDir, '.codex', 'skills', 'opensuper', 'SKILL.md'),
-      '# OpenSuper\n\n当用户提出需求时使用这个技能。',
+      '# opensuper\n\n当用户提出需求时使用这个技能。',
       'utf-8',
     );
 
-    const targets = await detectInstalledOpenSuperTargets(projectDir, {
+    const targets = await detectInstalledopensuperTargets(projectDir, {
       globalBaseDir: globalDir,
     });
 
@@ -87,16 +98,25 @@ describe('update command helpers', () => {
     ]);
   });
 
+  it('ignores platform directories that do not contain a skills directory', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    await fs.mkdir(path.join(projectDir, '.claude'), { recursive: true });
+
+    await expect(detectInstalledopensuperTargets(projectDir, { scopes: ['project'] })).resolves.toEqual(
+      [],
+    );
+  });
+
   it('respects explicit scope filtering when detecting installed targets', async () => {
     const projectDir = path.join(tmpDir, 'project');
     const globalDir = path.join(tmpDir, 'home');
 
     await fs.mkdir(path.join(projectDir, '.claude', 'skills', 'opensuper'), { recursive: true });
-    await fs.writeFile(path.join(projectDir, '.claude', 'skills', 'opensuper', 'SKILL.md'), '# OpenSuper');
+    await fs.writeFile(path.join(projectDir, '.claude', 'skills', 'opensuper', 'SKILL.md'), '# opensuper');
     await fs.mkdir(path.join(globalDir, '.codex', 'skills', 'opensuper'), { recursive: true });
-    await fs.writeFile(path.join(globalDir, '.codex', 'skills', 'opensuper', 'SKILL.md'), '# OpenSuper');
+    await fs.writeFile(path.join(globalDir, '.codex', 'skills', 'opensuper', 'SKILL.md'), '# opensuper');
 
-    const targets = await detectInstalledOpenSuperTargets(projectDir, {
+    const targets = await detectInstalledopensuperTargets(projectDir, {
       globalBaseDir: globalDir,
       scopes: ['global'],
     });
@@ -104,11 +124,33 @@ describe('update command helpers', () => {
     expect(targets.map((t) => `${t.scope}:${t.platform.id}`)).toEqual(['global:codex']);
   });
 
+  it('detects legacy global Pi skills so update can migrate them', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    const globalDir = path.join(tmpDir, 'home');
+
+    await fs.mkdir(path.join(globalDir, '.pi', 'skills', 'opensuper'), { recursive: true });
+    await fs.writeFile(
+      path.join(globalDir, '.pi', 'skills', 'opensuper', 'SKILL.md'),
+      '# opensuper\n\nUse this skill.',
+      'utf-8',
+    );
+
+    const targets = await detectInstalledopensuperTargets(projectDir, {
+      globalBaseDir: globalDir,
+      scopes: ['global'],
+    });
+
+    expect(targets.map((t) => `${t.scope}:${t.platform.id}:${t.language}`)).toEqual([
+      'global:pi:en',
+    ]);
+    expect(PLATFORMS.find((platform) => platform.id === 'pi')?.globalSkillsDir).toBe('.pi/agent');
+  });
+
   it('detects project package scope from local node_modules install path', async () => {
     const projectDir = path.join(tmpDir, 'project');
-    const packageRoot = path.join(projectDir, 'node_modules', 'opensuper');
+    const packageRoot = path.join(projectDir, 'node_modules', '@pzy560117', 'opensuper');
 
-    await expect(detectOpenSuperPackageScope(projectDir, packageRoot)).resolves.toBe('project');
+    await expect(detectopensuperPackageScope(projectDir, packageRoot)).resolves.toBe('project');
   });
 
   it('detects project package scope from package.json dependencies', async () => {
@@ -120,24 +162,39 @@ describe('update command helpers', () => {
       'utf-8',
     );
 
-    await expect(detectOpenSuperPackageScope(projectDir, tmpDir)).resolves.toBe('project');
+    await expect(detectopensuperPackageScope(projectDir, tmpDir)).resolves.toBe('project');
   });
 
   it('falls back to global package scope when no project install is found', async () => {
     const projectDir = path.join(tmpDir, 'project');
     await fs.mkdir(projectDir, { recursive: true });
 
-    await expect(detectOpenSuperPackageScope(projectDir, tmpDir)).resolves.toBe('global');
+    await expect(detectopensuperPackageScope(projectDir, tmpDir)).resolves.toBe('global');
   });
 
-  it('builds npm update args preserving package install scope', () => {
-    expect(buildNpmUpdateArgs('global')).toEqual(['install', '-g', '@pzy560117/opensuper@latest']);
-    expect(buildNpmUpdateArgs('project')).toEqual(['install', '@pzy560117/opensuper@latest']);
+  it('builds npm update args preserving package install scope with official registry', () => {
+    expect(buildNpmUpdateArgs('global')).toEqual([
+      'install',
+      '-g',
+      '@pzy560117/opensuper@latest',
+      '--registry',
+      'https://registry.npmjs.org',
+    ]);
+    expect(buildNpmUpdateArgs('project')).toEqual([
+      'install',
+      '@pzy560117/opensuper@latest',
+      '--registry',
+      'https://registry.npmjs.org',
+    ]);
   });
 
   it('formats the npm update command for friendly console output', () => {
-    expect(formatNpmUpdateCommand('global')).toBe('npm install -g @pzy560117/opensuper@latest');
-    expect(formatNpmUpdateCommand('project')).toBe('npm install @pzy560117/opensuper@latest');
+    expect(formatNpmUpdateCommand('global')).toBe(
+      'npm install -g @pzy560117/opensuper@latest --registry https://registry.npmjs.org',
+    );
+    expect(formatNpmUpdateCommand('project')).toBe(
+      'npm install @pzy560117/opensuper@latest --registry https://registry.npmjs.org',
+    );
   });
 
   it('formats the skill update command with scope, platform, and language source', () => {
@@ -153,7 +210,7 @@ describe('update command helpers', () => {
     await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'opensuper'), { recursive: true });
     await fs.writeFile(
       path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md'),
-      '# OpenSuper\n\n当用户提出需求时使用这个技能。',
+      '# opensuper\n\n当用户提出需求时使用这个技能。',
       'utf-8',
     );
 
@@ -173,7 +230,7 @@ describe('update command helpers', () => {
     await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'opensuper'), { recursive: true });
     await fs.writeFile(
       path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md'),
-      '# OpenSuper\n\nUse this skill.',
+      '# opensuper\n\nUse this skill.',
       'utf-8',
     );
 

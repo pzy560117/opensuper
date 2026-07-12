@@ -2,7 +2,83 @@ import { describe, expect, it } from 'vitest';
 import { promises as fs } from 'fs';
 
 describe('CI workflows', () => {
-  it('defines PR title linting with OpenSuper-specific semantic scopes', async () => {
+  it('protects the actual main branch', async () => {
+    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(/\r\n/g, '\n');
+
+    expect(workflow).toContain('branches: [main]');
+    expect(workflow).not.toContain('branches: [master]');
+  });
+
+  it('bounds the cross-platform script-smoke job', async () => {
+    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(/\r\n/g, '\n');
+    const scriptSmoke = workflow.slice(
+      workflow.indexOf('  script-smoke:'),
+      workflow.indexOf('  init-e2e:'),
+    );
+
+    expect(scriptSmoke).toContain('timeout-minutes: 45');
+  });
+
+  it('publishes one exact prepacked release candidate without mutating the version', async () => {
+    const workflow = (await fs.readFile('.github/workflows/release-cli.yml', 'utf-8')).replace(
+      /\r\n/g,
+      '\n',
+    );
+
+    expect(workflow).not.toContain('npm version');
+    expect(workflow).toContain('$package.version -ne $env:PACKAGE_VERSION');
+    expect(workflow).toContain('npm pack --ignore-scripts --pack-destination $candidateDir');
+    expect(workflow).toContain('$packages.Count -ne 1');
+    expect(workflow).toContain('PACKAGE_TGZ=$($packages[0].FullName)');
+    expect(workflow).toContain('tar -xzf $env:PACKAGE_TGZ -C $scanDir');
+    expect(workflow).toContain("node scripts/prepublish-check.js (Join-Path $scanDir 'package')");
+    expect(workflow).toContain(
+      'npm install --prefix $smokeDir $env:PACKAGE_TGZ --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org/',
+    );
+    expect(workflow).toContain(
+      'npm publish $env:PACKAGE_TGZ --ignore-scripts --access public --registry=https://registry.npmjs.org/',
+    );
+    expect(workflow).not.toMatch(/run:\s+npm publish --access public/);
+  });
+
+  it('validates init e2e through owned files and installer status', async () => {
+    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(/\r\n/g, '\n');
+    const projectVerify = workflow.slice(
+      workflow.indexOf('- name: Verify opensuper skills installed (project)'),
+      workflow.indexOf('- name: Verify external installer status (project)'),
+    );
+    const globalVerify = workflow.slice(
+      workflow.indexOf('- name: Verify opensuper skills installed (global)'),
+      workflow.indexOf('- name: Verify external installer status (global)'),
+    );
+
+    expect(workflow).toContain('opensuper-init-project.json');
+    expect(workflow).toContain('opensuper-init-global.json');
+    expect(workflow).toContain('export USERPROFILE="$RUNNER_TEMP/opensuper-e2e-global"');
+    expect(workflow).toContain('check_file "$PROJ/$sd/opensuper/SKILL.md"');
+    expect(workflow).toContain('check_file "$HOME_DIR/$sd/opensuper/SKILL.md"');
+    expect(projectVerify).toContain('.opencode/skills');
+    expect(projectVerify).not.toContain('.config/opencode/skills');
+    expect(globalVerify).toContain('.config/opencode/skills');
+    expect(globalVerify).not.toContain('.opencode/skills');
+    expect(workflow).toContain('function extractJsonPayload(raw) {');
+    expect(workflow).toContain("throw new Error('No JSON payload found in init output');");
+    expect(workflow).toContain('const data = JSON.parse(extractJsonPayload(raw));');
+    expect(workflow).toContain("const allowed = new Set(['installed', 'skipped', 'failed']);");
+    expect(workflow).toContain("const components = ['openspec', 'superpowers'];");
+    expect(workflow).toContain("r[component] === 'failed'");
+    expect(workflow).toContain('External installer statuses validated for');
+    expect(workflow).not.toContain('check_glob "$PROJ/$sd/openspec-*"');
+    expect(workflow).not.toContain('check_dir "$PROJ/$sd/brainstorming"');
+    expect(workflow).not.toContain('check_dir "$PROJ/$sd/using-superpowers"');
+    expect(workflow).not.toContain('check_glob "$HOME_DIR/$sd/openspec-*"');
+    expect(workflow).not.toContain('check_dir "$HOME_DIR/$sd/brainstorming"');
+    expect(workflow).not.toContain('check_dir "$HOME_DIR/$sd/using-superpowers"');
+    expect(workflow).toContain('All 29 platforms project opensuper skills: OK');
+    expect(workflow).toContain('All 29 platforms global opensuper skills: OK');
+  });
+
+  it('defines PR title linting with opensuper-specific semantic scopes', async () => {
     const workflow = (await fs.readFile('.github/workflows/pr-title-lint.yml', 'utf-8')).replace(/\r\n/g, '\n');
 
     expect(workflow).toContain('name: PR Title Lint');
@@ -31,5 +107,29 @@ describe('CI workflows', () => {
     for (const outOfScope of ['common', 'api', 'spi', 'plugins', 'mcp', 'tools']) {
       expect(workflow).not.toMatch(new RegExp(`\\n\\s+${outOfScope}\\n`));
     }
+  });
+
+  it('defines stale PR auto-closing with a manual dry-run mode', async () => {
+    const workflow = (await fs.readFile('.github/workflows/stale-prs.yml', 'utf-8')).replace(/\r\n/g, '\n');
+
+    expect(workflow).toContain('name: Stale PRs');
+    expect(workflow).toContain("cron: '30 3 * * *'");
+    expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow).toContain('dryRun:');
+    expect(workflow).toContain('operationsPerRun:');
+    expect(workflow).toContain('issues: write');
+    expect(workflow).toContain('pull-requests: write');
+    expect(workflow).toContain('contents: read');
+    expect(workflow).toContain('actions/stale@v9');
+    expect(workflow).toContain('debug-only: ${{ inputs.dryRun || false }}');
+    expect(workflow).toContain('operations-per-run: ${{ inputs.operationsPerRun || 500 }}');
+    expect(workflow).toContain('ascending: true');
+    expect(workflow).toContain('days-before-stale: 90');
+    expect(workflow).toContain('days-before-close: 30');
+    expect(workflow).toContain("stale-pr-label: 'stale'");
+    expect(workflow).toContain("close-pr-label: 'closed-stale'");
+    expect(workflow).toContain('stale-issue-label: ""');
+    expect(workflow).toContain('days-before-issue-stale: -1');
+    expect(workflow).toContain('days-before-issue-close: -1');
   });
 });

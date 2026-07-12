@@ -5,7 +5,7 @@ import { promises as fs } from 'fs';
 import { fileExists, readDir } from '../utils/file-system.js';
 import { isCommandAvailable } from '../core/openspec.js';
 import { readManifest, getAssetsDir } from '../core/skills.js';
-import { PLATFORMS } from '../core/platforms.js';
+import { PLATFORMS, getPlatformSkillsDirs } from '../core/platforms.js';
 import type { InstallScope } from '../core/types.js';
 
 interface CheckResult {
@@ -27,9 +27,29 @@ const VALID_YAML_FIELDS = new Set([
   'plan',
   'verification_report',
   'branch_status',
+  'opentest_gate',
+  'opentest_strict_result',
   'archived',
   'verified_at',
 ]);
+
+function collectTopLevelYamlKeys(yamlContent: string): string[] {
+  const topLevelKeys: string[] = [];
+
+  for (const line of yamlContent.split(/\r?\n/u)) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.startsWith('#')) continue;
+    if (/^\s/u.test(line)) continue;
+    if (trimmedLine.startsWith('- ')) continue;
+
+    const keyMatch = line.match(/^['"]?([A-Za-z0-9_-]+)['"]?\s*:/u);
+    if (keyMatch) {
+      topLevelKeys.push(keyMatch[1]);
+    }
+  }
+
+  return topLevelKeys;
+}
 
 async function checkOpenSpecCli(): Promise<CheckResult> {
   if (!isCommandAvailable('openspec')) {
@@ -104,13 +124,23 @@ async function checkSkillCompleteness(
   let anyPlatform = false;
   for (const base of getScopeBases(projectPath, scope)) {
     for (const platform of PLATFORMS) {
-      const skillsDir = path.join(base.baseDir, platform.skillsDir, 'skills');
+      const detectedSkillsDir = (
+        await Promise.all(
+          getPlatformSkillsDirs(platform, base.scope).map(async (skillsDir) => ({
+            skillsDir,
+            exists: await fileExists(path.join(base.baseDir, skillsDir, 'skills')),
+          })),
+        )
+      ).find((candidate) => candidate.exists)?.skillsDir;
+      if (!detectedSkillsDir) continue;
+
+      const skillsDir = path.join(base.baseDir, detectedSkillsDir, 'skills');
       if (!(await fileExists(skillsDir))) continue;
       anyPlatform = true;
 
       const missing: string[] = [];
       for (const relPath of manifest.skills) {
-        const fullPath = path.join(base.baseDir, platform.skillsDir, 'skills', relPath);
+        const fullPath = path.join(base.baseDir, detectedSkillsDir, 'skills', relPath);
         if (!(await fileExists(fullPath))) {
           missing.push(relPath);
         }
@@ -163,7 +193,7 @@ async function checkScriptsPresent(): Promise<CheckResult> {
   };
 }
 
-async function checkOpenSuperYamlValidity(projectPath: string): Promise<CheckResult[]> {
+async function checkopensuperYamlValidity(projectPath: string): Promise<CheckResult[]> {
   const changesDir = path.join(projectPath, 'openspec', 'changes');
   if (!(await fileExists(changesDir))) return [];
 
@@ -175,14 +205,7 @@ async function checkOpenSuperYamlValidity(projectPath: string): Promise<CheckRes
     if (!(await fileExists(yamlPath))) continue;
 
     const raw = await fs.readFile(yamlPath, 'utf-8');
-    const unknownFields: string[] = [];
-
-    for (const line of raw.split('\n')) {
-      const match = line.match(/^(\w[\w_]*):/);
-      if (match && !VALID_YAML_FIELDS.has(match[1])) {
-        unknownFields.push(match[1]);
-      }
-    }
+    const unknownFields = collectTopLevelYamlKeys(raw).filter((key) => !VALID_YAML_FIELDS.has(key));
 
     results.push(
       unknownFields.length === 0
@@ -198,6 +221,31 @@ async function checkOpenSuperYamlValidity(projectPath: string): Promise<CheckRes
   return results;
 }
 
+async function checkCodegraph(projectPath: string, scope: DoctorScope): Promise<CheckResult> {
+  if (!isCommandAvailable('codegraph')) {
+    return {
+      check: 'CodeGraph CLI',
+      status: 'warn',
+      message: 'not installed — install with: npm install -g @colbymchenry/codegraph',
+    };
+  }
+
+  if (scope === 'global') {
+    return { check: 'CodeGraph CLI', status: 'pass', message: 'installed' };
+  }
+
+  const codegraphDir = path.join(projectPath, '.codegraph');
+  if (!(await fileExists(codegraphDir))) {
+    return {
+      check: 'CodeGraph',
+      status: 'warn',
+      message: 'CLI installed but project not initialized — run: codegraph init -i',
+    };
+  }
+
+  return { check: 'CodeGraph', status: 'pass', message: 'initialized (.codegraph/ present)' };
+}
+
 async function collectResults(projectPath: string, scope: DoctorScope): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   results.push(await checkOpenSpecCli());
@@ -206,7 +254,8 @@ async function collectResults(projectPath: string, scope: DoctorScope): Promise<
   }
   results.push(...(await checkSkillCompleteness(projectPath, scope)));
   results.push(await checkScriptsPresent());
-  results.push(...(await checkOpenSuperYamlValidity(projectPath)));
+  results.push(await checkCodegraph(projectPath, scope));
+  results.push(...(await checkopensuperYamlValidity(projectPath)));
   return results;
 }
 
@@ -234,7 +283,7 @@ export async function doctorCommand(
     return;
   }
 
-  console.log(`OpenSuper Doctor (scope: ${scope})\n`);
+  console.log(`opensuper Doctor (scope: ${scope})\n`);
 
   for (const r of results) {
     console.log(`  ${icon(r.status)} ${r.check}: ${r.message}`);

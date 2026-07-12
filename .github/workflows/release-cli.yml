@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, for example 0.2.6"
+        description: "Release version, for example 0.3.8"
         required: false
         type: string
 
@@ -48,16 +48,14 @@ jobs:
           "PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "tag=v$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Sync package version
+      - name: Verify package version
         shell: pwsh
         run: |
           $package = Get-Content .\package.json -Raw | ConvertFrom-Json
           if ($package.version -ne $env:PACKAGE_VERSION) {
-            npm version $env:PACKAGE_VERSION --no-git-tag-version
+            throw "package.json version $($package.version) does not match release version $env:PACKAGE_VERSION"
           }
-          else {
-            Write-Host "package.json version already matches $env:PACKAGE_VERSION"
-          }
+          Write-Host "package.json version matches $env:PACKAGE_VERSION"
 
       - name: Install dependencies
         shell: pwsh
@@ -67,17 +65,78 @@ jobs:
         shell: pwsh
         run: pnpm build
 
+      - name: Lint
+        shell: pwsh
+        run: pnpm lint
+
+      - name: Format check
+        shell: pwsh
+        run: pnpm format:check
+
       - name: Test
         shell: pwsh
         run: pnpm test
 
-      - name: Pack check
+      - name: Shell tests
         shell: pwsh
-        run: npm pack --dry-run
+        run: pnpm test:shell
+
+      - name: Prepublish gate
+        shell: pwsh
+        run: pnpm run prepublishOnly
+
+      - name: Production dependency audit
+        shell: pwsh
+        run: npm audit --omit=dev --registry=https://registry.npmjs.org/
+
+      - name: Pack release candidate
+        shell: pwsh
+        run: |
+          $candidateDir = Join-Path $env:RUNNER_TEMP 'opensuper-release-candidate'
+          New-Item -ItemType Directory -Path $candidateDir -Force | Out-Null
+          npm pack --ignore-scripts --pack-destination $candidateDir
+          if ($LASTEXITCODE -ne 0) {
+            throw 'npm pack failed'
+          }
+          $packages = @(Get-ChildItem -LiteralPath $candidateDir -Filter '*.tgz' -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one release candidate, found $($packages.Count)"
+          }
+          "PACKAGE_TGZ=$($packages[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $sha256 = (Get-FileHash -LiteralPath $packages[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "PACKAGE_SHA256=$sha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Scan exact release candidate
+        shell: pwsh
+        run: |
+          $scanDir = Join-Path $env:RUNNER_TEMP 'opensuper-release-scan'
+          New-Item -ItemType Directory -Path $scanDir -Force | Out-Null
+          tar -xzf $env:PACKAGE_TGZ -C $scanDir
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Extracting the release candidate failed'
+          }
+          node scripts/prepublish-check.js (Join-Path $scanDir 'package')
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Scanning the release candidate failed'
+          }
+
+      - name: Smoke test exact release candidate
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP 'opensuper-release-smoke'
+          New-Item -ItemType Directory -Path $smokeDir -Force | Out-Null
+          npm install --prefix $smokeDir $env:PACKAGE_TGZ --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org/
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Installing the release candidate failed'
+          }
+          $actualVersion = node (Join-Path $smokeDir 'node_modules/@pzy560117/opensuper/bin/opensuper.js') --version
+          if ($actualVersion.Trim() -ne $env:PACKAGE_VERSION) {
+            throw "Packed CLI version $actualVersion does not match $env:PACKAGE_VERSION"
+          }
 
       - name: Publish npm package
         shell: pwsh
-        run: npm publish --access public
+        run: npm publish $env:PACKAGE_TGZ --ignore-scripts --access public --registry=https://registry.npmjs.org/
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -85,11 +144,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: OpenSuper v${{ env.PACKAGE_VERSION }}
+          name: opensuper v${{ env.PACKAGE_VERSION }}
           body: |
-            Release summary for OpenSuper v${{ env.PACKAGE_VERSION }}
+            Release summary for opensuper v${{ env.PACKAGE_VERSION }}
 
             - npm package: `@pzy560117/opensuper`
             - repository: `pzy560117/opensuper`
             - workflow: `release-opensuper`
-            - checks: build, test, pack check, npm publish
+            - candidate SHA-256: `${{ env.PACKAGE_SHA256 }}`
+            - checks: build, lint, format, test, shell, prepublish, audit, exact-tarball smoke, npm publish

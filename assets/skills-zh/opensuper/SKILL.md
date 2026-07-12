@@ -1,9 +1,9 @@
 ---
 name: opensuper
-description: "OpenSuper — OpenSpec + Superpowers 双星开发流程。用 /opensuper 启动，自动检测阶段并分发到子命令。五阶段：开启 → 深度设计 → 计划与构建 → 验证与收尾 → 归档。"
+description: "opensuper — OpenSpec + Superpowers 双星开发流程。用 /opensuper 启动，自动检测阶段并分发到子命令。五阶段：开启 → 深度设计 → 计划与构建 → 验证与收尾 → 归档。"
 ---
 
-# OpenSuper — OpenSpec + Superpowers 双星开发流程
+# opensuper — OpenSpec + Superpowers 双星开发流程
 
 ## 产出语言契约
 
@@ -26,6 +26,10 @@ Superpowers 负责 HOW — 技术设计、计划、执行、收尾
 ## 决策核心（Decision Core）
 
 agent 做决策只需读本节，参考附录按需查阅。
+
+### 输出语言规则
+
+以触发本次工作流的用户请求语言作为默认输出语言。恢复已有 change 时，如果现有产物有明确主语言，除非用户明确要求切换，否则保持该语言。
 
 ### 阶段自动检测
 
@@ -59,23 +63,44 @@ agent 做决策只需读本节，参考附录按需查阅。
 
 **断点恢复规则**：
 - 每次恢复上下文时，先重新执行 Step 0 和 Step 1，不依赖对话历史判断阶段
-- 若 `phase: build`，读取 tasks.md 的下一个未勾选任务继续
-- 若 `phase: verify` 且 `verify_result: fail`，先运行 `bash "$OPENSUPER_STATE" transition <name> verify-fail`，再调用 `/opensuper-build`
-- 若 `phase: open` 但 proposal/design/tasks 已完整，先运行 `bash "$OPENSUPER_GUARD" <change-name> open --apply` 修正状态，再继续判定
-- 若 `phase: archive`，只允许调用 `/opensuper-archive`；归档成功后 change 会移动到 archive 目录，不再对原活跃目录运行 guard
+- 只要存在 active change 且工作区有未提交改动，必须按 `opensuper/reference/dirty-worktree.md` 协议处理。该协议定义了检查步骤、归因分类和禁令，本文件不重复
+- 若 `phase: build`，先检查 `build_pause`、`plan`、`build_mode` 和 `isolation`（详见下方）：
+  - 若 `build_pause: plan-ready` 但 `isolation` 和 `build_mode` 已经设置，则视为 stale pause：先输出 `[opensuper] 检测到 stale pause（build_pause=plan-ready 但 isolation/build_mode 已设置），自动清除并继续`，再运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> build_pause null`，然后读取 tasks.md 的下一个未勾选任务并按 `build_mode` 恢复执行
+  - 若 `build_pause: plan-ready` 且 plan 文件存在，但 `isolation` 或 `build_mode` 尚未设置，回到 `/opensuper-build` 的 plan-ready 恢复点，提示用户继续选择隔离方式和执行方式，不重新生成 plan
+  - 若 `build_pause: plan-ready` 但 plan 文件缺失，回到 `/opensuper-build` 处理状态损坏或重新生成 plan
+  - 若 `build_mode`、`isolation` 或 `tdd_mode` 未设置，回到 `/opensuper-build` 对应步骤补充后再执行
+  - 若均已设置，读取 tasks.md 的下一个未勾选任务，并按 `build_mode` 恢复执行：
+    - 若 `build_mode: subagent-driven-development`，不得在主窗口直接执行任务；必须回到 `/opensuper-build` 的后台 subagent 调度规则，由主窗口只做协调
+    - 其他执行方式按 `/opensuper-build` 的对应规则继续
+- 若 `phase: verify` 且 `verify_result: fail`，进入验证失败决策阻塞点：暂停并询问用户修复或接受偏差；用户选择修复后才运行 `"$opensuper_BASH" "$opensuper_STATE" transition <name> verify-fail` 并调用 `/opensuper-build`
+- 若 `phase: open` 但 proposal/design/tasks 已完整，先运行 `"$opensuper_BASH" "$opensuper_GUARD" <change-name> open --apply` 修正状态，再继续判定
+- 若 `phase: archive`，只允许调用 `/opensuper-archive`；`/opensuper-archive` 必须先等待归档前最终确认，归档成功后 change 会移动到 archive 目录，不再对原活跃目录运行 guard
 
 **Step 2: 阶段判定**（按顺序，命中即停）
 
 1. `archived: true` 或 change 已移入 archive → 流程已完成
-2. `verify_result: pass` 且 `archived` 不是 `true` → `/opensuper-archive`
-3. `verify_result: fail` → `bash "$OPENSUPER_STATE" transition <name> verify-fail` 后 `/opensuper-build`
+2. `verify_result: pass` 且 `archived` 不是 `true` → `/opensuper-archive`（先进行归档前最终确认）
+3. `verify_result: fail` → 进入验证失败决策阻塞点（暂停询问修复或接受偏差；用户选择修复后才 `verify-fail` 并 `/opensuper-build`）
 4. `phase: verify` 或 tasks.md 全部勾选 → `/opensuper-verify`
-5. `phase: build` 或已有 Design Doc 但计划/执行未完成 → `/opensuper-build`
+5. `phase: build` 或已有 Design Doc 但计划/执行未完成 → 优先按 workflow 路由：`hotfix` → `/opensuper-hotfix`，`tweak` → `/opensuper-tweak`，`full` → `/opensuper-build`
 6. `phase: design` 或有 change 但无 Design Doc → `/opensuper-design`
 7. `phase: open` 或有活跃 change 但 `.opensuper.yaml` 缺失 → `/opensuper-open`
 8. 无活跃 change → `/opensuper-open`
 
 如果元数据与文件状态冲突，以文件状态为准，修正 `.opensuper.yaml` 后继续。
+
+### OpenTest 质量门路由
+
+读取 change 时同时读取 `opentest_gate` 和 `opentest_strict_result`：
+
+- `required`：必须先在安装两个独立包的目标项目生成项目相对的 strict artifact，再进入 `/opensuper-verify` 让 OpenSuper 已分发的 adapter 调用 OpenTest provider consumer 做语义重算。consumer 按 `OPENSUPER_OPENTEST_CONSUMER` → 同级已安装 `opentest` skill → 目标项目 `node_modules/@pzy560117/opentest` 的顺序发现；每次 required gate 校验只调用 provider 一次，固定超时 120 秒、输出缓冲上限 1 MiB。consumer、结果或 provider 缺失、超时/超限以及任一非零退出码都阻塞，不得回退到旧版字段或仅凭 JSON 文本放行。调用前后还必须保持 strict result 与其 `state_file` 的规范路径身份和原始字节不变。
+- strict 结果为 `risk-accepted` 时，验证报告必须有且只有一个完整、非空、可解析的 `OPENTEST_GATE_JSON`；每项必须在 `strict_finding_id` 与 `strict_key` 中严格二选一，并逐一记录 `reason`、`owner`、声明性真实人类身份 `accepted_by`、`impact_scope`、未来 `expires_at` 和 `recovery_path`。agent/AI/system/automation/通用角色或占位身份不得自批；期限必须是日历有效的 ISO-8601，可使用 `Z` 或 `±HH:MM` offset 及可变长度小数秒。critical/security/data-integrity/money/payment/irreversible 风险不可接受；空块、重复块、未闭合分隔符或 malformed JSON 一律阻塞。
+- `not-applicable`：只路由真实纯文档变更，并要求验证报告中存在带声明性真实人类批准、`scope: "docs-only"` 的唯一合法 `OPENTEST_GATE_JSON`。adapter 还会从不可变且可解析、为当前 `HEAD` 祖先的完整 `base_ref` 检查 committed、staged、unstaged、untracked 四类路径；`docs/` 仅允许 `.md/.txt/.rst/.adoc` 与 `.png/.jpg/.jpeg/.gif/.svg/.webp` 静态图，当前 active 或 dated-archive change 目录仅允许 `.md/.openspec.yaml/.opensuper.yaml`；除此之外，仅允许仓库根目录中名为 ARCHITECTURE/README/CHANGELOG/CONTRIBUTING/LICENSE 且无扩展名或扩展名为 `.md/.txt/.rst/.adoc` 的文档。JSON/YAML/MDX、scripts、嵌套 Markdown 及所有 runtime/config 路径阻塞。普通说明文字或单独的 `not-run` 不能放行。
+- 只有字段缺失或值为未加引号的 YAML 字面量 `null` 才保持旧版项目兼容；加引号的 `"null"`/`'null'`、空值、其他值和 malformed/duplicate 状态字段都阻塞。legacy 不是 `pass-contract`，也不得声明 fusion-complete。
+
+证据账本中，只有经 consumer 成功消费的 `pass-contract` 可满足 `required`；`pass-local`、`not-run` 和 `deferred` 仅供追踪，不能通过 required gate。`not-run` 只有配合已批准的纯文档 `not-applicable` 例外才可闭环。
+
+同一个 gate 同时保护 verify/archive guard、直接 `opensuper-state transition <change> verify-pass` 和实际 `opensuper-archive.sh` 预检。因此即使状态已显示 `verify_result: pass`，`required` 证据失效时仍必须路由到 `/opensuper-verify` 恢复或重新生成证据，不能绕过 archive 预检。归档目录定位符是 `YYYY-MM-DD-<change>` 时，机器块和 strict JSON 的 `change_id` 仍比较原始 `<change>`。
 
 ### 预设升级条件
 
@@ -91,6 +116,8 @@ agent 做决策只需读本节，参考附录按需查阅。
 - 涉及多个模块的协调修改
 - 需要新增测试用例 **5+**
 - 涉及配置项的新增或删除（非值修改）
+- 需要新增 capability
+- 需要 delta spec（影响了已有规格）
 
 ### 错误处理速查
 
@@ -98,7 +125,7 @@ agent 做决策只需读本节，参考附录按需查阅。
 |------|---------|
 | `openspec list --json` 失败 | 检查 openspec 是否已安装，提示 `openspec init` |
 | 子 skill 不可用 | 停止流程，提示安装或启用对应 skill |
-| `.opensuper.yaml` 格式异常或缺失 | 以文件状态为准，用 `bash $OPENSUPER_STATE set` 修正后继续 |
+| `.opensuper.yaml` 格式异常或缺失 | 以文件状态为准，用 `"$opensuper_BASH" "$opensuper_STATE" set` 修正后继续 |
 | 构建/测试失败 | 返回 build 阶段修复，不进入 verify |
 | change 目录结构不完整 | 按 `opensuper-open` 产物要求补齐 |
 
@@ -109,16 +136,34 @@ agent 做决策只需读本节，参考附录按需查阅。
 
 流转链：open → design → build → verify → archive
 
-**连续执行要求**：从检测到的阶段开始，agent 必须自动走完后续所有阶段，中间不停顿等待用户输入（除非遇到需要用户决策的节点）。每个阶段完成后立即进入下一阶段，无需用户再次输入。
+**连续执行要求**：从检测到的阶段开始，agent 自动推进后续阶段。但**自动推进仅适用于没有用户决策的衔接点**。遇到用户决策点时，**必须使用当前平台可用的用户输入/确认机制暂停并等待用户明确回复**，不得用推荐规则、默认值或历史偏好代替用户确认，也不得仅输出文字提示后继续执行。
+
+**阶段推进与自动衔接的区分**：每个子 skill 退出前都会运行阶段守卫 `--apply` 推进 `.opensuper.yaml` 的 `phase` 字段——这一步**始终发生**，与 `auto_transition` 无关。之后子 skill 运行 `"$opensuper_BASH" "$opensuper_STATE" next <name>` 解析下一步：`auto_transition` 不为 `false` 时输出 `NEXT: auto`（自动调用下一 skill），为 `false` 时输出 `NEXT: manual`（不调用下一 skill，提示用户手动运行）。因此 `auto_transition` **只控制是否自动调用下一个 skill，不影响 phase 推进**。无论 `auto_transition` 取何值，下方的用户决策点都必须阻塞等待。
+
+**决策点是阻塞点**：只要到达下列任一节点，当前 `/opensuper` 调用必须停住，并按 `opensuper/reference/decision-point.md` 的协议获取用户明确选择。用户明确选择后才能写入对应状态字段、执行对应操作，随后再继续自动流转。
 
 需要用户参与的节点（仅在这些节点暂停）：
-1. brainstorming 确认设计方案
-2. build 阶段选择执行方式
-3. verify 不通过时决定修复或接受偏差
-4. finishing-branch 选择分支处理方式
-5. 遇到升级条件（hotfix/tweak → 完整流程）
+1. open 阶段 proposal/design/tasks 审视确认
+2. brainstorming 确认设计方案
+3. build 阶段 plan-ready 暂停选择，以及随后选择工作方式（隔离方式 + 执行方式）
+4. verify 不通过时决定修复或接受偏差（含 Spec 漂移处理方式选择）
+5. finishing-branch 选择分支处理方式
+6. archive 阶段执行归档脚本前的最终确认
+7. 遇到升级条件（hotfix/tweak → 完整流程）
+8. build 阶段范围扩张需重新设计或拆分新 change
+9. open 阶段大型 PRD 需确认拆分为多个 change
 
-agent 不应跳过这些决策点；其他明确无歧义的阶段衔接必须自动继续推进，不得中途退出。
+agent 不应跳过这些决策点；其他明确无歧义的阶段衔接必须自动继续推进，不得中途退出。到达决策点时，**禁止跳过用户确认或自动选择——必须通过当前平台可用的用户输入/确认机制明确获取用户选择后才能继续**。
+
+**红旗清单** — 以下想法出现时立即停止并检查：
+
+| Agent 心理 | 实际风险 |
+|-----------|---------|
+| "用户应该会同意这个方案" | 不能替用户决策，必须等待用户明确选择 |
+| "这只是个小改动，不需要确认" | 决策点无大小之分，阻塞点必须等待 |
+| "用户之前选过 A，这次也选 A" | 历史偏好不能替代当前确认 |
+| "我已经解释了方案，用户没反对" | 没反对 ≠ 同意，必须用工具获取明确选择 |
+| "流程走到这里应该没问题了" | 验证不通过 ≠ 通过，检查 verify_result |
 </IMPORTANT>
 
 ---
@@ -143,76 +188,50 @@ agent 不应跳过这些决策点；其他明确无歧义的阶段衔接必须�
 
 /opensuper-hotfix（预设路径，跳过 brainstorming）
   open ──→ build ──→ verify ──→ archive
-    ↑ 如触发升级条件 → 补充 Design Doc → 回到完整流程
+    ↑ 如触发升级条件 → 阻塞确认升级 → 补充 Design Doc → 回到完整流程
 
 /opensuper-tweak（预设路径，跳过 brainstorming 和完整 plan）
   open ──→ lightweight build ──→ light verify ──→ archive
-    ↑ 如触发升级条件 → 补充 Design Doc → 回到完整流程
+    ↑ 如触发升级条件 → 阻塞确认升级 → 补充 Design Doc → 回到完整流程
 ```
 
 ---
 
 ## 参考附录（Reference Appendix）
 
-### .opensuper.yaml 字段说明
+> 字段说明、文件结构和自动衔接协议已提取为渐进式加载参考文档，按需查阅：
+> - **`.opensuper.yaml` 完整字段表**：按 `opensuper/reference/opensuper-yaml-fields.md` 查阅（含必需字段、可选字段和完整示例）
+> - **文件结构**：按 `opensuper/reference/file-structure.md` 查阅
+> - **自动衔接协议**：按 `opensuper/reference/auto-transition.md` 查阅
+> - **上下文压缩恢复**：按 `opensuper/reference/context-recovery.md` 查阅
+> - **用户决策点协议**：按 `opensuper/reference/decision-point.md` 查阅
+> - **调试门协议**：按 `opensuper/reference/debug-gate.md` 查阅
 
-```yaml
-workflow: full
-phase: build
-design_doc: docs/superpowers/specs/YYYY-MM-DD-topic-design.md
-plan: docs/superpowers/plans/YYYY-MM-DD-feature.md
-build_mode: subagent-driven-development
-isolation: branch
-verify_mode: light
-verify_result: pending
-verification_report: null
-branch_status: pending
-verified_at: null
-archived: false
-```
+### 状态机硬约束
 
-| 字段 | 含义 |
-|------|------|
-| `workflow` | `full`、`hotfix` 或 `tweak` |
-| `phase` | 当前阶段：`open`、`design`、`build`、`verify`、`archive`（init 统一设为 `open`，guard 负责过渡） |
-| `design_doc` | 关联的 Superpowers Design Doc 路径，可为空 |
-| `plan` | 关联的 Superpowers Plan 路径，可为空 |
-| `build_mode` | 已选择的执行方式，可为空 |
-| `isolation` | `branch` 或 `worktree`，工作区隔离方式。full 初始化可为 `null`，但只允许持续到 `/opensuper-build` Step 3 前；hotfix/tweak 默认 `branch` |
-| `verify_mode` | `light` 或 `full`，可为空 |
-| `verify_result` | `pending`、`pass` 或 `fail` |
-| `verification_report` | 验证报告文件路径，verify 通过前必须指向已存在文件 |
-| `branch_status` | `pending` 或 `handled`，分支处理完成后设为 `handled` |
-| `verified_at` | 验证通过时间，可为空 |
-| `archived` | change 是否已归档 |
-
-可选字段：
-
-| 字段 | 含义 |
-|------|------|
-| `direct_override` | `true`/`false`。full workflow 如需使用 `build_mode: direct`，必须显式设为 `true` |
-| `build_command` | 项目构建命令。guard 优先运行该命令，失败时打印命令输出 |
-| `verify_command` | 项目验证命令。verify guard 优先运行该命令，未配置时回退到构建命令 |
-
-状态机硬约束：
 - `build → verify` 前，`isolation` 必须是 `branch` 或 `worktree`
 - `build → verify` 前，`build_mode` 必须已选择
+- `build_mode: subagent-driven-development` 必须同时有 `subagent_dispatch: confirmed`
+- full workflow 离开 build 阶段前 `tdd_mode` 必须已选择为 `tdd` 或 `direct`
 - `build_mode: direct` 默认只允许 `hotfix` / `tweak`；full workflow 需要 `direct_override: true`
+- `build_pause` 不是执行方式，不得写入 `build_mode`
 - 这些约束同时存在于 `opensuper-guard.sh build --apply` 和 `opensuper-state.sh transition <name> build-complete`
 
 ### 脚本定位
 
-OpenSuper 脚本随 skill 包分发在 `opensuper/scripts/` 下。**不硬编码路径** — 定位一次，缓存到环境变量：
+opensuper 脚本随 skill 包分发在 `opensuper/scripts/` 下。**不硬编码路径** — 定位一次，缓存到环境变量。此块为标准样板，在每个子 skill 中独立重复以确保可独立加载；修改时必须保持所有文件同步（样板版本: `v2`，变更时更新此版本号便于定位需要同步的文件）：
 
 ```bash
-OPENSUPER_SEARCH_ROOTS=("." "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills")
-OPENSUPER_GUARD="${OPENSUPER_GUARD:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-guard.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_STATE="${OPENSUPER_STATE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-state.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-archive.sh' -type f -print -quit 2>/dev/null)}"
+opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
+if [ -z "$opensuper_ENV" ]; then
+  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
+  return 1
+fi
+. "$opensuper_ENV"
 
 # 脚本定位失败时停止流程
-if [ -z "$OPENSUPER_GUARD" ] || [ -z "$OPENSUPER_STATE" ] || [ -z "$OPENSUPER_ARCHIVE" ]; then
-  echo "ERROR: OpenSuper scripts not found. Ensure the opensuper skill is installed." >&2
+if [ -z "$opensuper_GUARD" ] || [ -z "$opensuper_STATE" ] || [ -z "$opensuper_HANDOFF" ] || [ -z "$opensuper_ARCHIVE" ]; then
+  echo "ERROR: opensuper scripts not found. Ensure the opensuper skill is installed." >&2
   echo "Expected path pattern: */opensuper/scripts/opensuper-*.sh under project or platform skill directories" >&2
   return 1
 fi
@@ -221,58 +240,50 @@ fi
 **自动状态更新**：guard 支持 `--apply` 参数，验证通过后自动更新 `.opensuper.yaml` 状态字段：
 
 ```bash
-bash "$OPENSUPER_GUARD" <change-name> <phase> --apply
+"$opensuper_BASH" "$opensuper_GUARD" <change-name> <phase> --apply
 ```
 
 `--apply` 内部委托给 `opensuper-state transition`。需要直接表达状态事件时使用：
 
 ```bash
-bash "$OPENSUPER_STATE" transition <change-name> open-complete
-bash "$OPENSUPER_STATE" transition <change-name> design-complete
-bash "$OPENSUPER_STATE" transition <change-name> build-complete
-bash "$OPENSUPER_STATE" transition <change-name> verify-pass
-bash "$OPENSUPER_STATE" transition <change-name> verify-fail
-bash "$OPENSUPER_STATE" transition <archive-name> archived
+"$opensuper_BASH" "$opensuper_STATE" transition <change-name> open-complete
+"$opensuper_BASH" "$opensuper_STATE" transition <change-name> design-complete
+"$opensuper_BASH" "$opensuper_STATE" transition <change-name> build-complete
+"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-pass
+"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail
+"$opensuper_BASH" "$opensuper_STATE" transition <archive-name> archived
 ```
+
+**解析下一步**：阶段守卫推进 phase 后，用 `next` 子命令解析是否自动调用下一个 skill：
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" next <change-name>
+```
+
+输出 `NEXT: auto|manual|done` + `SKILL: <skill-name>`（`done` 时省略）+ `HINT`（仅 `manual` 时）。`auto_transition: false` 时输出 `manual`，只暂停下一 skill 调用，不影响已发生的 phase 推进。
 
 **归档脚本**：一键完成归档全部步骤：
 
 ```bash
-bash "$OPENSUPER_ARCHIVE" <change-name>
+"$opensuper_BASH" "$opensuper_ARCHIVE" <change-name>
 ```
 
-加载 opensuper 后，agent 应执行以上三条变量赋值一次，后续全程复用 `$OPENSUPER_GUARD`、`$OPENSUPER_STATE`、`$OPENSUPER_ARCHIVE`。
+加载 opensuper 后，agent 应执行以上变量赋值一次，后续全程复用 `$opensuper_GUARD`、`$opensuper_STATE`、`$opensuper_HANDOFF`、`$opensuper_ARCHIVE`。
 
 ### 文件结构
 
-```
-openspec/                              # OpenSpec — WHAT
-├── config.yaml
-├── changes/
-│   ├── <name>/                        # 活跃 change
-│   │   ├── .openspec.yaml
-│   │   ├── .opensuper.yaml
-│   │   ├── proposal.md                # Why + What
-│   │   ├── design.md                  # 高层架构决策
-│   │   ├── specs/<capability>/spec.md # Delta 能力规格
-│   │   └── tasks.md                   # 任务清单
-│   └── archive/YYYY-MM-DD-<name>/     # 已归档
-└── specs/<capability>/spec.md         # 主 specs（归档时从 delta 覆盖）
-
-docs/superpowers/                      # Superpowers — HOW
-├── specs/YYYY-MM-DD-<topic>-design.md # 设计文档（技术 RFC，归档时标注状态）
-└── plans/YYYY-MM-DD-<feature>.md      # 实施计划（文件头含 change 关联元数据）
-```
+按 `opensuper/reference/file-structure.md` 查阅完整目录结构。
 
 ### 最佳实践
 
 1. **brainstorming 不可跳过** — 每次变更必须经过深度设计（hotfix 和 tweak 除外）
 2. **delta spec 是活文档** — 阶段 3 期间可自由修改，归档时同步
-3. **保持 tasks.md 同步** — 完成一个勾一个
-4. **频繁提交** — 每个任务一次提交，message 体现设计意图
-5. **先验证再归档** — `/opensuper-verify` 通过后才执行 `/opensuper-archive`
-6. **增量更新分级** — 小编辑、中重 brainstorming、大新 change
-7. **Plan 必须关联 change** — 文件头包含 `change:` 和 `design-doc:` 元数据
-8. **归档闭环** — design doc 和 plan 必须标注 `archived-with` 状态
-9. **修改已有功能** — 直接 open 新 change 即可
-10. **Preset 有上限** — hotfix/tweak 满足升级条件时及时切换到完整流程
+3. **交接包由脚本生成** — OpenSpec → Superpowers 的上下文必须通过 `opensuper-handoff.sh` 生成 compact 可追溯摘录（需要全文时用 `--full`），并由 guard 校验 source/hash/mode
+4. **保持 tasks.md 同步** — 完成一个勾一个
+5. **频繁提交** — 每个任务一次提交，message 体现设计意图
+6. **先验证再确认归档** — `/opensuper-verify` 通过后进入 `/opensuper-archive`，但运行归档脚本前必须等待用户最终确认
+7. **增量更新分级** — 小编辑、中重 brainstorming、大新 change
+8. **Plan 必须关联 change** — 文件头包含 `change:` 和 `design-doc:` 元数据
+9. **归档闭环** — design doc 和 plan 必须标注 `archived-with` 状态
+10. **修改已有功能** — 直接 open 新 change 即可
+11. **Preset 有上限** — hotfix/tweak 满足升级条件时及时切换到完整流程

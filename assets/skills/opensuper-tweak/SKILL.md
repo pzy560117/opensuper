@@ -1,9 +1,9 @@
 ---
 name: opensuper-tweak
-description: "OpenSuper preset path: Non-bug small changes (tweak). Skip brainstorming and full plan, directly open → lightweight build → light verify → archive. Applicable for copy, configuration, documentation or prompt local optimization."
+description: "opensuper preset path: Non-bug small changes (tweak). Skip brainstorming and full plan, directly open → lightweight build → light verify → archive. Applicable for copy, configuration, documentation or prompt local optimization."
 ---
 
-# OpenSuper Preset Path: Tweak
+# opensuper Preset Path: Tweak
 
 ## Output Language Contract
 
@@ -14,64 +14,78 @@ description: "OpenSuper preset path: Non-bug small changes (tweak). Skip brainst
 
 Tweak is a preset workflow of OpenSuper's five-phase capabilities, not a separate parallel process. It reuses open, build, verify, archive capabilities, only skipping brainstorming and full plan.
 
-Applicable for small-scale non-bug changes, such as copy adjustments, configuration adjustments, documentation or prompt local optimization.
+Applicable for non-bug small scope changes, such as copy adjustment, configuration adjustment, documentation or prompt local optimization.
 
 **Applicable conditions** (all must be met):
 1. No new capability
 2. No architecture changes
-3. No interface changes involved
-4. Usually not exceeding 3 tasks, 4 files
+3. No interface changes
+4. Typically no more than 3 tasks (file count constraint see upgrade conditions below)
 
-**Not applicable**: If change process discovers need for capability, architecture, or interface adjustments, should upgrade to full `/opensuper` workflow.
+**Not applicable**: If change process discovers need for capability, architecture or interface adjustments, should upgrade to full `/opensuper` workflow.
 
 ---
 
 ## Process (preset workflow, 4 phases)
 
-Execution chain: open → lightweight build → light verify → archive. Tweak provides default decisions for each phase: streamlined open, lightweight build, lightweight verification, archive after verification passes.
+### 0. Output Language Constraint
 
-Locate OpenSuper scripts before starting:
+Streamlined OpenSpec artifacts must use the language of the user request that triggered this workflow.
+
+Execution chain: open → lightweight build → light verify → archive. Tweak provides default decisions for each phase: streamlined open, lightweight build, lightweight verification, and final archive confirmation after verification passes.
+
+Locate opensuper scripts before starting:
 
 ```bash
-OPENSUPER_SEARCH_ROOTS=("." "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills")
-OPENSUPER_STATE="${OPENSUPER_STATE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-state.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_GUARD="${OPENSUPER_GUARD:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-guard.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-archive.sh' -type f -print -quit 2>/dev/null)}"
+opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
+if [ -z "$opensuper_ENV" ]; then
+  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
+  return 1
+fi
+. "$opensuper_ENV"
 ```
 
 ### 1. Quick Open (preset open)
 
-Reuse OpenSuper open capability to create change, but use tweak defaults: do not execute `openspec-explore` long exploration, directly enter streamlined change creation.
+Reuse opensuper open capability to create change, but use tweak defaults: do not execute `openspec-explore` long exploration, directly enter streamlined change creation.
 
 **Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
 After the skill loads, follow its guidance to create streamlined artifacts:
   - `proposal.md` — change motivation + goals + scope
   - `design.md` — brief implementation description (no solution comparison needed)
-  - `tasks.md` — not exceeding 3 tasks
-- **No delta spec needed** (unless change changes existing spec acceptance scenarios; once delta spec needed, upgrade to full `/opensuper`)
+  - `tasks.md` — no more than 3 tasks
+- **No delta spec needed** (unless change modifies existing spec acceptance scenarios; once delta spec is needed, upgrade to full `/opensuper`)
 
-Initialize OpenSuper state file:
+Initialize opensuper state file:
 
 ```bash
-bash "$OPENSUPER_STATE" init <name> tweak
+"$opensuper_BASH" "$opensuper_STATE" init <name> tweak
+```
+
+Verify initialized state:
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" check <name> open
 ```
 
 Run phase guard to transition open → build:
 
 ```bash
-bash "$OPENSUPER_GUARD" <change-name> open --apply
+"$opensuper_BASH" "$opensuper_GUARD" <change-name> open --apply
 ```
 
 ### 2. Lightweight Build (preset build)
 
-Use tweak defaults: `build_mode: direct`. Skip `superpowers:brainstorming` and `superpowers:writing-plans`.
+Use tweak defaults: `build_mode: direct`. Skip Superpowers `brainstorming` and `writing-plans`.
+
+Before continuing or starting changes, handle uncommitted changes through `opensuper/reference/dirty-worktree.md`. If attribution shows scope exceeds tweak, handle it through this file's "Upgrade Conditions".
 
 **Immediately execute:** Execute tasks one by one according to tasks.md:
 
 1. Read `openspec/changes/<name>/tasks.md`, get incomplete task list
 2. For each incomplete task:
-   - Modify target file according to task description
+   - Modify target files according to task description
    - Run project formatter (e.g., `mvn spotless:apply`, `npm run format`)
    - Run related tests to confirm pass
    - Check corresponding `- [ ]` to `- [x]` in tasks.md
@@ -80,10 +94,14 @@ Use tweak defaults: `build_mode: direct`. Skip `superpowers:brainstorming` and `
 4. Run phase guard to transition build → verify:
 
 ```bash
-bash "$OPENSUPER_GUARD" <change-name> build --apply
+"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply
 ```
 
 State automatically updates to `phase: verify`, `verify_result: pending`, then enter verification.
+
+During tweak execution, whenever running programs, tests, builds, or manual verification results in crashes, abnormal behavior, test failures, or build failures, you must use the Skill tool to load the Superpowers `systematic-debugging` skill. Do not propose or implement source code fixes before completing root cause investigation.
+
+For specific investigation, minimal failing test, fix verification, and keeping the current change verification loop, follow `opensuper/reference/debug-gate.md`.
 
 ### 3. Lightweight Verification (preset verify)
 
@@ -91,13 +109,13 @@ Reuse `/opensuper-verify`. Tweak must maintain lightweight verification conditio
 
 **Immediately execute:** Use the Skill tool to load the `opensuper-verify` skill. Skipping this step is prohibited.
 
-If scale assessment enters full verification path, stop tweak, upgrade to full `/opensuper`.
+If scale assessment enters full verification path, stop tweak, handle per upgrade conditions blocking confirmation.
 
-After verification passes, record `.opensuper.yaml` `verify_result` as `pass` according to `/opensuper-verify` rules, must not skip this status before archiving.
+After verification passes, record `.opensuper.yaml` `verify_result` as `pass` according to `/opensuper-verify` rules, must not skip this status before archiving. After verification passes, still enter `/opensuper-archive`'s final archive confirmation; do not automatically run the archive script.
 
 ### 4. Archive (preset archive)
 
-Reuse `/opensuper-archive`. Must satisfy `verify_result: pass` in `.opensuper.yaml` before archiving.
+Reuse `/opensuper-archive`. Must satisfy `verify_result: pass` in `.opensuper.yaml` before archiving, and wait for `/opensuper-archive`'s final archive confirmation.
 
 **Immediately execute:** Use the Skill tool to load the `opensuper-archive` skill to archive. Skipping this step is prohibited.
 
@@ -106,11 +124,19 @@ Reuse `/opensuper-archive`. Must satisfy `verify_result: pass` in `.opensuper.ya
 ## Continuous Execution Mode
 
 <IMPORTANT>
-Tweak workflow is **one-time continuous execution**. After invoking `/opensuper-tweak`, agent must automatically complete all 4 phases, without pausing to wait for user input mid-way (unless encountering upgrade conditions requiring user confirmation).
+Tweak workflow is **one-time continuous execution**. After invoking `/opensuper-tweak`, agent must automatically advance through tweak steps, without pausing to wait for user input mid-way.
+
+Exception: when `.opensuper.yaml` has `auto_transition: false`, after each phase guard advances `phase`, do not auto-invoke the next skill. In this case, use `"$opensuper_BASH" "$opensuper_STATE" next <name>` output and pause for manual continuation as instructed.
+
+The following situations must pause and wait for user confirmation:
+
+1. Encountering upgrade conditions (see "Upgrade Conditions" section). **Must use the current platform's available user input/confirmation mechanism to pause and wait for the user to explicitly confirm** upgrading to full workflow
+2. verify phase (opensuper-verify) verification-failure and branch-handling decisions
+3. Final archive confirmation (before opensuper-archive runs the archive script)
 
 Execution order: quick open → lightweight build → lightweight verification → archive → complete
 
-After each phase completes, immediately enter next phase, no need for user input again. Within each phase, must still call corresponding OpenSuper/OpenSpec/Superpowers skill according to above requirements.
+After each phase completes, immediately enter next phase. Within each phase, must still call corresponding opensuper/OpenSpec/Superpowers skill according to above requirements; if the called skill has its own user decision points, follow that skill's rules.
 </IMPORTANT>
 
 ---
@@ -122,13 +148,22 @@ Upgrade to full `/opensuper` when **any** of the following conditions are met:
 | Condition | Explanation |
 |-----------|-------------|
 | Change involves **5+ files** | Exceeds small change scope |
-| Cross-module coordination required | Needs coordination across components |
-| **5+** new test cases needed | Change complexity increasing |
-| Config item additions or deletions | Non-value config changes |
+| Cross-module coordination required | Requires cross-component coordination |
+| **5+** new test cases needed | Change complexity rising |
+| Config item additions or deletions | Config changes beyond value modifications |
 | New capability needed | Exceeds local optimization |
-| Delta spec needed | Affects existing specifications |
+| Delta spec needed | Affects existing specs |
 
-Upgrade method: On current change basis, supplement Design Doc (execute `/opensuper-design`), then proceed normally with full workflow.
+When upgrade conditions are met, **must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user to explicitly confirm** upgrading to the full `/opensuper` workflow. Do not directly enter `/opensuper-design`, and do not automatically supplement Design Doc.
+
+After user confirms upgrade, **must first update the workflow and phase fields** before entering full flow:
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" set <name> workflow full
+"$opensuper_BASH" "$opensuper_STATE" set <name> phase design
+```
+
+Then on current change basis, supplement Design Doc: **Immediately use the Skill tool to load the `opensuper-design` skill**, proceed normally with full workflow. If user does not confirm upgrade, stop tweak and report that current change has exceeded tweak scope.
 
 ---
 
@@ -136,5 +171,17 @@ Upgrade method: On current change basis, supplement Design Doc (execute `/opensu
 
 - Small change completed, tests pass
 - Change archived
-- No new capability, architecture adjustments, or interface changes
-- **Phase guard**: Before build → verify run `bash "$OPENSUPER_GUARD" <change-name> build --apply`; before verify → archive follow `/opensuper-verify` and run `bash "$OPENSUPER_GUARD" <change-name> verify --apply`
+- No new capability, architecture adjustments or interface changes
+- **Phase guard**: Before build → verify run `"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply`; before verify → archive follow `/opensuper-verify` and run `"$opensuper_BASH" "$opensuper_GUARD" <change-name> verify --apply`
+
+## Automatic Handoff to Next Phase
+
+Follow `opensuper/reference/auto-transition.md`. Key command:
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" next <name>
+```
+
+- `NEXT: auto` → invoke the skill pointed to by `SKILL` to continue tweak workflow (`phase: build` returns `opensuper-tweak`, `verify` returns `opensuper-verify`, `archive` returns `opensuper-archive`)
+- `NEXT: manual` → do not invoke the next skill; prompt user to manually run `/<SKILL>` per `HINT`
+- `NEXT: done` → workflow is complete, no further action needed

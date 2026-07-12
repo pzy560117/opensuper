@@ -1,11 +1,24 @@
 {
-  "version": "0.2.8",
+  "version": "0.3.8",
   "skills": [
     "opensuper/SKILL.md",
+    "opensuper/reference/auto-transition.md",
+    "opensuper/reference/opensuper-yaml-fields.md",
+    "opensuper/reference/context-recovery.md",
+    "opensuper/reference/debug-gate.md",
+    "opensuper/reference/decision-point.md",
+    "opensuper/reference/dirty-worktree.md",
+    "opensuper/reference/file-structure.md",
+    "opensuper/reference/subagent-dispatch.md",
+    "opensuper/scripts/opensuper-env.sh",
     "opensuper/scripts/opensuper-guard.sh",
     "opensuper/scripts/opensuper-state.sh",
+    "opensuper/scripts/opensuper-handoff.sh",
     "opensuper/scripts/opensuper-archive.sh",
     "opensuper/scripts/opensuper-yaml-validate.sh",
+    "opensuper/scripts/opensuper-hook-guard.sh",
+    "opensuper/scripts/opensuper-opentest-gate.mjs",
+    "opensuper/scripts/opensuper-opentest-gate.sh",
     "opensuper-open/SKILL.md",
     "opensuper-design/SKILL.md",
     "opensuper-build/SKILL.md",
@@ -14,6 +27,15 @@
     "opensuper-hotfix/SKILL.md",
     "opensuper-tweak/SKILL.md"
   ],
+  "rules": [
+    "opensuper/rules/opensuper-phase-guard.md"
+  ],
+  "hooks": {
+    "opensuper/scripts/opensuper-hook-guard.sh": {
+      "matcher": "Write|Edit",
+      "description": "Block code writes in wrong opensuper phase (open/design/archive)"
+    }
+  },
   "languages": [
     { "id": "en", "name": "English", "skillsDir": "skills" },
     { "id": "zh", "name": "中文", "skillsDir": "skills-zh" }

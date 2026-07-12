@@ -8,7 +8,10 @@ describe('doctor command', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = path.join(os.tmpdir(), `opensuper-doctor-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tmpDir = path.join(
+      os.tmpdir(),
+      `opensuper-doctor-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
     await fs.mkdir(tmpDir, { recursive: true });
   });
 
@@ -32,6 +35,8 @@ describe('doctor command', () => {
         'plan: docs/superpowers/plans/current-state.md',
         'verification_report: docs/superpowers/reports/current-state.md',
         'branch_status: handled',
+        'opentest_gate: required',
+        'opentest_strict_result: docs/opentest/strict-result.json',
         'verified_at: null',
         'archived: false',
         '',
@@ -48,8 +53,62 @@ describe('doctor command', () => {
     }
 
     const results = JSON.parse(json).results as Array<{ check: string; status: string }>;
-    expect(results.find((result) => result.check === '.opensuper.yaml: current-state')).toMatchObject({
+    expect(
+      results.find((result) => result.check === '.opensuper.yaml: current-state'),
+    ).toMatchObject({
       status: 'pass',
+    });
+  });
+
+  it('only validates top-level keys in .opensuper.yaml', async () => {
+    const validChangeDir = path.join(tmpDir, 'openspec', 'changes', 'nested-valid');
+    await fs.mkdir(validChangeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(validChangeDir, '.opensuper.yaml'),
+      [
+        'workflow: full',
+        'phase: verify',
+        'verify_result: pending',
+        'archived: false',
+        'verification_report:',
+        '  nested_key: value',
+        '',
+      ].join('\n'),
+    );
+
+    const invalidChangeDir = path.join(tmpDir, 'openspec', 'changes', 'top-level-invalid');
+    await fs.mkdir(invalidChangeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(invalidChangeDir, '.opensuper.yaml'),
+      ['workflow: full', 'phase: verify', 'unknown_root_field: true', ''].join('\n'),
+    );
+
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let json = '';
+    try {
+      await doctorCommand(tmpDir, { json: true });
+      json = log.mock.calls.map((call) => call.join(' ')).join('\n');
+    } finally {
+      log.mockRestore();
+    }
+
+    const results = JSON.parse(json).results as Array<{
+      check: string;
+      status: string;
+      message: string;
+    }>;
+
+    expect(
+      results.find((result) => result.check === '.opensuper.yaml: nested-valid'),
+    ).toMatchObject({
+      status: 'pass',
+    });
+
+    expect(
+      results.find((result) => result.check === '.opensuper.yaml: top-level-invalid'),
+    ).toMatchObject({
+      status: 'fail',
+      message: expect.stringContaining('unknown_root_field'),
     });
   });
 });

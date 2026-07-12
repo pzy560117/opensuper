@@ -1,0 +1,79 @@
+name: 🚀 Feature Request
+description: Suggest an improvement to opensuper.
+title: 'feat: '
+labels: ['enhancement', 'needs-triage']
+body:
+  - type: checkboxes
+    attributes:
+      label: 🔎 Existing issue check
+      description: Please search existing issues before opening a new one.
+      options:
+        - label: I have searched the existing issues.
+          required: true
+
+  - type: textarea
+    attributes:
+      label: 🧭 Problem
+      description: What workflow problem should this solve?
+      placeholder: 'When using opensuper to ..., I need ...'
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: ✨ Proposed solution
+      description: Describe the behavior you want opensuper to provide.
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: 🎯 Primary area
+      description: Where would this feature live?
+      options:
+        - CLI command
+        - Platform support
+        - Skill workflow
+        - Shell script
+        - Documentation
+        - CI / release
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: 🪐 Workflow phase
+      description: If this affects a opensuper phase, choose the closest one.
+      options:
+        - Not phase-specific
+        - Open
+        - Design
+        - Build
+        - Verify
+        - Archive
+        - Hotfix
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: 🔀 Alternatives considered
+      description: What workarounds or alternate designs have you considered?
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: 🧰 Compatibility notes
+      description: Mention affected platforms, install scopes, languages, or shell environments if relevant.
+      placeholder: 'For example: project/global scope, English/Chinese skills, macOS/Linux/Windows Git Bash.'
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: 🧩 Additional context
+      description: Links, examples, screenshots, or related projects.
+    validations:
+      required: false

@@ -1,9 +1,9 @@
 ---
 name: opensuper-open
-description: "OpenSuper Phase 1: Open. Invoke with /opensuper-open. Explore ideas through OpenSpec and create change structure (proposal + design + tasks)."
+description: "opensuper Phase 1: Open. Invoke with /opensuper-open. Explore ideas through OpenSpec, confirm requirements clarification, then create change structure (proposal + design + tasks)."
 ---
 
-# OpenSuper Phase 1: Open
+# opensuper Phase 1: Open
 
 ## Output Language Contract
 
@@ -14,36 +14,107 @@ description: "OpenSuper Phase 1: Open. Invoke with /opensuper-open. Explore idea
 
 ## Prerequisites
 
-- No active change, or user wishes to create a new change
+- No active change, or user wants to create a new change
 
 ## Steps
 
-### 0. Locate OpenSuper Scripts
+### 0. Output Language Constraint
 
-Locate scripts before creating state:
+Every prompt and artifact request passed to OpenSpec must include the output-language constraint: use the language of the user request that triggered this workflow. When resuming an existing change with a clear dominant artifact language, preserve that language unless the user explicitly asks to switch.
 
-```bash
-OPENSUPER_SEARCH_ROOTS=("." "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills")
-OPENSUPER_STATE="${OPENSUPER_STATE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-state.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_GUARD="${OPENSUPER_GUARD:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-guard.sh' -type f -print -quit 2>/dev/null)}"
-
-if [ -z "$OPENSUPER_STATE" ] || [ -z "$OPENSUPER_GUARD" ]; then
-  echo "ERROR: OpenSuper scripts not found. Ensure the opensuper skill is installed." >&2
-  return 1
-fi
-```
-
-### 1. Explore Idea
+### 1. Explore Ideas and Clarify Requirements
 
 **Immediately execute:** Use the Skill tool to load the `openspec-explore` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
 
-After the skill loads, freely explore the problem space following its guidance. Exploration notes, problem breakdowns, and candidate solutions must be written in English.
+After the skill loads, explore the problem space following its guidance, but do not treat one Q&A turn as sufficient clarification. You must continue asking, align with the user, and form a clarification summary covering:
+- Goals: the problem the user truly wants to solve and the expected outcome
+- Non-goals: what is explicitly out of scope for this change
+- Scope boundaries: included/excluded modules, users, platforms, or data
+- Key unknowns: unresolved assumptions, risks, or dependencies
+- Draft acceptance scenarios: at least the core success scenario and important boundary scenarios
 
-### 2. Create Change Structure
+The clarification summary must include: goals, non-goals, scope boundaries, key unknowns, and draft acceptance scenarios.
 
-**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. If user intent is unclear and needs to form a proposal first, load `openspec-propose` instead and pass the same English output requirement. Skipping this step is prohibited.
+### 1a. PRD Split Preflight (Blocking Point)
+
+When the user input is a large PRD, roadmap, complete product plan, or the clarification summary shows multiple independent capabilities, modules, user journeys, or milestones, must evaluate whether it should be split into multiple changes before creating OpenSpec artifacts.
+
+The split preflight must be based on clarified information and output a proposed split list. Each proposed split item must include:
+- Suggested change name
+- Goals and scope boundaries
+- Explicit non-goals
+- Dependencies or recommended execution order
+- Core acceptance scenarios
+
+Recommend splitting when any condition applies:
+- The PRD contains multiple capabilities that can be independently designed, built, verified, and archived
+- Multiple modules or user journeys are involved, and part of them can be delivered independently
+- Clear phased milestones exist
+- The work is expected to produce multiple delta specs or more than 3 large tasks
+- Failure or delay in one part should not block other parts from entering later phases
+
+When splitting is recommended, must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user's choice.
+
+The user choices must include:
+- "Create multiple OpenSpec changes" — create independent changes from the proposed split
+- "Keep everything as one change" — continue the single-change flow and record the reason for not splitting in proposal/design/tasks
+- "Adjust the split plan before continuing" — after the user describes the adjustment, output the revised proposed split list and ask for confirmation again
+
+Every accepted split item must be created as an independent change through `/opensuper-open`, not by calling `/opsx:new` directly. `/opensuper-open` creates both OpenSpec artifacts and `.opensuper.yaml`, ensuring each change enters the opensuper state machine.
+
+Must not create proposal.md, design.md, or tasks.md before the user completes the PRD split choice. If the user chooses to create multiple changes, the current `/opensuper-open` invocation only completes split confirmation and coordination, then enters `/opensuper-open` for each split item in the user-confirmed order.
+
+In batch split mode, entering `/opensuper-open` for each split item must explicitly mark it as a "confirmed split item" and carry that split item's goals, scope, non-goals, and acceptance scenarios. Confirmed split items skip the PRD split preflight by default, unless the split item itself still clearly contains multiple independent capabilities.
+
+In batch split mode, a single split item must not auto-advance to `/opensuper-design` after completing the open phase. After splitting is complete, must pause and ask the user which change to start; after the user chooses, advance only that change into `/opensuper-design`, while other changes remain active and can be resumed later through `/opensuper`.
+
+Minimal resume rule: do not add a dedicated batch state file. On resume, first check already-created active changes; split items that already exist and contain `.opensuper.yaml` must not be created again, while uncreated split items continue through `/opensuper-open` according to the user-confirmed split list. If the confirmed split list cannot be recovered from the conversation, must ask the user to confirm the split list again before continuing.
+
+### 1b. Requirements Clarification Completion Confirmation (Blocking Point)
+
+Before creating OpenSpec artifacts, must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user to confirm requirements clarification is complete.
+
+When pausing, present the clarification summary: goals, non-goals, scope boundaries, key unknowns, and draft acceptance scenarios.
+
+Must not create proposal.md, design.md, or tasks.md before the user confirms requirements clarification is complete, and must not use the Skill tool to load the `openspec-propose` skill to generate all artifacts in one pass.
+
+### 2. Create Change Structure + Initialize State
+
+**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
+
+Full `/opensuper` workflow must not use the Skill tool to load the `openspec-propose` skill by default; only load it when the user explicitly requests generating the proposal and artifacts in one pass.
+
+After the skill loads, follow its guidance to create the change skeleton, but override its "STOP and wait for user direction" behavior when a confirmed clarification summary from Step 1b is already available in the conversation context.
+
+If the user has already confirmed a clarification summary (Step 1b), use that summary directly to populate artifact content. If no clarification summary exists (edge case), fall back to the skill's default behavior of asking the user.
+
+After the change skeleton is created, generate `proposal`, `design`, and `tasks` one by one using the standard artifact loop:
 
 The generated `proposal.md`, `design.md`, and `tasks.md` prose must be written in English; commands, paths, field names, and code identifiers stay in their original form.
+
+**Standard Artifact Loop** (for each `artifact-id`: `proposal` → `design` → `tasks`):
+
+1. Refresh status: `openspec status --change "<name>" --json`
+2. Fetch artifact instructions:
+
+   ```bash
+   openspec instructions proposal --change "<name>" --json
+   openspec instructions design --change "<name>" --json
+   openspec instructions tasks --change "<name>" --json
+   ```
+
+3. For the returned JSON instruction payload, you must:
+   - Read every completed dependency artifact listed in `dependencies`
+   - Use `template` as the artifact structure
+   - Follow `instruction` guidance
+   - Apply `context` and `rules` as constraints — **must not copy them into the artifact content**
+   - Write to `resolvedOutputPath`
+   - Verify the output file exists and is non-empty
+4. After creating each artifact, re-run `openspec status --change "<name>" --json` to confirm status before continuing to the next artifact
+
+**Failure handling**: If `openspec instructions` fails, returns invalid JSON, reports unmet `dependencies`, or does not provide a usable `resolvedOutputPath`, must immediately stop artifact creation and report the OpenSpec error. Must not fall back to hard-coded artifact prose because that would silently bypass project rules.
+
+**Naming and scope guard**: Change name must use a user-specified name or a name confirmed through the current platform's available user input/confirmation mechanism — must not auto-generate or infer. Change scope must match the user's description — must not expand or narrow it independently.
 
 Confirm the following artifacts have been created:
 
@@ -52,40 +123,90 @@ openspec/changes/<name>/
 ├── .openspec.yaml
 ├── .opensuper.yaml
 ├── proposal.md       # Why + What: problem, goals, scope
-├── design.md         # How (high-level): architectural decisions, solution selection
+├── design.md         # How (high-level): architecture decisions, approach selection
 └── tasks.md          # Task checklist (checkboxes)
 ```
 
-### 3. Initialize OpenSuper State
-
-Initialize OpenSuper state file:
+Create `.opensuper.yaml` state file:
 
 ```bash
-bash "$OPENSUPER_STATE" init <name> full
+opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
+if [ -z "$opensuper_ENV" ]; then
+  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
+  return 1
+fi
+. "$opensuper_ENV"
+
+if [ -z "$opensuper_STATE" ] || [ -z "$opensuper_GUARD" ]; then
+  echo "ERROR: opensuper scripts not found. Ensure the opensuper skill is installed." >&2
+  return 1
+fi
+
+"$opensuper_BASH" "$opensuper_STATE" init <name> full
 ```
+
+### 3. Entry State Verification
+
+Verify state machine has been correctly initialized:
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" check <name> open
+```
+
+Proceed to Step 4 after verification passes. The script outputs specific failure reasons when verification fails.
+
+**Idempotency**: All open phase operations can be safely re-executed. If `.opensuper.yaml` is already at `phase: open` and all three artifact files exist, skip completed steps and continue from the first missing step.
 
 ### 4. Content Completeness Check
 
 Confirm the three documents have complete content:
 - **proposal.md**: problem background, goals, scope, non-goals
-- **design.md**: high-level architectural decisions, solution selection, data flow
+- **design.md**: high-level architecture decisions, approach selection, data flow
 - **tasks.md**: task list, each task has a clear description
+
+**File existence verification**: Confirm all three file paths exist and are non-empty. If any file is missing or empty, must not enter Step 5 or execute phase guard — return to creation step to fill the gap.
+
+### 5. User Review and Confirmation (Blocking Point)
+
+After the three documents are created and content completeness check passes, **must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for user confirmation**. Must not execute phase guard or auto-transition before user confirmation.
+
+The user confirmation question must be presented as a single-select question with the following summary and options:
+
+**Summary content**:
+- **proposal.md**: problem background, goals, scope
+- **design.md**: high-level architecture decisions, approach selection
+- **tasks.md**: task count and key task descriptions
+
+**Options**:
+- "Confirm, proceed to next phase" — artifacts meet expectations, execute phase guard transition
+- "Needs adjustment" — include adjustment notes, modify and re-request confirmation
+
+After user selects "Confirm", proceed to exit conditions. When user selects "Needs adjustment", modify the corresponding files per their notes, then request confirmation again.
 
 ## Exit Conditions
 
-- proposal.md, design.md, and tasks.md are all created with complete content
-- **Phase guard**: Run `bash "$OPENSUPER_GUARD" <change-name> open --apply`; after all PASS, state automatically advances to the next phase
+- proposal.md, design.md, tasks.md all created with complete content
+- **User has confirmed** proposal, design, tasks content meets expectations
+- **Phase guard**: Run `"$opensuper_BASH" "$opensuper_GUARD" <change-name> open --apply`; after all PASS, auto-transitions to next phase
 
-You must use `--apply` before exiting. Otherwise `.opensuper.yaml` stays at `phase: open`, and the next phase entry check will fail.
+Must use `--apply` before exit, otherwise `.opensuper.yaml` remains at `phase: open` and the next phase entry check will fail.
 
 ```bash
-bash "$OPENSUPER_GUARD" <change-name> open --apply
+"$opensuper_BASH" "$opensuper_GUARD" <change-name> open --apply
 ```
 
-Full workflow advances to `phase: design`; hotfix/tweak presets advance to `phase: build`.
+Full workflow auto-transitions to `phase: design`; hotfix/tweak presets auto-transition to `phase: build`.
 
-## Automatic Transition
+## Automatic Handoff to Next Phase
 
-After exit conditions are met, **proceed immediately to the next phase without waiting for user input**:
+Follow `opensuper/reference/auto-transition.md`. Key command:
 
-> **REQUIRED NEXT SKILL:** Invoke `opensuper-design` skill to enter the deep design phase.
+```bash
+"$opensuper_BASH" "$opensuper_STATE" next <change-name>
+```
+
+- `NEXT: auto` → invoke the skill pointed to by `SKILL` to enter the next phase
+- `NEXT: manual` → do not invoke the next skill; prompt user to run `/<SKILL>` manually
+- `NEXT: done` → workflow is complete, no further action needed
+
+hotfix/tweak presets are controlled by their corresponding preset skill (phase goes directly to build); their `next` returns the corresponding preset skill.

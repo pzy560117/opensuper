@@ -1,6 +1,6 @@
 {
   "name": "@pzy560117/opensuper",
-  "version": "0.2.8",
+  "version": "0.3.8",
   "description": "OpenSpec + Superpowers dual-star development workflow",
   "keywords": [
     "opensuper",
@@ -16,7 +16,7 @@
     "access": "public"
   },
   "bin": {
-    "opensuper": "bin/opensuper.js"
+    "opensuper": "./bin/opensuper.js"
   },
   "files": [
     "dist",
@@ -37,9 +37,14 @@
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "test:shell": "node scripts/run-bats.js test/shell/*.bats",
-    "prepare": "pnpm run build",
+    "benchmark:context": "node scripts/context-compression-benchmark.mjs",
+    "benchmark:execution": "node scripts/context-execution-benchmark.mjs",
+    "prepare": "husky && pnpm run build",
     "prepublishOnly": "node scripts/prepublish-check.js && pnpm run build",
     "postinstall": "node scripts/postinstall.js"
+  },
+  "lint-staged": {
+    "src/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write"
   },
   "packageManager": "pnpm@10.18.3",
   "engines": {
@@ -50,6 +55,8 @@
     "@types/node": "^24.2.0",
     "@vitest/coverage-v8": "^4.1.6",
     "eslint": "^10.4.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.7",
     "prettier": "^3.8.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.59.3",

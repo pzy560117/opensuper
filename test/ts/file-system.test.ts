@@ -1,14 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import { ensureDir, copyFile, fileExists, readJson, writeFile, readDir } from '../../src/utils/file-system.js';
+import {
+  ensureDir,
+  copyFile,
+  fileExists,
+  readJson,
+  writeFile,
+  readDir,
+} from '../../src/utils/file-system.js';
 
 describe('file-system utils', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = path.join(os.tmpdir(), `opensuper-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tmpDir = path.join(
+      os.tmpdir(),
+      `opensuper-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
     await fs.mkdir(tmpDir, { recursive: true });
   });
 
@@ -36,6 +46,22 @@ describe('file-system utils', () => {
       await fs.mkdir(dirPath);
       await expect(ensureDir(dirPath)).resolves.not.toThrow();
     });
+
+    it('follows symlinks and creates at the real target', async () => {
+      if (process.platform === 'win32') return; // requires elevated permissions
+
+      const realDir = path.join(tmpDir, 'real');
+      await fs.mkdir(realDir);
+      const symlinkDir = path.join(tmpDir, 'link');
+      await fs.symlink(realDir, symlinkDir);
+
+      const nested = path.join(symlinkDir, 'nested', 'deep');
+      await ensureDir(nested);
+
+      // Should exist at the real target
+      const stat = await fs.stat(path.join(realDir, 'nested', 'deep'));
+      expect(stat.isDirectory()).toBe(true);
+    });
   });
 
   describe('copyFile', () => {
@@ -55,6 +81,54 @@ describe('file-system utils', () => {
       await copyFile(src, dest);
       const content = await fs.readFile(dest, 'utf-8');
       expect(content).toBe('data');
+    });
+
+    it('follows symlinks and writes to the symlink target', async () => {
+      if (process.platform === 'win32') return; // requires elevated permissions
+
+      const realDir = path.join(tmpDir, 'real-target');
+      await fs.mkdir(realDir);
+      const symlinkDir = path.join(tmpDir, 'symlink-dir');
+      await fs.symlink(realDir, symlinkDir);
+
+      const src = path.join(tmpDir, 'source.txt');
+      const dest = path.join(symlinkDir, 'file.txt');
+      await fs.writeFile(src, 'via-symlink');
+      await copyFile(src, dest);
+
+      // File should be at the real target, accessible through the symlink
+      const content = await fs.readFile(dest, 'utf-8');
+      expect(content).toBe('via-symlink');
+      const realContent = await fs.readFile(path.join(realDir, 'file.txt'), 'utf-8');
+      expect(realContent).toBe('via-symlink');
+    });
+
+    it('follows broken symlinks by resolving readlink target', async () => {
+      if (process.platform === 'win32') return; // requires elevated permissions
+
+      // Simulate: ~/.claude/skills/opensuper -> ../../.agents/skills/opensuper
+      const agentDir = path.join(tmpDir, '.agents', 'skills', 'opensuper');
+      await fs.mkdir(agentDir, { recursive: true });
+
+      const claudeSkillsDir = path.join(tmpDir, '.claude', 'skills');
+      await fs.mkdir(claudeSkillsDir, { recursive: true });
+      const symlinkPath = path.join(claudeSkillsDir, 'opensuper');
+      await fs.symlink(path.join('..', '..', '.agents', 'skills', 'opensuper'), symlinkPath);
+
+      // Now remove the target to simulate a broken symlink
+      await fs.rm(agentDir, { recursive: true });
+
+      const src = path.join(tmpDir, 'SKILL.md');
+      await fs.writeFile(src, 'skill-content');
+      const dest = path.join(symlinkPath, 'SKILL.md');
+
+      // copyFile should resolve the broken symlink and create at the target
+      await copyFile(src, dest);
+
+      // Verify file was written to the symlink target, not the symlink path
+      const realDest = path.join(agentDir, 'SKILL.md');
+      const content = await fs.readFile(realDest, 'utf-8');
+      expect(content).toBe('skill-content');
     });
   });
 
@@ -117,6 +191,18 @@ describe('file-system utils', () => {
     it('returns empty array for non-existent directory', async () => {
       const entries = await readDir(path.join(tmpDir, 'nope'));
       expect(entries).toEqual([]);
+    });
+
+    it('throws for non-ENOENT filesystem errors', async () => {
+      const readdirSpy = vi
+        .spyOn(fs, 'readdir')
+        .mockRejectedValue(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+
+      try {
+        await expect(readDir(tmpDir)).rejects.toThrow('permission denied');
+      } finally {
+        readdirSpy.mockRestore();
+      }
     });
   });
 });

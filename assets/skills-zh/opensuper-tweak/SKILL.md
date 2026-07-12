@@ -1,9 +1,9 @@
 ---
 name: opensuper-tweak
-description: "OpenSuper 预设路径：非 bug 的小改动（tweak）。跳过 brainstorming 和完整 plan，直接 open → lightweight build → light verify → archive。适用于文案、配置、文档或 prompt 的局部优化。"
+description: "opensuper 预设路径：非 bug 的小改动（tweak）。跳过 brainstorming 和完整 plan，直接 open → lightweight build → light verify → archive。适用于文案、配置、文档或 prompt 的局部优化。"
 ---
 
-# OpenSuper 预设路径：Tweak
+# opensuper 预设路径：Tweak
 
 ## 产出语言契约
 
@@ -20,7 +20,7 @@ Tweak 是 OpenSuper 五阶段能力的预设工作流，不是独立的平行流
 1. 不新增 capability
 2. 不改变架构
 3. 不涉及接口变化
-4. 通常不超过 3 个 tasks、4 个文件
+4. 通常不超过 3 个 tasks（文件数约束见下方升级条件）
 
 **不适用**：如变更过程中发现需要 capability、架构或接口调整，应升级为完整 `/opensuper` 流程。
 
@@ -28,20 +28,26 @@ Tweak 是 OpenSuper 五阶段能力的预设工作流，不是独立的平行流
 
 ## 流程（preset workflow，4 阶段）
 
-执行链路：open → lightweight build → light verify → archive。Tweak 为每个阶段提供默认决策：精简开启、轻量构建、轻量验证、验证通过后归档。
+### 0. 输出语言约束
 
-开始前先定位 OpenSuper 脚本：
+精简版 OpenSpec 产物必须使用触发本次工作流的用户请求语言。
+
+执行链路：open → lightweight build → light verify → archive。Tweak 为每个阶段提供默认决策：精简开启、轻量构建、轻量验证、验证通过后进入归档前最终确认。
+
+开始前先定位 opensuper 脚本：
 
 ```bash
-OPENSUPER_SEARCH_ROOTS=("." "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills")
-OPENSUPER_STATE="${OPENSUPER_STATE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-state.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_GUARD="${OPENSUPER_GUARD:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-guard.sh' -type f -print -quit 2>/dev/null)}"
-OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -path '*/opensuper/scripts/opensuper-archive.sh' -type f -print -quit 2>/dev/null)}"
+opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
+if [ -z "$opensuper_ENV" ]; then
+  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
+  return 1
+fi
+. "$opensuper_ENV"
 ```
 
 ### 1. 快速开启（preset open）
 
-复用 OpenSuper open 能力创建 change，但使用 tweak 默认值：不执行 `openspec-explore` 长探索，直接进入精简 change 创建。
+复用 opensuper open 能力创建 change，但使用 tweak 默认值：不执行 `openspec-explore` 长探索，直接进入精简 change 创建。
 
 **立即执行：** 使用 Skill 工具加载 `openspec-new-change` 技能，并传入要求：`产出语言：中文`。禁止跳过此步骤。
 
@@ -51,27 +57,29 @@ OPENSUPER_ARCHIVE="${OPENSUPER_ARCHIVE:-$(find "${OPENSUPER_SEARCH_ROOTS[@]}" -p
   - `tasks.md` — 不超过 3 个任务
 - **无需 delta spec**（除非变更改变了已有 spec 的验收场景；一旦需要 delta spec，升级为完整 `/opensuper`）
 
-初始化 OpenSuper 状态文件：
+初始化 opensuper 状态文件：
 
 ```bash
-bash "$OPENSUPER_STATE" init <name> tweak
+"$opensuper_BASH" "$opensuper_STATE" init <name> tweak
 ```
 
 初始化后验证状态：
 
 ```bash
-bash "$OPENSUPER_STATE" check <name> open
+"$opensuper_BASH" "$opensuper_STATE" check <name> open
 ```
 
 阶段守卫完成 open → build 过渡：
 
 ```bash
-bash "$OPENSUPER_GUARD" <change-name> open --apply
+"$opensuper_BASH" "$opensuper_GUARD" <change-name> open --apply
 ```
 
 ### 2. 轻量构建（preset build）
 
-使用 tweak 默认值：`build_mode: direct`。跳过 `superpowers:brainstorming` 和 `superpowers:writing-plans`。
+使用 tweak 默认值：`build_mode: direct`。跳过 Superpowers `brainstorming` 和 `writing-plans`。
+
+继续或开始修改前，按 `opensuper/reference/dirty-worktree.md` 协议处理未提交改动。若归因后发现范围超出 tweak，按本文件“升级条件”处理。
 
 **立即执行：** 按 tasks.md 逐个执行任务：
 
@@ -85,8 +93,12 @@ bash "$OPENSUPER_GUARD" <change-name> open --apply
 3. 全部任务完成后，显式运行项目相关测试和构建命令
 4. 运行阶段守卫完成 build → verify 过渡：
 
+执行 tweak 期间，只要运行程序、测试、构建或手动验证时出现崩溃、异常行为、测试失败或构建失败，必须使用 Skill 工具加载 Superpowers `systematic-debugging` 技能。在完成根因调查前，不得提出或实施源码修复。
+
+具体调查、最小失败测试、修复验证和保持当前 change 验证闭环的要求，按 `opensuper/reference/debug-gate.md` 执行。
+
 ```bash
-bash "$OPENSUPER_GUARD" <change-name> build --apply
+"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply
 ```
 
 状态文件自动更新为 `phase: verify`、`verify_result: pending`，然后进入验证。
@@ -97,13 +109,13 @@ bash "$OPENSUPER_GUARD" <change-name> build --apply
 
 **立即执行：** 使用 Skill 工具加载 `opensuper-verify` 技能。禁止跳过此步骤。
 
-如规模评估进入完整验证路径，停止 tweak，升级为完整 `/opensuper`。
+如规模评估进入完整验证路径，停止 tweak，按升级条件阻塞确认处理。
 
-验证通过后，按 `/opensuper-verify` 的规则将 `.opensuper.yaml` 的 `verify_result` 记录为 `pass`，归档前不得跳过该状态。
+验证通过后，按 `/opensuper-verify` 的规则将 `.opensuper.yaml` 的 `verify_result` 记录为 `pass`，归档前不得跳过该状态。验证通过后仍必须进入 `/opensuper-archive` 的归档前最终确认，不得自动运行归档脚本。
 
 ### 4. 归档（preset archive）
 
-复用 `/opensuper-archive`。归档前必须满足 `.opensuper.yaml` 中 `verify_result: pass`。
+复用 `/opensuper-archive`。归档前必须满足 `.opensuper.yaml` 中 `verify_result: pass`，并等待 `/opensuper-archive` 的归档前最终确认。
 
 **立即执行：** 使用 Skill 工具加载 `opensuper-archive` 技能进行归档。禁止跳过此步骤。
 
@@ -112,11 +124,15 @@ bash "$OPENSUPER_GUARD" <change-name> build --apply
 ## 连续执行模式
 
 <IMPORTANT>
-Tweak 流程为 **一次性连续执行**。调用 `/opensuper-tweak` 后，agent 必须自动走完全部 4 个阶段，中间不停顿等待用户输入（除非遇到升级条件需要用户确认）。
+Tweak 流程默认 **一次性连续执行**。调用 `/opensuper-tweak` 后，agent 在 tweak 自有步骤间自动推进，不主动停顿。**例外**：若 `auto_transition: false`，则在每个 phase 边界（build/verify/archive 之间）停下，由用户手动运行下一阶段命令——此时连续执行降级为逐阶段手动推进，详见下方「自动衔接下一阶段」。但无论 `auto_transition` 取何值，以下情况都必须暂停等待用户确认：
+
+1. 遇到升级条件（见"升级条件"章节），**必须使用当前平台可用的用户输入/确认机制暂停并等待用户明确确认**升级为完整流程
+2. 验证阶段（opensuper-verify）的验证失败决策和分支处理决策
+3. 归档前最终确认（opensuper-archive 执行归档脚本前）
 
 执行顺序：快速开启 → 轻量构建 → 轻量验证 → 归档 → 完成
 
-每个阶段完成后立即进入下一阶段，无需用户再次输入。阶段内部仍必须按上文要求调用对应 OpenSuper/OpenSpec/Superpowers skill。
+每个阶段完成后立即进入下一阶段。阶段内部仍必须按上文要求调用对应 opensuper/OpenSpec/Superpowers skill，被调用的 skill 如有自己的用户决策点，按该 skill 规则执行。
 </IMPORTANT>
 
 ---
@@ -134,7 +150,16 @@ Tweak 流程为 **一次性连续执行**。调用 `/opensuper-tweak` 后，agen
 | 需要新增 capability | 超出局部优化 |
 | 需要 delta spec | 影响了已有规格 |
 
-升级方式：在当前 change 基础上补充 Design Doc（执行 `/opensuper-design`），后续正常走完整流程。
+满足升级条件时**必须按 `opensuper/reference/decision-point.md` 的协议暂停并等待用户明确确认**升级为完整 `/opensuper` 流程。不得直接进入 `/opensuper-design`，不得自动补充 Design Doc。
+
+用户确认升级后，**必须先更新 workflow 和 phase 字段**再进入完整流程：
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" set <name> workflow full
+"$opensuper_BASH" "$opensuper_STATE" set <name> phase design
+```
+
+然后在当前 change 基础上补充 Design Doc：**立即使用 Skill 工具加载 `opensuper-design` skill**，后续正常走完整流程。若用户不确认升级，停止 tweak 并报告当前变更已超出 tweak 适用范围。
 
 ---
 
@@ -143,4 +168,16 @@ Tweak 流程为 **一次性连续执行**。调用 `/opensuper-tweak` 后，agen
 - 小改动已完成，测试通过
 - change 已归档
 - 未新增 capability、架构调整或接口变化
-- **阶段守卫**：build → verify 前运行 `bash "$OPENSUPER_GUARD" <change-name> build --apply`，verify → archive 前按 `/opensuper-verify` 规则运行 `bash "$OPENSUPER_GUARD" <change-name> verify --apply`
+- **阶段守卫**：build → verify 前运行 `"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply`，verify → archive 前按 `/opensuper-verify` 规则运行 `"$opensuper_BASH" "$opensuper_GUARD" <change-name> verify --apply`
+
+## 自动衔接下一阶段
+
+按 `opensuper/reference/auto-transition.md` 执行。关键命令：
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" next <name>
+```
+
+- `NEXT: auto` → 调用 `SKILL` 指向的 skill 继续 tweak 流程（`phase: build` 返回 `opensuper-tweak`，`verify` 返回 `opensuper-verify`，`archive` 返回 `opensuper-archive`）
+- `NEXT: manual` → 不要调用下一 skill，按 `HINT` 提示用户手动运行 `/<SKILL>`
+- `NEXT: done` → 流程已完成，无需继续

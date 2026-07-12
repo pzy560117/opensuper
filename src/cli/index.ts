@@ -4,6 +4,7 @@ import { initCommand } from '../commands/init.js';
 import { statusCommand } from '../commands/status.js';
 import { doctorCommand } from '../commands/doctor.js';
 import { updateCommand } from '../commands/update.js';
+import { uninstallCommand } from '../commands/uninstall.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../../package.json');
@@ -17,11 +18,12 @@ program
 
 program
   .command('init [path]')
-  .description('Initialize OpenSuper workflow in your project')
+  .description('Initialize opensuper workflow in your project')
   .option('--yes', 'Auto-install missing components, skip existing')
   .option('--skip-existing', 'Never overwrite existing components')
   .option('--overwrite', 'Overwrite manifest-managed files')
   .option('--json', 'Output as JSON')
+  .addOption(new Option('--scope <scope>', 'Install scope').choices(['global', 'project']))
   .action(async (targetPath = '.', options) => {
     try {
       await initCommand(targetPath, options);
@@ -44,7 +46,7 @@ program
 
 program
   .command('doctor [path]')
-  .description('Diagnose OpenSuper installation health')
+  .description('Diagnose opensuper installation health')
   .option('--json', 'Output as JSON')
   .addOption(
     new Option('--scope <scope>', 'Install scope to diagnose').choices([
@@ -66,6 +68,24 @@ program
   .addOption(new Option('--skip-npm', 'Skip npm package self-update').hideHelp())
   .action(async (targetPath = '.', options) => {
     await updateCommand(targetPath, options);
+  });
+
+program
+  .command('uninstall [path]')
+  .description('Remove opensuper skills, rules, and hooks from your project or global scope')
+  .option('--json', 'Output as JSON')
+  .addOption(new Option('--scope <scope>', 'Uninstall scope').choices(['global', 'project']))
+  .option('--force', 'Skip confirmation prompts')
+  .action(async (targetPath = '.', options) => {
+    try {
+      await uninstallCommand(targetPath, options);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'ExitPromptError') {
+        console.log('\n  Cancelled.\n');
+        process.exit(0);
+      }
+      throw error;
+    }
   });
 
 program.parse();

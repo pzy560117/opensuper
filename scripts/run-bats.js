@@ -1,63 +1,52 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+const BASH_PROBE_TIMEOUT_MS = 10_000;
+const BATS_FILE_TIMEOUT_MS = 10 * 60_000;
 
 function escapeRegExp(value) {
   return value.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
-}
+function findUsableBash() {
+  const candidates = [
+    process.env.opensuper_TEST_BASH,
+    process.env.opensuper_BASH,
+    'bash',
+    ...(process.platform === 'win32'
+      ? [
+          'C:\\Program Files\\Git\\bin\\bash.exe',
+          'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+          'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+        ]
+      : []),
+  ].filter(Boolean);
 
-function getGitBashCandidates() {
-  if (process.platform !== 'win32') return [];
-
-  const whereGit = spawnSync('where', ['git'], { encoding: 'utf8' });
-  const gitPaths = `${whereGit.stdout || ''}\n${whereGit.stderr || ''}`
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const candidates = [];
-  for (const gitPath of gitPaths) {
-    const gitRoot = path.dirname(path.dirname(gitPath));
-    candidates.push(path.join(gitRoot, 'bin', 'bash.exe'));
-    candidates.push(path.join(gitRoot, 'usr', 'bin', 'bash.exe'));
-  }
-
-  return unique(candidates).filter((candidate) => existsSync(candidate));
-}
-
-function probeBash(command) {
-  const result = spawnSync(command, ['-lc', 'uname -s'], { encoding: 'utf8' });
-  return {
-    error: result.error,
-    status: result.status,
-    stdout: (result.stdout || '').trim(),
-  };
-}
-
-function resolveBashCommand() {
-  const candidates = [];
-  if (process.env.OPENSUPER_BASH) candidates.push(process.env.OPENSUPER_BASH);
-  if (process.platform === 'win32') candidates.push(...getGitBashCandidates());
-  candidates.push('bash');
-
-  for (const candidate of unique(candidates)) {
-    const probe = probeBash(candidate);
-    if (probe.error) continue;
-    if (probe.status === 0 && probe.stdout) {
-      return { command: candidate, uname: probe.stdout };
+  for (const candidate of [...new Set(candidates)]) {
+    const probe = spawnSync(candidate, ['-lc', 'uname -s'], {
+      encoding: 'utf8',
+      timeout: BASH_PROBE_TIMEOUT_MS,
+    });
+    if (probe.status === 0 && probe.stdout.trim()) {
+      if (process.platform === 'win32' && /linux/i.test(probe.stdout)) continue;
+      return candidate;
     }
   }
-
-  return { command: process.env.OPENSUPER_BASH || 'bash', uname: '' };
+  return null;
 }
 
-const { command: bashCommand, uname: bashUname } = resolveBashCommand();
+const bashCommand = findUsableBash();
+const bashUname = bashCommand
+  ? (
+      spawnSync(bashCommand, ['-lc', 'uname -s'], {
+        encoding: 'utf8',
+        timeout: BASH_PROBE_TIMEOUT_MS,
+      }).stdout || ''
+    ).trim()
+  : '';
 const isGitBash = /^(MINGW|MSYS|CYGWIN)/.test(bashUname);
 
 function toBashPath(filePath) {
@@ -180,10 +169,9 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-if (!bashUname) {
-  console.error(
-    'Unable to find a usable bash runtime. Set OPENSUPER_BASH to your Git Bash executable or ensure `bash -lc "uname -s"` works.',
-  );
+if (!bashCommand) {
+  console.error('ERROR: usable bash not found. Install Git Bash or set opensuper_TEST_BASH/opensuper_BASH to a working bash executable.');
+  console.error('Windows WSL launcher bash.exe is not supported for opensuper shell tests.');
   process.exit(1);
 }
 
@@ -200,10 +188,12 @@ for (const file of files) {
   const result = spawnSync(bashCommand, [toBashPath(compiled)], {
     cwd: process.cwd(),
     encoding: 'utf8',
+    timeout: BATS_FILE_TIMEOUT_MS,
   });
 
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error) console.error(`ERROR: ${file}: ${result.error.message}`);
   if (result.status !== 0) failures += result.status ?? 1;
 
   rmSync(tempDir, { recursive: true, force: true });

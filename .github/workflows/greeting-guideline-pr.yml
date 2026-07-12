@@ -1,0 +1,34 @@
+name: Greetings
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  greeting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/first-interaction@v2.0.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_message: |-
+            👋 Thanks for opening your first PR to opensuper, @${{ github.actor }}.
+
+            Before review, please make sure the PR title follows Conventional Commits, for example `fix: handle project-scope init`, and that the checklist in the PR template is up to date.
+
+            🧪 The most useful local checks are:
+
+            ```bash
+            pnpm build
+            pnpm lint
+            pnpm format:check
+            pnpm test
+            ```
+
+            🧰 If your change touches `assets/skills/opensuper/scripts/`, please also check script portability across macOS, Linux, and Windows Git Bash. Avoid `sed -i`, support both `sha256sum` and `shasum -a 256`, and guard optional `grep` pipelines with `|| true`.
+
+            ✨ We appreciate the contribution and will take a look as soon as we can.
