@@ -87,7 +87,7 @@ jobs:
 
       - name: Production dependency audit
         shell: pwsh
-        run: npm audit --omit=dev --registry=https://registry.npmjs.org/
+        run: pnpm audit --prod --registry=https://registry.npmjs.org/
 
       - name: Pack release candidate
         shell: pwsh

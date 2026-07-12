@@ -30,6 +30,10 @@ describe('CI workflows', () => {
     expect(workflow).toContain('npm pack --ignore-scripts --pack-destination $candidateDir');
     expect(workflow).toContain('$packages.Count -ne 1');
     expect(workflow).toContain('PACKAGE_TGZ=$($packages[0].FullName)');
+    expect(workflow).toContain(
+      'pnpm audit --prod --registry=https://registry.npmjs.org/',
+    );
+    expect(workflow).not.toContain('npm audit --omit=dev');
     expect(workflow).toContain('tar -xzf $env:PACKAGE_TGZ -C $scanDir');
     expect(workflow).toContain("node scripts/prepublish-check.js (Join-Path $scanDir 'package')");
     expect(workflow).toContain(
