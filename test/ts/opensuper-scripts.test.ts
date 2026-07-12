@@ -295,7 +295,36 @@ describeShell('opensuper shell scripts', () => {
     60_000,
   );
 
-  it('validates OpenTest gate schema fields and rejects invalid required paths', async () => {
+  it.each([
+    [
+      'accepts valid OpenTest required gate schema fields',
+      'opentest-schema-valid',
+      'opentest_gate: required',
+      'opentest_strict_result: reports/strict.json',
+      null,
+    ],
+    [
+      'rejects an invalid OpenTest gate value',
+      'opentest-schema-invalid-gate',
+      'opentest_gate: optional',
+      'opentest_strict_result: reports/strict.json',
+      "opentest_gate='optional' is not valid",
+    ],
+    [
+      'rejects an empty required OpenTest result path',
+      'opentest-schema-empty-path',
+      'opentest_gate: required',
+      'opentest_strict_result:',
+      'opentest_strict_result must be set',
+    ],
+    [
+      'rejects a parent-traversing required OpenTest result path',
+      'opentest-schema-parent-path',
+      'opentest_gate: required',
+      'opentest_strict_result: ../strict.json',
+      "opentest_strict_result cannot contain '..'",
+    ],
+  ])('%s', async (_name, change, gateLine, resultLine, diagnostic) => {
     const base = [
       'workflow: full',
       'phase: verify',
@@ -308,46 +337,19 @@ describeShell('opensuper shell scripts', () => {
       'verified_at: null',
       'archived: false',
     ];
-    await createChange(
-      tmpDir,
-      'opentest-schema-valid',
-      [...base, 'opentest_gate: required', 'opentest_strict_result: reports/strict.json', ''].join(
-        '\n',
-      ),
-    );
-    await createChange(
-      tmpDir,
-      'opentest-schema-invalid-gate',
-      [...base, 'opentest_gate: optional', 'opentest_strict_result: reports/strict.json', ''].join(
-        '\n',
-      ),
-    );
-    await createChange(
-      tmpDir,
-      'opentest-schema-empty-path',
-      [...base, 'opentest_gate: required', 'opentest_strict_result:', ''].join('\n'),
-    );
-    await createChange(
-      tmpDir,
-      'opentest-schema-parent-path',
-      [...base, 'opentest_gate: required', 'opentest_strict_result: ../strict.json', ''].join('\n'),
-    );
+    await createChange(tmpDir, change, [...base, gateLine, resultLine, ''].join('\n'));
 
-    const valid = runBash(tmpDir, validateScript, ['opentest-schema-valid']);
-    const invalidGate = runBash(tmpDir, validateScript, ['opentest-schema-invalid-gate']);
-    const emptyPath = runBash(tmpDir, validateScript, ['opentest-schema-empty-path']);
-    const parentPath = runBash(tmpDir, validateScript, ['opentest-schema-parent-path']);
+    const result = runBash(tmpDir, validateScript, [change]);
 
-    expect(valid.status).toBe(0);
-    expect(valid.stderr).not.toContain("unknown field 'opentest_gate'");
-    expect(valid.stderr).not.toContain("unknown field 'opentest_strict_result'");
-    expect(invalidGate.status).not.toBe(0);
-    expect(invalidGate.stderr).toContain("opentest_gate='optional' is not valid");
-    expect(emptyPath.status).not.toBe(0);
-    expect(emptyPath.stderr).toContain('opentest_strict_result must be set');
-    expect(parentPath.status).not.toBe(0);
-    expect(parentPath.stderr).toContain("opentest_strict_result cannot contain '..'");
-  }, 120_000);
+    if (diagnostic === null) {
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("unknown field 'opentest_gate'");
+      expect(result.stderr).not.toContain("unknown field 'opentest_strict_result'");
+    } else {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(diagnostic);
+    }
+  }, 60_000);
 
   it.each([
     ['double-quoted', 'opentest_gate: "null"'],
