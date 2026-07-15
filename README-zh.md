@@ -40,7 +40,7 @@ Superpowers 处理 **HOW**（技术设计、规划、执行、收尾）。
 OpenSuper 将二者串联为五阶段自动化流水线。
 
 > [!IMPORTANT]
-> **0.3.8 亮点** — 一键接入 [CodeGraph](https://github.com/colbymchenry/codegraph) 语义代码索引（官方：成本 **↓16%**、工具调用 **↓58%**）；
+> **0.3.9 亮点** — 阶段转换、跨 change hook 路由和归档确认默认 fail-closed，并补齐 Windows Git Bash 完整回归；
 >
 > 新增 Beta 上下文压缩，Build 阶段输入 token 降低 **25–30%**； 新增主动上下文压缩机制，释放读取 Spec 和 brainstorming 消耗的上下文，为后续 Build 阶段保留窗口
 > 新增 6 项 Token 工作流优化默认开启； 新增 `auto_transition` 配置，支持自动流转或手动推进阶段切换；
@@ -120,6 +120,18 @@ npx @pzy560117/opentest install --scope project --platform <platform-id> --langu
 
 托管安装可通过 `OPENSUPER_OPENTEST_CONSUMER` 指向 OpenTest 包内已分发的 `opentest-strict-result.mjs`。仅全局安装 CLI 并不能保证 consumer 可发现；必须同时满足环境变量、同级 skill 或目标项目依赖三种方式之一。
 
+### 0.3.9 验证基线
+
+| 组件        | 已验证版本 | 安装策略                           |
+| ----------- | ---------: | ---------------------------------- |
+| OpenSuper   |      0.3.9 | npm 包                             |
+| Node.js     |        20+ | 运行时要求                         |
+| OpenSpec    |      1.6.0 | `OpenSuper init` 安装固定 npm 版本 |
+| Skills CLI  |      1.5.9 | `npx` 安装器固定版本               |
+| Superpowers |     v6.1.1 | `OpenSuper init` 安装固定官方 tag  |
+
+OpenSpec 与 Superpowers 不打包进 OpenSuper；升级固定版本前，应重新运行本仓库验证门禁。
+
 ## 快速开始
 
 ```bash
@@ -136,6 +148,8 @@ OpenSuper init
 5. 安装 [Superpowers](https://github.com/obra/superpowers) 技能
 6. 将 OpenSuper 技能（你选择的语言）部署到所选平台
 7. 在项目级安装时创建 `docs/superpowers/specs/` 和 `docs/superpowers/plans/` 工作目录
+
+无论技能选择项目级还是全局安装，OpenSpec CLI 都会全局安装，因为后续运行时通过 PATH 调用；技能文件仍按所选 scope 部署。
 
 `OpenSuper init` 不会强制安装 OpenTest，新 change 默认使用 `opentest_gate: null` 保持旧版兼容。需要契约证据时，在目标项目单独安装 OpenTest，并为该 change 设置 `opentest_gate: required` 与项目相对的 `opentest_strict_result`。
 
@@ -389,6 +403,7 @@ verify_result: pending
 verification_report: null
 branch_status: pending
 verified_at: null
+archive_confirmation: pending
 archived: false
 direct_override: false
 build_command: null
@@ -402,7 +417,7 @@ subagent_dispatch: null
 full workflow 初始化时 `build_mode`、`build_pause`、`isolation`、`verify_mode`、`tdd_mode` 和 `subagent_dispatch` 可以暂时为
 `null`；进入 `build → verify` 前必须完成 `build_mode` 与 `isolation` 决策并写入合法值。`opentest_gate` 只接受 `required`、`not-applicable` 或未加引号的 YAML 字面量 `null`；只有字段缺失或未加引号的 `null` 属于 legacy。加引号的 `"null"`/`'null'`、空值/其他值以及 malformed/duplicate 状态字段都会阻塞。`required` 时 `opentest_strict_result` 必须是目标项目内的规范相对路径，绝对路径、父目录穿越和符号链接逃逸都会被拒绝。`auto_transition` 控制阶段完成后是否自动触发下一个 Skill — 详见[自动流转参考](https://github.com/pzy560117/opensuper/blob/main/assets/skills-zh/opensuper/reference/auto-transition.md)。`build_pause` 记录 build 阶段内部暂停点：
 `null` 表示无暂停，`plan-ready` 表示 plan 已生成，用户在选择隔离方式和执行方式前暂停。它不是执行方式，不得写入 `build_mode`。
-`verification_report` 在验证报告生成前保持 `null`，`verify-pass` 要求该报告文件存在且 `branch_status: handled`。示例中
+`verification_report` 在验证报告生成前保持 `null`，`verify-pass` 要求该报告文件存在且 `branch_status: handled`。真实归档前还必须在用户明确确认后通过 `archive-confirm` transition 将 `archive_confirmation` 设为 `confirmed`；直接设置 phase 默认被拒绝，仅允许 `OPENSUPER_FORCE_PHASE=1` 用于显式状态修复。示例中
 `archived` 之后的字段是可选字段或脚本派生字段：`direct_override` 只在 full workflow 直接构建时需要，项目命令未配置时可以不存在，
 `handoff_context` 和 `handoff_hash` 由 `OpenSuper-handoff.sh` 在离开 design 阶段前写入。项目可在 change 或仓库根配置中设置
 `build_command` / `verify_command`，guard 会优先运行并打印失败输出。
@@ -484,7 +499,7 @@ OpenSuper 通过自动化状态转换确保 agent 执行可靠性：
     - `required` 下不回退旧版结果；缺 consumer/provider/result 或任何非零退出都阻塞
 
 7. **归档自动化** — `OpenSuper-archive.sh` 一键处理完整归档流程
-    - 验证入口状态、通过 OpenSpec 将 delta specs 合并到 main specs
+    - 机器校验 `archive_confirmation: confirmed` 后，通过 OpenSpec 将 delta specs 合并到 main specs
     - 标注设计文档和计划文档的 frontmatter
     - 将变更移至归档目录并更新 `archived: true`
     - 支持 `--dry-run` 预览
@@ -492,7 +507,8 @@ OpenSuper 通过自动化状态转换确保 agent 执行可靠性：
 8. **防漂移阶段守护** — 长上下文会话中的阶段意识保障
     - Rule 层：`OpenSuper-phase-guard.md` 每轮注入阶段感知、Skill 调用规范和上下文恢复指令（所有平台通用）
     - Hook 层：`OpenSuper-hook-guard.sh` 在 open/design/archive 阶段硬拦截文件写入（Claude Code 等支持 hook 的平台）
-    - 白名单路径：`openspec/*`、`docs/superpowers/*`、`.claude/*`、`.OpenSuper/*`
+    - 白名单路径：`openspec/*`、阶段允许的 `docs/superpowers/*`、`.claude/*`、`.opensuper/*`、`.superpowers/*`
+    - 多个 active change 并存时按目标 change 路由；普通源码写入无法唯一归属时 fail-closed
 
 </details>
 

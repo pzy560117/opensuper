@@ -115,9 +115,9 @@ describe('superpowers', () => {
       const command = mockedExecFileSync.mock.calls[0][0] as string;
       const args = mockedExecFileSync.mock.calls[0][1] as string[];
       expect(command).toBe(process.platform === 'win32' ? 'npx.cmd' : 'npx');
-      expect(args).toContain('skills');
+      expect(args).toContain('skills@1.5.9');
       expect(args).toContain('add');
-      expect(args).toContain('obra/superpowers');
+      expect(args).toContain('obra/superpowers#v6.1.1');
       expect(args).toContain('-y');
       expect(args).toContain('--agent');
       expect(args).toContain('claude-code');
@@ -128,22 +128,27 @@ describe('superpowers', () => {
     it('builds command + args for install flags', async () => {
       const { buildSuperpowersInstallCommand } = await import('../../src/core/superpowers.js');
 
-      expect(
-        buildSuperpowersInstallCommand('/tmp/test', 'project', ['claude', 'cursor']),
-      ).toEqual({
+      expect(buildSuperpowersInstallCommand('/tmp/test', 'project', ['claude', 'cursor'])).toEqual({
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        args: ['skills', 'add', 'obra/superpowers', '-y', '--agent', 'claude-code', '--agent', 'cursor'],
+        args: [
+          'skills@1.5.9',
+          'add',
+          'obra/superpowers#v6.1.1',
+          '-y',
+          '--agent',
+          'claude-code',
+          '--agent',
+          'cursor',
+        ],
       });
     });
 
-    it('excludes Lingma from the skills CLI command because skills@1.5.7 does not support it', async () => {
+    it('excludes Lingma from the skills CLI command because skills@1.5.9 does not support it', async () => {
       const { buildSuperpowersInstallCommand } = await import('../../src/core/superpowers.js');
 
-      expect(
-        buildSuperpowersInstallCommand('/tmp/test', 'project', ['claude', 'lingma']),
-      ).toEqual({
+      expect(buildSuperpowersInstallCommand('/tmp/test', 'project', ['claude', 'lingma'])).toEqual({
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        args: ['skills', 'add', 'obra/superpowers', '-y', '--agent', 'claude-code'],
+        args: ['skills@1.5.9', 'add', 'obra/superpowers#v6.1.1', '-y', '--agent', 'claude-code'],
       });
     });
 
@@ -152,7 +157,7 @@ describe('superpowers', () => {
 
       expect(buildLingmaSuperpowersStageCommand()).toEqual({
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        args: ['skills', 'add', 'obra/superpowers', '-y', '--agent', 'claude-code'],
+        args: ['skills@1.5.9', 'add', 'obra/superpowers#v6.1.1', '-y', '--agent', 'claude-code'],
       });
     });
 

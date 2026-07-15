@@ -56,7 +56,7 @@ async function checkOpenSpecCli(): Promise<CheckResult> {
     return {
       check: 'openspec CLI',
       status: 'warn',
-      message: 'not installed — install with: npm install -g @fission-ai/openspec@latest',
+      message: 'not installed — install with: npm install -g @fission-ai/openspec@1.6.0',
     };
   }
   try {

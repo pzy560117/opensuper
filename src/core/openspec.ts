@@ -21,6 +21,8 @@ const ALL_OPENSPEC_WORKFLOWS = [
   'verify',
   'onboard',
 ] as const;
+const OPENSPEC_CLI_PACKAGE = '@fission-ai/openspec@1.6.0';
+let resolvedOpenSpecCommand: string | undefined;
 
 function getNpmExecutable(platform: NodeJS.Platform = process.platform): string {
   return platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -148,22 +150,51 @@ function restoreDefaultConfig(backup: ConfigBackup | null): void {
 function isCommandAvailable(command: string): boolean {
   try {
     const checker = process.platform === 'win32' ? 'where' : 'which';
-    execFileSync(checker, [command], { stdio: 'ignore', timeout: 10_000 });
+    const output = execFileSync(checker, [command], { encoding: 'utf-8', timeout: 10_000 });
+    if (command === 'openspec') {
+      const commandPaths = String(output)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      resolvedOpenSpecCommand =
+        process.platform === 'win32'
+          ? (commandPaths.find((commandPath) => commandPath.toLowerCase().endsWith('.cmd')) ??
+            commandPaths[0])
+          : commandPaths[0];
+    }
     return true;
   } catch {
     return false;
   }
 }
 
-async function ensureOpenSpecCli(scope: InstallScope, projectPath: string): Promise<boolean> {
+function buildOpenSpecRuntimeInvocation(
+  invocation: { command: string; args: string[] },
+  commandPath = resolvedOpenSpecCommand,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === 'win32' && commandPath?.toLowerCase().endsWith('.cmd')) {
+    const cliEntry = path.join(
+      path.dirname(commandPath),
+      'node_modules',
+      '@fission-ai',
+      'openspec',
+      'bin',
+      'openspec.js',
+    );
+    return { command: process.execPath, args: [cliEntry, ...invocation.args] };
+  }
+  return invocation;
+}
+
+async function ensureOpenSpecCli(projectPath: string): Promise<boolean> {
   const alreadyInstalled = isCommandAvailable('openspec');
   const label = alreadyInstalled ? 'Upgrading' : 'Installing';
   console.warn(`    ${label} OpenSpec CLI...`);
   try {
-    const npmArgs =
-      scope === 'global'
-        ? ['install', '-g', '@fission-ai/openspec@latest']
-        : ['install', '@fission-ai/openspec@latest'];
+    // OpenSpec is invoked as a PATH command below, so its CLI must be installed globally
+    // regardless of where the generated skills are installed.
+    const npmArgs = ['install', '-g', OPENSPEC_CLI_PACKAGE];
     execFileSync(getNpmExecutable(), npmArgs, {
       cwd: projectPath,
       stdio: 'inherit',
@@ -238,10 +269,10 @@ async function installOpenSpec(
   toolIds: string[],
   scope: InstallScope,
 ): Promise<'installed' | 'failed' | 'skipped'> {
-  const cliReady = await ensureOpenSpecCli(scope, projectPath);
+  const cliReady = await ensureOpenSpecCli(projectPath);
   if (!cliReady) {
     console.error(
-      `    OpenSpec CLI not available. Install manually: npm install -g @fission-ai/openspec@latest`,
+      `    OpenSpec CLI not available. Install manually: npm install -g ${OPENSPEC_CLI_PACKAGE}`,
     );
     return 'failed';
   }
@@ -260,13 +291,14 @@ async function installOpenSpec(
     configBackup = writeAllWorkflowsToDefaultConfig();
 
     const invocation = buildOpenSpecInitInvocation(projectPath, toolIds, scope);
+    const runtimeInvocation = buildOpenSpecRuntimeInvocation(invocation);
     try {
-      execFileSync(invocation.command, invocation.args, {
+      execFileSync(runtimeInvocation.command, runtimeInvocation.args, {
         cwd: projectPath,
         env: openspecEnv.env,
         stdio: ['inherit', 'inherit', 'pipe'],
         timeout: 120_000,
-        shell: process.platform === 'win32',
+        shell: false,
       });
     } catch (firstError) {
       const stderrText = (firstError as { stderr?: Buffer }).stderr?.toString() ?? '';
@@ -279,12 +311,13 @@ async function installOpenSpec(
           os.homedir(),
           false,
         );
-        execFileSync(fallbackInvocation.command, fallbackInvocation.args, {
+        const fallbackRuntimeInvocation = buildOpenSpecRuntimeInvocation(fallbackInvocation);
+        execFileSync(fallbackRuntimeInvocation.command, fallbackRuntimeInvocation.args, {
           cwd: projectPath,
           env: openspecEnv.env,
           stdio: 'inherit',
           timeout: 120_000,
-          shell: process.platform === 'win32',
+          shell: false,
         });
       } else {
         throw firstError;
@@ -312,6 +345,7 @@ export {
   installOpenSpec,
   isCommandAvailable,
   buildOpenSpecInitInvocation,
+  buildOpenSpecRuntimeInvocation,
   getNpmExecutable,
   migrateOpenCodeOpenSpecPaths,
 };

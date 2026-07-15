@@ -25,6 +25,7 @@ verification_report: null
 branch_status: pending
 created_at: 2026-05-26
 verified_at: null
+archive_confirmation: pending
 archived: false
 ```
 
@@ -51,6 +52,7 @@ archived: false
 | `branch_status` | `pending` 或 `handled`，分支处理完成后设为 `handled` |
 | `created_at` | change 创建日期（init 时自动写入），格式 `YYYY-MM-DD` |
 | `verified_at` | 验证通过时间，可为空 |
+| `archive_confirmation` | `pending` 或 `confirmed`。只有用户明确确认后通过 `archive-confirm` transition 写入；实际归档脚本会机器校验 |
 | `archived` | change 是否已归档 |
 
 ## 可选字段
@@ -63,7 +65,9 @@ archived: false
 
 ## 状态机硬约束
 
+- `phase` 不允许直接 `set`；正常流程必须使用 transition，仅状态修复可显式设置 `OPENSUPER_FORCE_PHASE=1`
 - `build → verify` 前，`isolation` 必须是 `branch` 或 `worktree`
+- 实际归档前，`archive_confirmation` 必须通过 `archive-confirm` transition 变为 `confirmed`；`archive-reopen` 会重置为 `pending`
 - `build → verify` 前，`build_mode` 必须已选择
 - `build_mode: subagent-driven-development` 必须同时有 `subagent_dispatch: confirmed`
 - full workflow 离开 build 阶段前 `tdd_mode` 必须已选择为 `tdd` 或 `direct`

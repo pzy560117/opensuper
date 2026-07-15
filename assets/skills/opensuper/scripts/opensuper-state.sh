@@ -183,6 +183,18 @@ replace_yaml_field() {
   mv "$tmp_file" "$yaml_file"
 }
 
+write_yaml_field() {
+  local yaml_file="$1"
+  local field="$2"
+  local value="$3"
+
+  if grep -q "^${field}:" "$yaml_file"; then
+    replace_yaml_field "$yaml_file" "$field" "$value"
+  else
+    echo "${field}: ${value}" >> "$yaml_file"
+  fi
+}
+
 file_nonempty() {
   [ -f "$1" ] && [ -s "$1" ]
 }
@@ -328,6 +340,7 @@ opentest_strict_result: null
 created_at: $(date -u +%Y-%m-%d)
 verified_at: null
 archived: false
+archive_confirmation: pending
 EOF
 
   green "Initialized: $yaml_file (workflow=$workflow)"
@@ -376,10 +389,16 @@ cmd_set() {
   # Validate field name
   case "$field" in
     phase)
-      yellow "WARNING: Setting 'phase' directly bypasses state machine constraints." >&2
-      yellow "  Consider using: opensuper-state.sh transition <change-name> <event>" >&2
+      if [ "${OPENSUPER_FORCE_PHASE:-0}" = "1" ]; then
+        yellow "WARNING: OPENSUPER_FORCE_PHASE=1 is a repair-only override; phase transition checks were bypassed." >&2
+      else
+        red "ERROR: Direct phase updates are blocked to preserve state machine constraints." >&2
+        red "Use: opensuper-state.sh transition <change-name> <event>" >&2
+        red "Repair only: set OPENSUPER_FORCE_PHASE=1 for an explicit manual state repair." >&2
+        exit 1
+      fi
       ;;
-    workflow|context_compression|build_mode|build_pause|subagent_dispatch|tdd_mode|isolation|verify_mode|auto_transition|verify_result|verification_report|branch_status|opentest_gate|opentest_strict_result|archived|design_doc|plan|verified_at|created_at|direct_override|build_command|verify_command|handoff_context|handoff_hash|base_ref)
+    workflow|context_compression|build_mode|build_pause|subagent_dispatch|tdd_mode|isolation|verify_mode|auto_transition|verify_result|verification_report|branch_status|opentest_gate|opentest_strict_result|archived|archive_confirmation|design_doc|plan|verified_at|created_at|direct_override|build_command|verify_command|handoff_context|handoff_hash|base_ref)
       # Valid field
       ;;
     *)
@@ -388,7 +407,7 @@ cmd_set() {
       red "  workflow, phase, context_compression, design_doc, plan, build_mode, build_pause, subagent_dispatch, tdd_mode, isolation," >&2
       red "  verify_mode, auto_transition, verify_result, verification_report, branch_status," >&2
       red "  opentest_gate, opentest_strict_result," >&2
-      red "  verified_at, created_at, archived, base_ref, direct_override," >&2
+      red "  verified_at, created_at, archived, archive_confirmation, base_ref, direct_override," >&2
       red "  build_command, verify_command, handoff_context, handoff_hash" >&2
       exit 1
       ;;
@@ -439,7 +458,14 @@ cmd_set() {
       validate_opentest_result_path "$value"
       ;;
     archived)
-      validate_enum "$value" "true" "false"
+      red "ERROR: Direct archived updates are blocked." >&2
+      red "Use: opensuper-state.sh transition <change-name> archived" >&2
+      exit 1
+      ;;
+    archive_confirmation)
+      red "ERROR: Direct archive_confirmation updates are blocked." >&2
+      red "Use: opensuper-state.sh transition <change-name> archive-confirm" >&2
+      exit 1
       ;;
     direct_override)
       validate_enum "$value" "true" "false"
@@ -452,15 +478,40 @@ cmd_set() {
       ;;
   esac
 
-  # Write or update the field
-  if grep -q "^${field}:" "$yaml_file"; then
-    replace_yaml_field "$yaml_file" "$field" "$value"
-  else
-    # Field doesn't exist, append it
-    echo "${field}: ${value}" >> "$yaml_file"
-  fi
+  write_yaml_field "$yaml_file" "$field" "$value"
 
   green "[SET] ${field}=${value}"
+}
+
+write_transition_field() {
+  local change_name="$1"
+  local field="$2"
+  local value="$3"
+  local yaml_file
+
+  validate_change_name "$change_name"
+  yaml_file=$(yaml_file_for "$change_name")
+  if [ ! -f "$yaml_file" ]; then
+    red "ERROR: .opensuper.yaml not found at $yaml_file"
+    exit 1
+  fi
+
+  write_yaml_field "$yaml_file" "$field" "$value"
+  green "[SET] ${field}=${value}"
+}
+
+set_phase_from_transition() {
+  local change_name="$1"
+  local phase="$2"
+  validate_enum "$phase" "open" "design" "build" "verify" "archive"
+  write_transition_field "$change_name" phase "$phase"
+}
+
+set_archive_confirmation_from_transition() {
+  local change_name="$1"
+  local confirmation="$2"
+  validate_enum "$confirmation" "pending" "confirmed"
+  write_transition_field "$change_name" archive_confirmation "$confirmation"
 }
 
 require_phase() {
@@ -499,6 +550,17 @@ require_opentest_gate() {
     exit 1
   fi
   "$opensuper_BASH" "$gate_script" "$change_name"
+}
+
+require_exit_guard() {
+  local change_name="$1"
+  local phase="$2"
+  local guard_script="$SCRIPT_DIR/opensuper-guard.sh"
+  if [ ! -f "$guard_script" ]; then
+    red "ERROR: Phase guard script not found: $guard_script" >&2
+    exit 1
+  fi
+  opensuper_GUARD_SOURCE_ONLY=0 "$opensuper_BASH" "$guard_script" "$change_name" "$phase"
 }
 
 require_build_decisions() {
@@ -548,29 +610,31 @@ cmd_transition() {
   local event="$2"
 
   validate_change_name "$change_name"
-  validate_enum "$event" "open-complete" "design-complete" "build-complete" "verify-pass" "verify-fail" "archive-reopen" "archived"
+  validate_enum "$event" "open-complete" "design-complete" "build-complete" "verify-pass" "verify-fail" "archive-reopen" "archive-confirm" "archived"
 
   case "$event" in
     open-complete)
       require_phase "$change_name" "open"
+      require_exit_guard "$change_name" "open"
       local workflow
       workflow=$(cmd_get "$change_name" "workflow")
       if [ "$workflow" = "full" ]; then
-        cmd_set "$change_name" phase design
+        set_phase_from_transition "$change_name" design
       else
-        cmd_set "$change_name" phase build
+        set_phase_from_transition "$change_name" build
       fi
       ;;
     design-complete)
       require_phase "$change_name" "design"
-      cmd_set "$change_name" phase build
+      require_exit_guard "$change_name" "design"
+      set_phase_from_transition "$change_name" build
       ;;
     build-complete)
       require_phase "$change_name" "build"
       require_build_decisions "$change_name"
       local current_verify_result
       current_verify_result=$(cmd_get "$change_name" "verify_result")
-      cmd_set "$change_name" phase verify
+      set_phase_from_transition "$change_name" verify
       cmd_set "$change_name" verify_result pending
       # Preserve verification evidence on re-verify (verify-fail → build → build-complete)
       # so the fix can reference the original failure report
@@ -584,13 +648,14 @@ cmd_transition() {
       require_verification_evidence "$change_name"
       require_opentest_gate "$change_name"
       cmd_set "$change_name" verify_result pass
-      cmd_set "$change_name" phase archive
+      set_archive_confirmation_from_transition "$change_name" pending
+      set_phase_from_transition "$change_name" archive
       cmd_set "$change_name" verified_at "$(date -u +%Y-%m-%d)"
       ;;
     verify-fail)
       require_phase "$change_name" "verify"
       cmd_set "$change_name" verify_result fail
-      cmd_set "$change_name" phase build
+      set_phase_from_transition "$change_name" build
       # Preserve branch_status so re-verify doesn't require re-handling branches
       ;;
     archive-reopen)
@@ -602,12 +667,52 @@ cmd_transition() {
         exit 1
       fi
       cmd_set "$change_name" verify_result pending
-      cmd_set "$change_name" phase verify
+      set_archive_confirmation_from_transition "$change_name" pending
+      set_phase_from_transition "$change_name" verify
       cmd_set "$change_name" verified_at null
+      ;;
+    archive-confirm)
+      require_phase "$change_name" "archive"
+      local archived
+      archived=$(cmd_get "$change_name" "archived")
+      if [ "$archived" = "true" ]; then
+        red "ERROR: Cannot confirm archive for '$change_name': already archived" >&2
+        exit 1
+      fi
+      set_archive_confirmation_from_transition "$change_name" confirmed
       ;;
     archived)
       require_phase "$change_name" "archive"
-      cmd_set "$change_name" archived true
+      local archived
+      archived=$(cmd_get "$change_name" "archived")
+      if [ "$archived" = "true" ]; then
+        red "ERROR: Cannot transition '$change_name': already archived" >&2
+        exit 1
+      fi
+      local archive_confirmation
+      archive_confirmation=$(cmd_get "$change_name" "archive_confirmation")
+      if [ "$archive_confirmation" != "confirmed" ]; then
+        red "ERROR: Cannot transition '$change_name' to archived: archive_confirmation must be confirmed" >&2
+        exit 1
+      fi
+      local change_dir
+      change_dir=$(change_dir_for "$change_name")
+      case "$change_dir" in
+        openspec/changes/archive/*) ;;
+        *)
+          red "ERROR: Cannot transition '$change_name' to archived before the change is moved into openspec/changes/archive/." >&2
+          red "Use the opensuper archive workflow instead of marking an active change archived." >&2
+          exit 1
+          ;;
+      esac
+      local verify_result
+      verify_result=$(cmd_get "$change_name" "verify_result")
+      if [ "$verify_result" != "pass" ]; then
+        red "ERROR: Cannot transition '$change_name' to archived: verify_result must be pass" >&2
+        exit 1
+      fi
+      require_opentest_gate "$change_name"
+      write_transition_field "$change_name" archived true
       ;;
   esac
 
@@ -1231,7 +1336,7 @@ case "$SUBCOMMAND" in
   transition)
     if [ $# -lt 2 ]; then
       red "Usage: opensuper-state.sh transition <change-name> <event>" >&2
-      red "Events: open-complete, design-complete, build-complete, verify-pass, verify-fail, archive-reopen, archived" >&2
+      red "Events: open-complete, design-complete, build-complete, verify-pass, verify-fail, archive-reopen, archive-confirm, archived" >&2
       exit 1
     fi
     cmd_transition "$@"

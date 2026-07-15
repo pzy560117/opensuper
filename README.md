@@ -40,7 +40,7 @@ Superpowers handles **HOW** (technical design, planning, execution, wrap-up).
 OpenSuper chains both into a five-phase automated pipeline.
 
 > [!IMPORTANT]
-> **0.3.8 Highlights** — One-step [CodeGraph](https://github.com/colbymchenry/codegraph) semantic code indexing (official: cost **↓16%**, tool calls **↓58%**);
+> **0.3.9 Highlights** — Lifecycle transitions, cross-change hook routing, and archive approval now fail closed, with a complete Windows Git Bash regression pass;
 >
 > New **Beta context compression** cutting Build-phase input tokens by **25–30%**;
 > New active context compression mechanism to release context consumed by reading specs and brainstorming, preserving window space for the subsequent Build phase.
@@ -137,6 +137,18 @@ npx @pzy560117/opentest install --scope project --platform <platform-id> --langu
 
 Managed installations may point `OPENSUPER_OPENTEST_CONSUMER` at OpenTest's shipped `opentest-strict-result.mjs`. Installing only the CLI globally does not guarantee consumer discovery; one of the environment, sibling-skill, or target-project dependency paths must also exist.
 
+### 0.3.9 validated baseline
+
+| Component   | Validated version | Installation policy                               |
+| ----------- | ----------------: | ------------------------------------------------- |
+| OpenSuper   |             0.3.9 | npm package                                       |
+| Node.js     |               20+ | Runtime requirement                               |
+| OpenSpec    |             1.6.0 | `OpenSuper init` installs the pinned npm version  |
+| Skills CLI  |             1.5.9 | Pinned `npx` installer                            |
+| Superpowers |            v6.1.1 | `OpenSuper init` installs the pinned official tag |
+
+OpenSpec and Superpowers are not bundled with OpenSuper. Re-run this repository's verification gates before updating either pin.
+
 ## Quick Start
 
 ```bash
@@ -153,6 +165,8 @@ OpenSuper init
 5. Install [Superpowers](https://github.com/obra/superpowers) skills
 6. Deploy OpenSuper skills (in your chosen language) to selected platforms
 7. Create `docs/superpowers/specs/` and `docs/superpowers/plans/` working directories for project-scope installs
+
+OpenSpec CLI is installed globally for both skill scopes because runtime commands resolve it from PATH; skill files still follow the selected scope.
 
 `OpenSuper init` does not force-install OpenTest. New changes default to `opentest_gate: null` for legacy compatibility. To require contract evidence, install OpenTest independently in the target project and set that change to `opentest_gate: required` with a project-relative `opentest_strict_result`.
 
@@ -411,6 +425,7 @@ verify_result: pending
 verification_report: null
 branch_status: pending
 verified_at: null
+archive_confirmation: pending
 archived: false
 direct_override: false
 build_command: null
@@ -424,7 +439,7 @@ temporarily be `null`; `build_mode` and `isolation` must be resolved before `bui
 `null` means no pause, while `plan-ready` means the plan has been generated and the user paused before choosing
 isolation and execution mode. It is not an execution mode and must not be written into `build_mode`.
 `verification_report` stays `null` until verification writes a report, and `verify-pass` requires that report to exist
-plus `branch_status: handled`. Fields after `archived` in the example are optional or script-derived: `direct_override`
+plus `branch_status: handled`. Before a mutating archive, explicit user approval must be recorded through the `archive-confirm` transition as `archive_confirmation: confirmed`; direct phase writes are rejected unless `OPENSUPER_FORCE_PHASE=1` is intentionally used for state repair. Fields after `archived` in the example are optional or script-derived: `direct_override`
 is only needed for full-workflow direct builds, project commands may be absent unless configured, and
 `handoff_context` / `handoff_hash` are recorded by `OpenSuper-handoff.sh` before leaving design. Projects can configure
 `build_command` / `verify_command` in the change or repo root, and guard will run those commands first and print failure
@@ -507,10 +522,13 @@ OpenSuper ensures agent execution reliability through automated state transition
     - `required` never falls back to legacy results; missing consumer/provider/result or any non-zero exit blocks
 
 7. **Archive Automation** — `OpenSuper-archive.sh` handles the full archive flow in one command
-    - Validates entry state, merges delta specs into main specs through OpenSpec
+    - Enforces `archive_confirmation: confirmed`, then merges delta specs into main specs through OpenSpec
     - Annotates design doc and plan frontmatter
     - Moves change to archive directory and updates `archived: true`
     - Supports `--dry-run` for preview
+
+8. **Cross-change Hook Routing** — when multiple active changes exist, writes inside a change use that change's phase; ambiguous source writes fail closed
+    - Whitelists `openspec/*`, phase-eligible `docs/superpowers/*`, `.claude/*`, `.opensuper/*`, and `.superpowers/*`
 
 </details>
 

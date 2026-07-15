@@ -25,6 +25,7 @@ verification_report: null
 branch_status: pending
 created_at: 2026-05-26
 verified_at: null
+archive_confirmation: pending
 archived: false
 ```
 
@@ -51,6 +52,7 @@ archived: false
 | `branch_status` | `pending` or `handled`; set to `handled` after branch handling completes |
 | `created_at` | Change creation date (auto-written at init), format `YYYY-MM-DD` |
 | `verified_at` | Verification pass timestamp; may be empty |
+| `archive_confirmation` | `pending` or `confirmed`. Only the `archive-confirm` transition after explicit user approval may confirm it; the archive script enforces it |
 | `archived` | Whether the change has been archived |
 
 ## Optional Fields
@@ -63,7 +65,9 @@ archived: false
 
 ## State Machine Hard Constraints
 
+- `phase` cannot be written with a normal `set`; use transitions, reserving `OPENSUPER_FORCE_PHASE=1` for explicit state repair
 - Before `build → verify`, `isolation` must be `branch` or `worktree`
+- Before a mutating archive, `archive_confirmation` must be `confirmed` through the `archive-confirm` transition; `archive-reopen` resets it to `pending`
 - Before `build → verify`, `build_mode` must be selected
 - `build_mode: subagent-driven-development` requires `subagent_dispatch: confirmed`
 - Full workflow must select `tdd_mode` as `tdd` or `direct` before leaving build

@@ -53,11 +53,17 @@ Before confirmation, show the user a brief summary:
 - Irreversible actions this archive will perform: merge main specs with OpenSpec delta semantics, annotate design doc / plan, and move the change to the archive directory
 
 The user confirmation question must be presented as a single-select question with these options:
-- "Confirm archive" — immediately run the archive script to complete spec merge and change movement
+- "Confirm archive" — record final confirmation, then run the archive script to complete spec merge and change movement
 - "Needs adjustment or re-verification" — do not archive; run `"$opensuper_BASH" "$opensuper_STATE" transition <change-name> archive-reopen` to return to `phase: verify`, then invoke `/opensuper-verify`. If verification confirms fixes are needed, follow `/opensuper-verify`'s verification-failure decision flow back to `/opensuper-build`
 - "Do not archive yet" — do not archive; keep the current `phase: archive` state and wait for the user to invoke `/opensuper-archive` again later
 
-Only after the user selects "Confirm archive" may Step 2 continue. After the user selects "Needs adjustment or re-verification", must first run the `archive-reopen` state transition; do not edit `.opensuper.yaml` manually.
+After the user selects "Confirm archive", immediately run:
+
+```bash
+"$opensuper_BASH" "$opensuper_STATE" transition <change-name> archive-confirm
+```
+
+If the transition exits non-zero, report the error and stop. Only after it succeeds may Step 2 continue. After the user selects "Needs adjustment or re-verification", must first run the `archive-reopen` state transition; do not edit `.opensuper.yaml` manually.
 
 ### 2. Execute Archive
 
@@ -68,7 +74,7 @@ Run the archive script to automatically complete all steps:
 ```
 
 The script automatically executes:
-1. Entry state validation (phase=archive, verify_result=pass, archived=false)
+1. Entry state validation (phase=archive, verify_result=pass, archive_confirmation=confirmed, archived=false)
 2. Before any document annotation, `openspec archive`, or archive-state mutation, run the same OpenTest gate used by verify/direct `verify-pass` as the actual archive preflight
 3. Design doc frontmatter annotation (archived-with, status)
 4. Plan frontmatter annotation (archived-with)

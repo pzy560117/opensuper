@@ -133,6 +133,7 @@ PLAN_PATH=$(yaml_field "plan")
 PHASE_VAL=$(yaml_field "phase")
 VERIFY_VAL=$(yaml_field "verify_result")
 ARCHIVED_VAL=$(yaml_field "archived")
+ARCHIVE_CONFIRMATION_VAL=$(yaml_field "archive_confirmation")
 
 if [ "$PHASE_VAL" != "archive" ]; then
   red "FATAL: phase is '$PHASE_VAL', expected 'archive'"
@@ -146,6 +147,11 @@ fi
 
 if [ "$ARCHIVED_VAL" = "true" ]; then
   red "FATAL: change already archived"
+  exit 1
+fi
+
+if [ "$DRY_RUN" -eq 0 ] && [ "$ARCHIVE_CONFIRMATION_VAL" != "confirmed" ]; then
+  red "FATAL: archive_confirmation is '${ARCHIVE_CONFIRMATION_VAL:-null}', expected 'confirmed'. Run final archive confirmation first."
   exit 1
 fi
 

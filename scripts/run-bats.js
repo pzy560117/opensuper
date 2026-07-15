@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const BASH_PROBE_TIMEOUT_MS = 10_000;
-const BATS_FILE_TIMEOUT_MS = 10 * 60_000;
+const BATS_FILE_TIMEOUT_MS = process.platform === 'win32' ? 15 * 60_000 : 10 * 60_000;
 
 function escapeRegExp(value) {
   return value.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
@@ -15,14 +15,14 @@ function findUsableBash() {
   const candidates = [
     process.env.opensuper_TEST_BASH,
     process.env.opensuper_BASH,
-    'bash',
     ...(process.platform === 'win32'
       ? [
-          'C:\\Program Files\\Git\\bin\\bash.exe',
           'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+          'C:\\Program Files\\Git\\bin\\bash.exe',
           'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
         ]
       : []),
+    'bash',
   ].filter(Boolean);
 
   for (const candidate of [...new Set(candidates)]) {
@@ -170,7 +170,9 @@ if (files.length === 0) {
 }
 
 if (!bashCommand) {
-  console.error('ERROR: usable bash not found. Install Git Bash or set opensuper_TEST_BASH/opensuper_BASH to a working bash executable.');
+  console.error(
+    'ERROR: usable bash not found. Install Git Bash or set opensuper_TEST_BASH/opensuper_BASH to a working bash executable.',
+  );
   console.error('Windows WSL launcher bash.exe is not supported for opensuper shell tests.');
   process.exit(1);
 }

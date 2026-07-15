@@ -2,15 +2,36 @@ import { describe, expect, it } from 'vitest';
 import { promises as fs } from 'fs';
 
 describe('CI workflows', () => {
+  it('publishes traceable package metadata with synchronized versions', async () => {
+    const packageJson = JSON.parse(await fs.readFile('package.json', 'utf-8'));
+    const manifest = JSON.parse(await fs.readFile('assets/manifest.json', 'utf-8'));
+
+    expect(packageJson.repository).toEqual({
+      type: 'git',
+      url: 'git+https://github.com/pzy560117/opensuper.git',
+    });
+    expect(packageJson.homepage).toBe('https://github.com/pzy560117/opensuper#readme');
+    expect(packageJson.bugs).toEqual({
+      url: 'https://github.com/pzy560117/opensuper/issues',
+    });
+    expect(manifest.version).toBe(packageJson.version);
+  });
+
   it('protects the actual main branch', async () => {
-    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(/\r\n/g, '\n');
+    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(
+      /\r\n/g,
+      '\n',
+    );
 
     expect(workflow).toContain('branches: [main]');
     expect(workflow).not.toContain('branches: [master]');
   });
 
   it('bounds the cross-platform script-smoke job', async () => {
-    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(/\r\n/g, '\n');
+    const workflow = (await fs.readFile('.github/workflows/ci.yml', 'utf-8')).replace(
+      /\r\n/g,
+      '\n',
+    );
     const scriptSmoke = workflow.slice(
       workflow.indexOf('  script-smoke:'),
       workflow.indexOf('  init-e2e:'),
@@ -30,10 +51,12 @@ describe('CI workflows', () => {
     expect(workflow).toContain('npm pack --ignore-scripts --pack-destination $candidateDir');
     expect(workflow).toContain('$packages.Count -ne 1');
     expect(workflow).toContain('PACKAGE_TGZ=$($packages[0].FullName)');
+    expect(workflow).toContain("Copy-Item package.json (Join-Path $auditDir 'package.json')");
     expect(workflow).toContain(
-      'pnpm audit --prod --registry=https://registry.npmjs.org/',
+      'npm install --prefix $auditDir --package-lock-only --ignore-scripts --omit=dev',
     );
-    expect(workflow).not.toContain('npm audit --omit=dev');
+    expect(workflow).toContain('npm audit --prefix $auditDir --omit=dev');
+    expect(workflow).not.toContain('pnpm audit --prod');
     expect(workflow).toContain('tar -xzf $env:PACKAGE_TGZ -C $scanDir');
     expect(workflow).toContain("node scripts/prepublish-check.js (Join-Path $scanDir 'package')");
     expect(workflow).toContain(

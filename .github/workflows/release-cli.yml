@@ -87,7 +87,18 @@ jobs:
 
       - name: Production dependency audit
         shell: pwsh
-        run: pnpm audit --prod --registry=https://registry.npmjs.org/
+        run: |
+          $auditDir = Join-Path $env:RUNNER_TEMP 'opensuper-production-audit'
+          New-Item -ItemType Directory -Path $auditDir -Force | Out-Null
+          Copy-Item package.json (Join-Path $auditDir 'package.json')
+          npm install --prefix $auditDir --package-lock-only --ignore-scripts --omit=dev --no-fund --registry=https://registry.npmjs.org/
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Resolving production dependencies for audit failed'
+          }
+          npm audit --prefix $auditDir --omit=dev --registry=https://registry.npmjs.org/
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Production dependency audit failed'
+          }
 
       - name: Pack release candidate
         shell: pwsh

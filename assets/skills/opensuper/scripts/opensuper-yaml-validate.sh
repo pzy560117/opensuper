@@ -176,6 +176,7 @@ auto_transition=$(field_value "auto_transition")
 verify_result=$(field_value "verify_result")
 branch_status=$(field_value "branch_status")
 archived=$(field_value "archived")
+archive_confirmation=$(field_value "archive_confirmation")
 direct_override=$(field_value "direct_override")
 design_doc=$(field_value "design_doc")
 plan=$(field_value "plan")
@@ -200,6 +201,9 @@ fi
 validate_enum "verify_result" "$verify_result"  "pending pass fail"
 validate_enum "branch_status" "$branch_status"  "pending handled"
 validate_enum "archived"      "$archived"       "true false"
+if grep -q "^archive_confirmation:" "$YAML" 2>/dev/null; then
+  validate_enum "archive_confirmation" "$archive_confirmation" "pending confirmed"
+fi
 validate_enum "direct_override" "$direct_override" "true false"
 if grep -q "^opentest_gate:" "$YAML" 2>/dev/null; then
   case "$opentest_gate_raw" in
@@ -269,7 +273,7 @@ if [ -n "$handoff_hash" ] && [ "$handoff_hash" != "null" ]; then
 fi
 
 # --- Unknown keys check ---
-KNOWN_KEYS="workflow phase context_compression design_doc plan build_mode build_pause subagent_dispatch tdd_mode isolation verify_mode auto_transition verify_result verification_report branch_status opentest_gate opentest_strict_result verified_at created_at archived direct_override build_command verify_command handoff_context handoff_hash base_ref"
+KNOWN_KEYS="workflow phase context_compression design_doc plan build_mode build_pause subagent_dispatch tdd_mode isolation verify_mode auto_transition verify_result verification_report branch_status opentest_gate opentest_strict_result verified_at created_at archived archive_confirmation direct_override build_command verify_command handoff_context handoff_hash base_ref"
 while IFS= read -r line || [ -n "$line" ]; do
   line="${line%$'\r'}"
   trimmed="${line#"${line%%[![:space:]]*}"}"

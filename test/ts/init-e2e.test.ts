@@ -29,7 +29,7 @@ function mockExternalSuccess() {
 
     if (
       (cmd === 'npx' || cmd === 'npx.cmd') &&
-      cmdArgs[0] === 'skills' &&
+      cmdArgs[0] === 'skills@1.5.9' &&
       cmdArgs.includes('--agent') &&
       cmdArgs.includes('claude-code')
     ) {
@@ -46,7 +46,7 @@ function mockExternalSuccess() {
     if (cmd === 'openspec' && cmdArgs[0] === 'init') {
       return Buffer.from('ok');
     }
-    if ((cmd === 'npx' || cmd === 'npx.cmd') && cmdArgs[0] === 'skills') {
+    if ((cmd === 'npx' || cmd === 'npx.cmd') && cmdArgs[0] === 'skills@1.5.9') {
       return Buffer.from('installed');
     }
     return Buffer.from('');

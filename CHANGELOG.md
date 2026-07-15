@@ -2,6 +2,28 @@
 
 All notable changes to @pzy560117/opensuper will be documented in this file.
 
+## What's Changed [0.3.9] - 2026-07-15
+
+### Changed
+
+- **Traceable package provenance**: Added npm `repository`, `homepage`, and `bugs` metadata pointing to the OpenSuper repository, and synchronized the package and shipped skill manifest at version `0.3.9`.
+- **Validated dependency baseline**: Pinned the OpenSuper `0.3.9` installer to OpenSpec `1.6.0`, Skills CLI `1.5.9`, and Superpowers `v6.1.1`, documented the Node.js 20+ compatibility matrix, and kept future dependency updates behind the normal verification gates.
+
+### Fixed
+
+- **Fail-closed lifecycle transitions**: Direct `phase` writes now fail unless the explicit repair-only `OPENSUPER_FORCE_PHASE=1` override is present. Direct `open-complete` and `design-complete` transitions reuse the same phase-appropriate artifact and handoff guards as `guard --apply`, so missing Open artifacts or Design Doc evidence cannot skip workflow phases.
+- **Cross-change hook routing**: The write hook now routes `openspec/changes/<name>/...` paths to that active change, rejects inactive named targets, allows shared Superpowers artifacts only when an active workflow is in design/build/verify, and fails closed for ambiguous source writes when multiple active changes exist.
+- **Hook path and state fail-closed behavior**: The write hook now rejects unresolved `..` path segments, canonicalizes existing target parents before workspace whitelists, rejects targets outside the project plus final-file symbolic/hard links, and blocks source writes when an active state has a missing or unknown phase.
+- **Windows shell test stability**: Shell tests now prefer Git's direct `usr/bin/bash.exe` before wrapper and PATH fallbacks, serialize Vitest files on Windows, give nested script helpers 120 seconds on Windows while retaining 60 seconds elsewhere, allow 300 seconds for Windows multi-script integration cases, and allow 15 minutes per Bats file on Windows while retaining 10 minutes elsewhere. This removes concurrent nested-shell contention and prevents valid long-running tests from being truncated.
+- **Machine-enforced archive confirmation**: Added persisted `archive_confirmation: pending | confirmed` state and the `archive-confirm` transition. Direct field writes and mutating archive calls without confirmation are blocked; the terminal `archived` transition now also requires a post-move archive state, passing verification, and the OpenTest gate. `archive-reopen` resets confirmation, while `--dry-run` remains available before approval.
+- **Project-scope OpenSpec CLI availability**: OpenSpec CLI now installs globally for both project and global skill scopes because runtime commands resolve `openspec` from PATH, preventing project-local `node_modules` installs from passing installation but failing command discovery.
+- **Windows OpenSpec command injection**: Windows OpenSpec initialization now invokes the installed JavaScript entry through Node instead of passing project paths through a `.cmd` shell, so CMD metacharacters remain a single argument.
+- **Release dependency audit**: The release workflow now audits production dependencies through an isolated npm lock because npm retired the endpoint used by `pnpm audit`.
+
+### Tests
+
+- **P0 lifecycle and routing regressions**: Added coverage for direct phase/confirmation/archive bypass attempts, phase-appropriate guarded open/design transitions, archive confirmation/reopen/dry-run behavior, multi-change hook ownership/shared artifacts/ambiguity/internal and external symlink redirects, mutating archive preflight ordering, safe Windows OpenSpec invocation, and project-scope global OpenSpec CLI installation.
+
 ## What's Changed [0.3.8] - 2026-07-12
 
 ### Added

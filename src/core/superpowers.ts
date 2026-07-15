@@ -41,6 +41,8 @@ const SKILLS_AGENT_MAP: Record<string, string | null> = {
 
 const VALID_PLATFORM_IDS = new Set(Object.keys(SKILLS_AGENT_MAP));
 const SUPERPOWERS_INSTALL_TIMEOUT_MS = 300_000;
+const SKILLS_CLI_PACKAGE = 'skills@1.5.9';
+const SUPERPOWERS_SOURCE = 'obra/superpowers#v6.1.1';
 const LINGMA_PLATFORM_ID = 'lingma';
 const LINGMA_STAGE_AGENT = 'claude-code';
 
@@ -64,7 +66,7 @@ function buildSuperpowersInstallCommand(
     throw new Error(`No skills CLI agent names resolved for platforms: ${platformIds.join(', ')}`);
   }
 
-  const args = ['skills', 'add', 'obra/superpowers', '-y'];
+  const args = [SKILLS_CLI_PACKAGE, 'add', SUPERPOWERS_SOURCE, '-y'];
   if (scope === 'global') {
     args.push('-g');
   }
@@ -77,7 +79,7 @@ function buildSuperpowersInstallCommand(
 function buildLingmaSuperpowersStageCommand(): { command: string; args: string[] } {
   return {
     command: getNpxExecutable(),
-    args: ['skills', 'add', 'obra/superpowers', '-y', '--agent', LINGMA_STAGE_AGENT],
+    args: [SKILLS_CLI_PACKAGE, 'add', SUPERPOWERS_SOURCE, '-y', '--agent', LINGMA_STAGE_AGENT],
   };
 }
 

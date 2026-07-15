@@ -99,7 +99,7 @@ describe('openspec', () => {
         throw new Error('not found');
       });
       const error = new Error(
-        'Command failed: npm install @fission-ai/openspec@latest',
+        'Command failed: npm install -g @fission-ai/openspec@1.6.0',
       ) as Error & {
         stderr?: Buffer;
         stdout?: Buffer;
@@ -135,6 +135,11 @@ describe('openspec', () => {
       const { installOpenSpec } = await import('../../src/core/openspec.js');
       await installOpenSpec('/tmp/test', ['claude'], 'global');
 
+      expect(mockedExecFileSync.mock.calls[1]).toEqual([
+        expect.stringMatching(/^npm(?:\.cmd)?$/),
+        ['install', '-g', '@fission-ai/openspec@1.6.0'],
+        expect.objectContaining({ cwd: '/tmp/test' }),
+      ]);
       const initExec = mockedExecFileSync.mock.calls[3][0] as string;
       const initArgs = mockedExecFileSync.mock.calls[3][1] as string[];
       expect(initExec).toBe('openspec');
@@ -305,6 +310,39 @@ describe('openspec', () => {
       });
     });
 
+    it('bypasses the Windows cmd shim so project paths cannot split shell commands', async () => {
+      const commandPath = 'C:\\Users\\Test User\\AppData\\Roaming\\npm\\openspec.cmd';
+      const commandShim = commandPath.slice(0, -'.cmd'.length);
+      const projectPath = 'C:\\work\\safe & echo injected';
+      mockedExecFileSync.mockReturnValueOnce(Buffer.from(`${commandShim}\r\n${commandPath}\r\n`));
+      mockedExecFileSync.mockReturnValueOnce(Buffer.from('upgraded'));
+      mockedExecFileSync.mockReturnValueOnce(Buffer.from(`${commandShim}\r\n${commandPath}\r\n`));
+      mockedExecFileSync.mockReturnValueOnce(Buffer.from('ok'));
+
+      const { installOpenSpec } = await import('../../src/core/openspec.js');
+      const result = await installOpenSpec(projectPath, ['claude'], 'project');
+
+      expect(result).toBe('installed');
+      const [command, args, options] = mockedExecFileSync.mock.calls[3] as [
+        string,
+        string[],
+        { shell?: boolean },
+      ];
+      expect(command).toBe(process.execPath);
+      expect(args[0]).toBe(
+        path.join(
+          path.dirname(commandPath),
+          'node_modules',
+          '@fission-ai',
+          'openspec',
+          'bin',
+          'openspec.js',
+        ),
+      );
+      expect(args[2]).toBe(projectPath);
+      expect(options.shell).toBe(false);
+    });
+
     it('omits --profile flag when includeProfileFlag is false', async () => {
       const { buildOpenSpecInitInvocation } = await import('../../src/core/openspec.js');
 
@@ -332,6 +370,11 @@ describe('openspec', () => {
       const result = await installOpenSpec('/tmp/test', ['claude'], 'project');
 
       expect(result).toBe('installed');
+      expect(mockedExecFileSync.mock.calls[1]).toEqual([
+        expect.stringMatching(/^npm(?:\.cmd)?$/),
+        ['install', '-g', '@fission-ai/openspec@1.6.0'],
+        expect.objectContaining({ cwd: '/tmp/test' }),
+      ]);
     });
 
     it('returns failed when openspec init throws', async () => {

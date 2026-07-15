@@ -43,6 +43,7 @@ describe('README assets', () => {
   it('documents the independent OpenTest strict quality-gate contract in both languages', async () => {
     const en = await fs.readFile('README.md', 'utf-8');
     const zh = await fs.readFile('README-zh.md', 'utf-8');
+    const packageJson = JSON.parse(await fs.readFile('package.json', 'utf-8'));
 
     for (const content of [en, zh]) {
       expect(content).toContain('opentest_gate: required');
@@ -59,7 +60,11 @@ describe('README assets', () => {
       expect(content).toContain('deferred');
       expect(content).toContain('ARCHITECTURE/README/CHANGELOG/CONTRIBUTING/LICENSE');
       expect(content).toContain('npm install --save-dev @pzy560117/opentest@^0.1.19');
-      expect(content).toMatch(/\*\*0\.3\.8 (?:Highlights|亮点)\*\*/);
     }
+
+    expect(en).toContain(`**${packageJson.version} Highlights**`);
+    expect(zh).toContain(`**${packageJson.version} 亮点**`);
+    expect(en).toContain(`### ${packageJson.version} validated baseline`);
+    expect(zh).toContain(`### ${packageJson.version} 验证基线`);
   });
 });

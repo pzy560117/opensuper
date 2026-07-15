@@ -4,8 +4,13 @@ setup() {
   export TEST_TMPDIR="$(mktemp -d)"
   export SCRIPT_SOURCE="$BATS_TEST_DIRNAME/../../assets/skills/opensuper/scripts/opensuper-state.sh"
   export SCRIPT_PATH="$TEST_TMPDIR/opensuper-state.sh"
+  export GUARD_PATH="$TEST_TMPDIR/opensuper-guard.sh"
+  export HANDOFF_PATH="$TEST_TMPDIR/opensuper-handoff.sh"
   cd "$TEST_TMPDIR"
   tr -d '\r' < "$SCRIPT_SOURCE" > "$SCRIPT_PATH"
+  tr -d '\r' < "$BATS_TEST_DIRNAME/../../assets/skills/opensuper/scripts/opensuper-guard.sh" > "$GUARD_PATH"
+  tr -d '\r' < "$BATS_TEST_DIRNAME/../../assets/skills/opensuper/scripts/opensuper-handoff.sh" > "$HANDOFF_PATH"
+  tr -d '\r' < "$BATS_TEST_DIRNAME/../../assets/skills/opensuper/scripts/opensuper-yaml-validate.sh" > "$TEST_TMPDIR/opensuper-yaml-validate.sh"
   mkdir -p openspec/changes
 }
 
@@ -25,6 +30,7 @@ teardown() {
   grep -q "branch_status: pending" "openspec/changes/my-change/.opensuper.yaml"
   grep -q "opentest_gate: null" "openspec/changes/my-change/.opensuper.yaml"
   grep -q "opentest_strict_result: null" "openspec/changes/my-change/.opensuper.yaml"
+  grep -q "archive_confirmation: pending" "openspec/changes/my-change/.opensuper.yaml"
 }
 
 @test "init creates .opensuper.yaml with hotfix workflow defaults" {
@@ -83,9 +89,19 @@ teardown() {
 
 # --- set subcommand ---
 
-@test "set updates a field value" {
+@test "set blocks direct phase updates unless repair override is explicit" {
   bash "$SCRIPT_PATH" init my-change full
   run bash "$SCRIPT_PATH" set my-change phase build
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"OPENSUPER_FORCE_PHASE=1"* ]]
+
+  run env opensuper_INTERNAL_PHASE=1 bash "$SCRIPT_PATH" set my-change phase archive
+  [ "$status" -ne 0 ]
+
+  run bash "$SCRIPT_PATH" get my-change phase
+  [ "$output" = "open" ]
+
+  run env OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase build
   [ "$status" -eq 0 ]
 
   run bash "$SCRIPT_PATH" get my-change phase
@@ -110,7 +126,7 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
-@test "set validates archived enum" {
+@test "set blocks direct archived updates" {
   bash "$SCRIPT_PATH" init my-change full
   run bash "$SCRIPT_PATH" set my-change archived maybe
   [ "$status" -ne 0 ]
@@ -160,14 +176,14 @@ teardown() {
 
 @test "check open fails if phase is not open" {
   bash "$SCRIPT_PATH" init my-change full
-  bash "$SCRIPT_PATH" set my-change phase design
+  OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase design
   run bash "$SCRIPT_PATH" check my-change open
   [ "$status" -ne 0 ]
 }
 
 @test "check design passes with correct state" {
   bash "$SCRIPT_PATH" init my-change full
-  bash "$SCRIPT_PATH" set my-change phase design
+  OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase design
   echo "content" > openspec/changes/my-change/proposal.md
   echo "content" > openspec/changes/my-change/design.md
   echo "content" > openspec/changes/my-change/tasks.md
@@ -177,7 +193,7 @@ teardown() {
 
 @test "check design fails if design_doc is set (not empty)" {
   bash "$SCRIPT_PATH" init my-change full
-  bash "$SCRIPT_PATH" set my-change phase design
+  OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase design
   bash "$SCRIPT_PATH" set my-change design_doc "some-doc.md"
   echo "content" > openspec/changes/my-change/proposal.md
   echo "content" > openspec/changes/my-change/design.md
@@ -197,6 +213,125 @@ teardown() {
 
   run bash "$SCRIPT_PATH" get my-change verify_mode
   [ "$output" = "light" ]
+}
+
+# --- transition subcommand ---
+
+@test "open-complete blocks full workflow without OpenSpec artifacts" {
+  bash "$SCRIPT_PATH" init my-change full
+
+  run bash "$SCRIPT_PATH" transition my-change open-complete
+  [ "$status" -ne 0 ]
+
+  run bash "$SCRIPT_PATH" get my-change phase
+  [ "$output" = "open" ]
+}
+
+@test "open-complete advances full workflow after the Open artifacts are complete" {
+  bash "$SCRIPT_PATH" init my-change full
+  echo "proposal" > openspec/changes/my-change/proposal.md
+  echo "design" > openspec/changes/my-change/design.md
+  echo "- [ ] task" > openspec/changes/my-change/tasks.md
+
+  run bash "$SCRIPT_PATH" transition my-change open-complete
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"repair-only override"* ]]
+
+  run bash "$SCRIPT_PATH" get my-change phase
+  [ "$output" = "design" ]
+}
+
+@test "open-complete keeps preset workflow on its existing artifact contract" {
+  bash "$SCRIPT_PATH" init my-change tweak
+  echo "proposal" > openspec/changes/my-change/proposal.md
+  echo "design" > openspec/changes/my-change/design.md
+  echo "- [ ] task" > openspec/changes/my-change/tasks.md
+
+  run bash "$SCRIPT_PATH" transition my-change open-complete
+  [ "$status" -eq 0 ]
+
+  run bash "$SCRIPT_PATH" get my-change phase
+  [ "$output" = "build" ]
+}
+
+@test "design-complete blocks without the existing handoff and Design Doc contract" {
+  bash "$SCRIPT_PATH" init my-change full
+  OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase design
+  echo "proposal" > openspec/changes/my-change/proposal.md
+  echo "design" > openspec/changes/my-change/design.md
+  echo "- [ ] task" > openspec/changes/my-change/tasks.md
+
+  run bash "$SCRIPT_PATH" transition my-change design-complete
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"handoff_context"* ]]
+
+  run bash "$SCRIPT_PATH" get my-change phase
+  [ "$output" = "design" ]
+}
+
+@test "design-complete advances only after the existing handoff and Design Doc contract passes" {
+  bash "$SCRIPT_PATH" init my-change full
+  OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase design
+  echo "proposal" > openspec/changes/my-change/proposal.md
+  echo "design" > openspec/changes/my-change/design.md
+  echo "- [ ] task" > openspec/changes/my-change/tasks.md
+  mkdir -p openspec/changes/my-change/specs/example
+  echo "# Requirements" > openspec/changes/my-change/specs/example/spec.md
+  bash "$HANDOFF_PATH" my-change design --write
+  mkdir -p docs/superpowers/specs
+  printf '%s\n' '---' 'opensuper_change: my-change' 'role: technical-design' 'canonical_spec: openspec' '---' '# Design' > docs/superpowers/specs/my-change.md
+  bash "$SCRIPT_PATH" set my-change design_doc docs/superpowers/specs/my-change.md
+
+  run bash "$SCRIPT_PATH" transition my-change design-complete
+  [ "$status" -eq 0 ]
+
+  run bash "$SCRIPT_PATH" get my-change phase
+  [ "$output" = "build" ]
+}
+
+@test "archive confirmation is required before archived and reset on reopen" {
+  bash "$SCRIPT_PATH" init my-change full
+  OPENSUPER_FORCE_PHASE=1 bash "$SCRIPT_PATH" set my-change phase archive
+
+  run bash "$SCRIPT_PATH" set my-change archive_confirmation confirmed
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"archive-confirm"* ]]
+
+  run env opensuper_INTERNAL_ARCHIVE_CONFIRMATION=1 bash "$SCRIPT_PATH" set my-change archive_confirmation confirmed
+  [ "$status" -ne 0 ]
+
+  run bash "$SCRIPT_PATH" set my-change archived true
+  [ "$status" -ne 0 ]
+
+  run bash "$SCRIPT_PATH" get my-change archived
+  [ "$output" = "false" ]
+
+  run bash "$SCRIPT_PATH" transition my-change archived
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"archive_confirmation must be confirmed"* ]]
+
+  run bash "$SCRIPT_PATH" transition my-change archive-confirm
+  [ "$status" -eq 0 ]
+  run bash "$SCRIPT_PATH" get my-change archive_confirmation
+  [ "$output" = "confirmed" ]
+
+  run bash "$SCRIPT_PATH" transition my-change archived
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"moved into openspec/changes/archive"* ]]
+
+  run bash "$SCRIPT_PATH" get my-change archived
+  [ "$output" = "false" ]
+
+  run bash "$SCRIPT_PATH" transition my-change archive-reopen
+  [ "$status" -eq 0 ]
+  run bash "$SCRIPT_PATH" get my-change archive_confirmation
+  [ "$output" = "pending" ]
+}
+
+@test "transition usage lists archive-confirm" {
+  run bash "$SCRIPT_PATH" transition my-change
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"archive-confirm"* ]]
 }
 
 # --- usage errors ---
