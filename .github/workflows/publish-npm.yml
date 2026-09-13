@@ -1,0 +1,70 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify candidate
+        run: |
+          pnpm build
+          pnpm check:generated
+          pnpm lint
+          pnpm format:check
+          pnpm test:package-e2e
+          pnpm run prepublishOnly
+          npm audit --omit=dev --registry=https://registry.npmjs.org/
+
+      - name: Pack candidate
+        id: pack
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/opensuper-release"
+          npm pack --pack-destination "$RUNNER_TEMP/opensuper-release"
+          mapfile -t packages < <(find "$RUNNER_TEMP/opensuper-release" -maxdepth 1 -type f -name '*.tgz')
+          if [[ ${#packages[@]} -ne 1 ]]; then
+            echo "Expected one tarball, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          echo "tarball=${packages[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan and install exact candidate
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/opensuper-scan" "$RUNNER_TEMP/opensuper-smoke"
+          tar -xzf "${{ steps.pack.outputs.tarball }}" -C "$RUNNER_TEMP/opensuper-scan"
+          node scripts/release/prepublish-check.js "$RUNNER_TEMP/opensuper-scan/package"
+          npm install --prefix "$RUNNER_TEMP/opensuper-smoke" "${{ steps.pack.outputs.tarball }}" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org/
+          expected=$(node -p "require('./package.json').version")
+          actual=$(node "$RUNNER_TEMP/opensuper-smoke/node_modules/@pzy560117/opensuper/bin/opensuper.js" --version)
+          test "$actual" = "$expected"
+
+      - name: Publish exact candidate
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --ignore-scripts --access public --registry=https://registry.npmjs.org/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
