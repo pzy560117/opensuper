@@ -23,7 +23,7 @@ describe('release metadata', () => {
       readFileSync(path.join(repositoryRoot, 'assets', 'manifest.json'), 'utf8'),
     ) as { version: string };
 
-    expect(packageJson.version).toBe('0.4.0');
+    expect(packageJson.version).toBe('0.4.1');
     expect(packageJson.name).toBe('@pzy560117/opensuper');
     expect(packageJson.bin).toEqual({ opensuper: 'bin/opensuper.js' });
     expect(packageJson.repository.url).toBe('git+https://github.com/pzy560117/opensuper.git');

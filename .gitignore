@@ -153,6 +153,11 @@ nul
 
 .zcode
 
+# The interrupted-transition Eval needs its project configuration in clean checkouts.
+!/eval/local/tasks/opensuper-native-interrupted-transition/environment/.opensuper/
+/eval/local/tasks/opensuper-native-interrupted-transition/environment/.opensuper/*
+!/eval/local/tasks/opensuper-native-interrupted-transition/environment/.opensuper/config.yaml
+
 # Dashboard local cache snapshots must never enter the project repository.
 dashboard-installed-snapshot.json
 # >>> OpenSuper managed project state >>>

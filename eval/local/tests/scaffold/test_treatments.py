@@ -342,6 +342,7 @@ def test_opensuper_full_040_beta_dependency_paths_are_loadable():
 
 def test_list_treatments_is_sorted_for_stable_cli_output():
     assert list_treatments() == [
+        "CONTROL",
         "OPENSUPER_CLASSIC_DOCS_LAYOUT",
         "OPENSUPER_CLASSIC_LEGACY_LAYOUT",
         "OPENSUPER_FULL_039",
@@ -349,5 +350,4 @@ def test_list_treatments_is_sorted_for_stable_cli_output():
         "OPENSUPER_NATIVE_BATCH",
         "OPENSUPER_NATIVE_PHASE1",
         "OPENSUPER_NATIVE_SEQUENTIAL",
-        "CONTROL",
     ]

@@ -15,7 +15,7 @@ from scaffold.python.tasks import load_task
 
 
 def test_profile_registry_exposes_generic_and_opensuper_workflow():
-    assert list_profiles() == ["authoring-skill", "opensuper-workflow", "generic"]
+    assert list_profiles() == ["authoring-skill", "generic", "opensuper-workflow"]
 
     generic = get_profile(GENERIC_PROFILE)
     opensuper = get_profile(OPENSUPER_WORKFLOW_PROFILE)

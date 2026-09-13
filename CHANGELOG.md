@@ -2,6 +2,17 @@
 
 All notable changes to @pzy560117/opensuper will be documented in this file.
 
+## What's Changed [0.4.1] - 2026-09-13
+
+### Fixed
+
+- **Dashboard project selection**: Match virtual-list row measurements to the two-line project options so scrolling keeps project names and paths aligned.
+- **Interrupted-transition evaluation**: Include the Native project configuration in clean checkouts and distributed evaluation fixtures.
+
+### Security
+
+- **Release verification**: Require successful full CI for the exact main-branch commit before npm publication, and pin publishing actions to immutable revisions.
+
 ## What's Changed [0.4.0] - 2026-09-13
 
 This OpenSuper release tracks the complete `rpamis/comet` `0.4.1` development tree at `6c3afff`, plus upstream fixes `c468ccd` and `1bb4750`. It distributes the product under the OpenSuper package, CLI, Skill, configuration, and runtime namespaces and removes the former OpenTest downstream integration.

@@ -1743,6 +1743,7 @@ function Topbar({
       <div className="opensuper-header-context">
         <Select
           className="opensuper-project-select"
+          listItemHeight={56}
           value={activeProjectId ?? undefined}
           placeholder={
             project?.name ? (

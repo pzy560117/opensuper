@@ -3237,6 +3237,13 @@ test('pins the desktop workbench frame while rich content scrolls in the center 
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?demo');
+  await expect
+    .poll(() =>
+      page
+        .locator('.dashboard-content-shell')
+        .evaluate((shell) => shell.scrollHeight - shell.clientHeight),
+    )
+    .toBeGreaterThan(0);
 
   const metrics = await page.evaluate(() => {
     const workbench = document.querySelector('.dashboard-workbench');
