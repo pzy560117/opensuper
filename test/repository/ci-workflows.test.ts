@@ -41,6 +41,22 @@ function classifyIssue(
 }
 
 describe('CI workflows', () => {
+  it('requires successful main CI before checking out the exact npm release commit', async () => {
+    const workflow = parse(await readWorkflow('publish-npm.yml'));
+    expect(workflow.on.workflow_dispatch.inputs.commit.required).toBe(true);
+    expect(workflow.permissions.actions).toBe('read');
+    const steps = workflow.jobs.publish.steps;
+    const gate = steps[0];
+    expect(gate.env.RELEASE_SHA).toBe('${{ inputs.commit }}');
+    expect(gate.run).toContain('^[0-9a-f]{40}$');
+    expect(gate.run).toContain('test "$RELEASE_SHA" = "$main_sha"');
+    expect(gate.run).toContain('actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA');
+    expect(gate.run).toContain('.conclusion == "success"');
+    expect(gate.run).toContain('test "$passed" -gt 0');
+    expect(steps[1].with.ref).toBe('${{ inputs.commit }}');
+    expect(steps[1].with['persist-credentials']).toBe(false);
+  });
+
   it('runs the required CI contract for every pull request', async () => {
     const workflow = await readWorkflow('ci.yml');
     const packageJson = JSON.parse(await fs.readFile('package.json', 'utf8')) as {

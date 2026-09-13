@@ -2,26 +2,50 @@ name: Publish npm package
 
 on:
   workflow_dispatch:
+    inputs:
+      commit:
+        description: Full commit SHA on main with successful CI
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: opensuper-npm-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
+      - name: Require successful CI for exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.commit }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          main_sha=$(gh api "repos/$REPOSITORY/commits/main" --jq '.sha')
+          test "$RELEASE_SHA" = "$main_sha"
+          passed=$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&branch=main&event=push&per_page=100" --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion == "success")] | length')
+          test "$passed" -gt 0
+
+      - name: Checkout verified commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: main
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 10.18.3
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.13.1
           cache: pnpm
