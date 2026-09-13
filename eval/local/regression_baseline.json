@@ -1,0 +1,13 @@
+{
+  "dimensions": {
+    "main_flow": 1.0,
+    "gate_guard": 1.0,
+    "skill_invocation": 1.0,
+    "spec_drift": 0.25,
+    "completion": 0.8,
+    "efficiency": 0.73,
+    "decision_point_compliance": 0.5,
+    "artifact_quality": 1.0
+  },
+  "source": "regression_check.py"
+}

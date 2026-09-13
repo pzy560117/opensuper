@@ -1,0 +1,20 @@
+[metadata]
+name = "opensuper-noise-distractor"
+description = "Fix invoice tax calculation while leaving an unrelated distracting file untouched"
+difficulty = "medium"
+category = "opensuper"
+tags = ["opensuper", "workflow", "noise", "scope-control"]
+default_treatments = ["CONTROL", "OPENSUPER_FULL_040_BETA", "OPENSUPER_FULL_039"]
+
+[template]
+required = []
+
+[environment]
+description = "Python invoice calculator plus a distracting unrelated file. Claude must keep scope tight."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_noise_distractor.py"
+target_artifacts = []
+timeout = 120

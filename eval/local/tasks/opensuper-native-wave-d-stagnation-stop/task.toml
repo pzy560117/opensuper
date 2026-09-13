@@ -1,0 +1,38 @@
+[metadata]
+name = "opensuper-native-wave-d-stagnation-stop"
+description = "Test Native v4 no-progress stopping, one explicit override, and the bounded repair ceiling"
+difficulty = "hard"
+category = "opensuper-native"
+tags = ["opensuper-native", "verification", "stagnation", "manual-stop", "hard-stop", "wave-d"]
+default_treatments = ["OPENSUPER_NATIVE_PHASE1"]
+
+[template]
+required = []
+
+[environment]
+description = "Passing baseline Python workspace with one deliberately unresolved acceptance command."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_native_wave_d_stagnation_stop.py"
+target_artifacts = [".cache/opensuper-native-eval/manual-stop.json", ".cache/opensuper-native-eval/override.json", ".cache/opensuper-native-eval/hard-stop.json", ".cache/opensuper-native-eval/hard-stop-status.json", "docs/opensuper/changes"]
+timeout = 120
+
+[evaluation]
+profile = "generic"
+required_skills = ["opensuper-native"]
+expected_artifacts = [".cache/opensuper-native-eval/manual-stop.json", ".cache/opensuper-native-eval/override.json", ".cache/opensuper-native-eval/hard-stop.json", ".cache/opensuper-native-eval/hard-stop-status.json", "docs/opensuper/changes"]
+require_skill_invocation = true
+native_terminal = "active-blocked"
+rubric_criteria = [
+  "Stops after repeated unresolved verification through portable v4 Loop counters and a user-readable blocker",
+  "Preserves a plain-language CLI summary, one user-or-command next step, and relayable user communication in the saved JSON envelopes",
+  "Accepts exactly one explicit new repair hypothesis and keeps the change active",
+  "Reaches the bounded failure ceiling without legacy machine artifacts",
+  "Leaves the unresolved change active with passing baseline tests and unchanged acceptance",
+]
+
+[interaction]
+mode = "none"
+max_turns = 1

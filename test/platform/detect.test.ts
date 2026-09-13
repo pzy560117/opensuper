@@ -1,0 +1,770 @@
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
+import {
+  getBaseDir,
+  detectPlatforms,
+  hasSkills,
+  hasPluginSuperpowers,
+  hasOpenCodePluginSuperpowers,
+} from '../../platform/install/detect.js';
+import {
+  PLATFORMS,
+  getPlatformConfigDirs,
+  getPlatformSkillsDir,
+  getPlatformSkillsDirs,
+  resolveOpenSpecMirrorPlatformIds,
+  type Platform,
+} from '../../platform/install/platforms.js';
+
+const mockPlatform: Platform = {
+  id: 'claude',
+  name: 'Claude Code',
+  skillsDir: '.claude',
+  openspecToolId: 'claude',
+};
+
+describe('detect', () => {
+  let tmpDir: string;
+  let homedirSpy: MockInstance<typeof os.homedir>;
+
+  beforeEach(async () => {
+    tmpDir = path.join(
+      os.tmpdir(),
+      `opensuper-detect-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    await fs.mkdir(tmpDir, { recursive: true });
+
+    const fakeHome = path.join(tmpDir, 'fake-home');
+    await fs.mkdir(fakeHome, { recursive: true });
+    homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+  });
+
+  afterEach(async () => {
+    homedirSpy.mockRestore();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('getBaseDir', () => {
+    it('returns home directory for global scope', () => {
+      expect(getBaseDir('global', tmpDir)).toBe(os.homedir());
+    });
+
+    it('returns project path for project scope', () => {
+      expect(getBaseDir('project', tmpDir)).toBe(tmpDir);
+    });
+  });
+
+  describe('platform global skills directories', () => {
+    it('declares DeepSeek Harness roots and Claude-compatible Classic sources', () => {
+      const dsh = PLATFORMS.find((platform) => platform.id === 'dsh');
+
+      expect(dsh).toBeDefined();
+      expect(dsh?.skillsDir).toBe('.dsh');
+      expect(dsh?.globalSkillsDir).toBe('.dsh');
+      expect(dsh?.openspecToolId).toBe('claude');
+      expect(dsh?.rulesFormat).toBe('dsh');
+      expect(dsh?.supportsHooks).toBe(true);
+      expect(dsh?.supportsGlobalHooks).toBe(true);
+      expect(dsh?.hookFormat).toBe('dsh');
+      expect(dsh?.hookConfigFile).toBe('hooks.json');
+      expect(getPlatformSkillsDir(dsh!, 'project')).toBe('.dsh');
+      expect(getPlatformSkillsDir(dsh!, 'global')).toBe('.dsh');
+    });
+
+    it('uses DSH_HOME for the global dsh Skill root', async () => {
+      const dsh = PLATFORMS.find((platform) => platform.id === 'dsh')!;
+      const dshHome = path.join(tmpDir, 'custom-dsh-home');
+      vi.stubEnv('DSH_HOME', dshHome);
+
+      const globalSkillsRoot = path.join(
+        os.homedir(),
+        getPlatformSkillsDir(dsh, 'global'),
+        'skills',
+      );
+
+      expect(path.resolve(globalSkillsRoot)).toBe(path.join(dshHome, 'skills'));
+    });
+
+    it('declares Codex canonical, compatibility, detection, and rules roots separately', () => {
+      const codex = PLATFORMS.find((platform) => platform.id === 'codex');
+
+      expect(codex).toBeDefined();
+      expect(codex?.skillsDir).toBe('.agents');
+      expect(codex?.globalSkillsDir).toBe('.agents');
+      expect(codex?.legacySkillsDirs).toEqual(['.codex']);
+      expect(codex?.detectionPaths).toEqual(['.codex']);
+      expect(codex?.rulesBaseDir).toBe('.codex');
+      expect(codex?.hookConfigFile).toBe('hooks.json');
+      expect(codex?.legacyHookConfigFiles).toEqual(['settings.local.json']);
+      expect(getPlatformSkillsDir(codex!, 'project')).toBe('.agents');
+      expect(getPlatformSkillsDir(codex!, 'global')).toBe('.agents');
+      expect(getPlatformSkillsDirs(codex!, 'project')).toEqual(['.agents', '.codex']);
+      expect(getPlatformSkillsDirs(codex!, 'global')).toEqual(['.agents', '.codex']);
+    });
+
+    it('declares Devin Desktop as the canonical Windsurf-compatible root', () => {
+      const windsurf = PLATFORMS.find((platform) => platform.id === 'windsurf');
+
+      expect(windsurf).toBeDefined();
+      expect(windsurf?.name).toBe('Devin Desktop (formerly Windsurf)');
+      expect(windsurf?.skillsDir).toBe('.devin');
+      expect(windsurf?.globalSkillsDir).toBe('.devin');
+      expect(windsurf?.legacySkillsDirs).toEqual(['.windsurf']);
+      expect(windsurf?.openspecToolId).toBe('windsurf');
+      expect(getPlatformSkillsDir(windsurf!, 'project')).toBe('.devin');
+      expect(getPlatformSkillsDir(windsurf!, 'global')).toBe('.devin');
+      expect(getPlatformSkillsDirs(windsurf!, 'project')).toEqual(['.devin', '.windsurf']);
+      expect(getPlatformSkillsDirs(windsurf!, 'global')).toEqual(['.devin', '.windsurf']);
+      expect(getPlatformConfigDirs(windsurf!, 'project')).toEqual(['.devin', '.windsurf']);
+      expect(getPlatformConfigDirs(windsurf!, 'global')).toEqual(['.devin', '.windsurf']);
+    });
+
+    it('declares Grok Skills, rules, and hooks under the native .grok root', () => {
+      const grok = PLATFORMS.find((platform) => platform.id === 'grok');
+
+      expect(grok).toBeDefined();
+      expect(grok?.skillsDir).toBe('.grok');
+      expect(grok?.globalSkillsDir).toBe('.grok');
+      expect(grok?.detectionPaths).toEqual(['.grok']);
+      expect(grok?.openspecToolId).toBe('codex');
+      expect(grok?.openspecMirrorFrom).toBe('codex');
+      expect(grok?.rulesDir).toBe('rules');
+      expect(grok?.hookFormat).toBe('claude-code');
+      expect(grok?.hookConfigFile).toBe('hooks/opensuper.json');
+      expect(grok?.hookMatcher).toBe('Write|Edit|write|search_replace');
+      expect(getPlatformSkillsDir(grok!, 'project')).toBe('.grok');
+      expect(getPlatformSkillsDir(grok!, 'global')).toBe('.grok');
+      expect(resolveOpenSpecMirrorPlatformIds(['grok', 'codex', 'claude'])).toEqual(['grok']);
+    });
+
+    it('declares Kimi Code global skills under the user .kimi-code directory', () => {
+      const kimicode = PLATFORMS.find((platform) => platform.id === 'kimicode');
+
+      expect(kimicode).toBeDefined();
+      expect(kimicode?.skillsDir).toBe('.kimi-code');
+      expect(kimicode?.globalSkillsDir).toBe('.kimi-code');
+      expect(kimicode?.openspecToolId).toBe('kimi');
+    });
+
+    it('declares Lingma global skills under the user .lingma directory', () => {
+      const lingma = PLATFORMS.find((platform) => platform.id === 'lingma');
+
+      expect(lingma).toBeDefined();
+      expect(lingma?.skillsDir).toBe('.lingma');
+      expect(lingma?.globalSkillsDir).toBe('.lingma');
+    });
+
+    it('declares ZCode skills under .zcode with opencode openspec tool id', () => {
+      const zcode = PLATFORMS.find((platform) => platform.id === 'zcode');
+
+      expect(zcode).toBeDefined();
+      expect(zcode?.skillsDir).toBe('.zcode');
+      expect(zcode?.globalSkillsDir).toBe('.zcode');
+      expect(zcode?.openspecToolId).toBe('opencode');
+      expect(zcode?.openspecMirrorFrom).toBe('opencode');
+      expect(zcode?.rulesDir).toBe('rules');
+      expect(zcode?.rulesFormat).toBe('md');
+    });
+
+    it('declares MimoCode skills under .mimocode with opencode-compatible paths', () => {
+      const mimocode = PLATFORMS.find((platform) => platform.id === 'mimocode');
+
+      expect(mimocode).toBeDefined();
+      expect(mimocode?.skillsDir).toBe('.mimocode');
+      expect(mimocode?.globalSkillsDir).toBe('.config/mimocode');
+      expect(mimocode?.openspecToolId).toBe('opencode');
+      expect(mimocode?.rulesDir).toBe('rules');
+      expect(mimocode?.rulesFormat).toBe('md');
+    });
+
+    it('declares Trae CN directories while using OpenSpec Trae support', () => {
+      const traeCn = PLATFORMS.find((platform) => platform.id === 'trae-cn');
+
+      expect(traeCn).toBeDefined();
+      expect(traeCn?.skillsDir).toBe('.trae-cn');
+      expect(traeCn?.globalSkillsDir).toBe('.trae-cn');
+      expect(traeCn?.openspecToolId).toBe('trae');
+      expect(traeCn?.rulesDir).toBe('rules');
+      expect(traeCn?.rulesFormat).toBe('md');
+      expect(traeCn?.supportsHooks).toBe(true);
+      expect(traeCn?.hookFormat).toBe('trae');
+      expect(traeCn?.configDir).toBe('.trae');
+      expect(traeCn?.globalConfigDir).toBe('.trae-cn');
+    });
+
+    it('declares WorkBuddy project and user Skill roots with CodeBuddy-style Hooks', () => {
+      const workbuddy = PLATFORMS.find((platform) => platform.id === 'workbuddy');
+
+      expect(workbuddy).toBeDefined();
+      expect(workbuddy?.skillsDir).toBe('.workbuddy');
+      expect(workbuddy?.globalSkillsDir).toBe('.workbuddy');
+      expect(workbuddy?.supportsHooks).toBe(true);
+      expect(workbuddy?.hookFormat).toBe('codebuddy');
+      expect(getPlatformSkillsDir(workbuddy!, 'project')).toBe('.workbuddy');
+      expect(getPlatformSkillsDir(workbuddy!, 'global')).toBe('.workbuddy');
+    });
+
+    it('declares Oh My Pi native project and user roots with Rules and Hooks', () => {
+      const omp = PLATFORMS.find((platform) => platform.id === 'oh-my-pi');
+
+      expect(omp).toBeDefined();
+      expect(omp?.skillsDir).toBe('.omp');
+      expect(omp?.globalSkillsDir).toBe('.omp/agent');
+      expect(omp?.openspecToolId).toBe('oh-my-pi');
+      expect(omp?.rulesDir).toBe('rules');
+      expect(omp?.rulesFormat).toBe('mdc');
+      expect(omp?.supportsHooks).toBe(true);
+      expect(omp?.supportsGlobalHooks).toBe(true);
+      expect(omp?.hookFormat).toBe('omp');
+      expect(getPlatformSkillsDir(omp!, 'project')).toBe('.omp');
+      expect(getPlatformSkillsDir(omp!, 'global')).toBe('.omp/agent');
+    });
+  });
+
+  describe('detectPlatforms', () => {
+    it('detects Codex from its configuration directory', async () => {
+      await fs.mkdir(path.join(tmpDir, '.codex'));
+
+      const detected = await detectPlatforms(tmpDir);
+
+      expect(detected.has('codex')).toBe(true);
+    });
+
+    it('does not detect Codex from a shared .agents skills directory alone', async () => {
+      await fs.mkdir(path.join(tmpDir, '.agents', 'skills', 'personal-skill'), {
+        recursive: true,
+      });
+
+      const detected = await detectPlatforms(tmpDir);
+
+      expect(detected.has('codex')).toBe(false);
+    });
+
+    it('detects claude platform when .claude directory exists', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude'));
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('claude')).toBe(true);
+    });
+
+    it.each(['.devin', '.windsurf'])(
+      'detects Windsurf-compatible platform from %s',
+      async (root) => {
+        await fs.mkdir(path.join(tmpDir, root));
+
+        const detected = await detectPlatforms(tmpDir);
+
+        expect(detected.has('windsurf')).toBe(true);
+      },
+    );
+
+    it('detects Oh My Pi from the native .omp directory', async () => {
+      await fs.mkdir(path.join(tmpDir, '.omp'));
+
+      const detected = await detectPlatforms(tmpDir);
+
+      expect(detected.has('oh-my-pi')).toBe(true);
+    });
+
+    it('detects github-copilot when copilot-instructions.md exists', async () => {
+      await fs.mkdir(path.join(tmpDir, '.github'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, '.github', 'copilot-instructions.md'), '');
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('github-copilot')).toBe(true);
+    });
+
+    it('does not detect github-copilot when only .github dir exists', async () => {
+      await fs.mkdir(path.join(tmpDir, '.github'));
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('github-copilot')).toBe(false);
+    });
+
+    it('detects grok from the .grok config directory', async () => {
+      await fs.mkdir(path.join(tmpDir, '.grok'));
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('grok')).toBe(true);
+    });
+
+    it('detects multiple platforms', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude'));
+      await fs.mkdir(path.join(tmpDir, '.cursor'));
+      await fs.mkdir(path.join(tmpDir, '.kimi-code'));
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('claude')).toBe(true);
+      expect(detected.has('cursor')).toBe(true);
+      expect(detected.has('kimicode')).toBe(true);
+      expect(detected.size).toBeGreaterThanOrEqual(3);
+    });
+
+    it('returns empty set when no platforms detected', async () => {
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.size).toBe(0);
+    });
+
+    it('detects both antigravity and antigravity2 from the shared .agents directory', async () => {
+      const antigravity = PLATFORMS.find((platform) => platform.id === 'antigravity');
+      const antigravity2 = PLATFORMS.find((platform) => platform.id === 'antigravity2');
+      expect(antigravity?.skillsDir).toBe('.agents');
+      expect(antigravity2?.skillsDir).toBe('.agents');
+
+      await fs.mkdir(path.join(tmpDir, '.agents'));
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('antigravity')).toBe(true);
+      expect(detected.has('antigravity2')).toBe(true);
+    });
+
+    it('detects MimoCode from the project config directory', async () => {
+      await fs.mkdir(path.join(tmpDir, '.mimocode'));
+      const detected = await detectPlatforms(tmpDir);
+      expect(detected.has('mimocode')).toBe(true);
+    });
+  });
+
+  describe('hasSkills', () => {
+    it('can restrict project detection to the selected target scope', async () => {
+      const globalSkills = path.join(os.homedir(), '.claude', 'skills', 'opensuper');
+      await fs.mkdir(globalSkills, { recursive: true });
+
+      expect(await hasSkills(tmpDir, mockPlatform, 'opensuper')).toBe(true);
+      expect(
+        await hasSkills(tmpDir, mockPlatform, 'opensuper', [], 'project', {
+          includeGlobalFallback: false,
+        }),
+      ).toBe(false);
+
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'opensuper'), { recursive: true });
+      expect(
+        await hasSkills(tmpDir, mockPlatform, 'opensuper', [], 'project', {
+          includeGlobalFallback: false,
+        }),
+      ).toBe(true);
+    });
+
+    it('detects openspec skills when openspec- prefixed dirs exist', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'openspec-core'), {
+        recursive: true,
+      });
+      expect(await hasSkills(tmpDir, mockPlatform, 'openspec')).toBe(true);
+    });
+
+    it('detects superpowers skills', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'brainstorming'), {
+        recursive: true,
+      });
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'using-superpowers'), {
+        recursive: true,
+      });
+      expect(await hasSkills(tmpDir, mockPlatform, 'superpowers')).toBe(true);
+    });
+
+    it('detects opensuper skills', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'opensuper'), { recursive: true });
+      expect(await hasSkills(tmpDir, mockPlatform, 'opensuper')).toBe(true);
+    });
+
+    it('treats OpenCode OpenSuper skills without slash commands as incomplete', async () => {
+      const opencode = PLATFORMS.find((platform) => platform.id === 'opencode');
+      expect(opencode).toBeDefined();
+      if (!opencode) return;
+
+      await fs.mkdir(path.join(tmpDir, '.opencode', 'skills', 'opensuper'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, '.opencode', 'skills', 'opensuper-open'), {
+        recursive: true,
+      });
+
+      expect(await hasSkills(tmpDir, opencode, 'opensuper')).toBe(false);
+    });
+
+    it('detects OpenCode OpenSuper skills when matching slash commands exist', async () => {
+      const opencode = PLATFORMS.find((platform) => platform.id === 'opencode');
+      expect(opencode).toBeDefined();
+      if (!opencode) return;
+
+      await fs.mkdir(path.join(tmpDir, '.opencode', 'skills', 'opensuper'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, '.opencode', 'skills', 'opensuper-open'), {
+        recursive: true,
+      });
+      await fs.mkdir(path.join(tmpDir, '.opencode', 'commands'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, '.opencode', 'commands', 'opensuper.md'), '');
+      await fs.writeFile(path.join(tmpDir, '.opencode', 'commands', 'opensuper-open.md'), '');
+
+      expect(await hasSkills(tmpDir, opencode, 'opensuper')).toBe(true);
+    });
+
+    it('requires MimoCode slash commands before treating OpenSuper as installed', async () => {
+      const mimocode = PLATFORMS.find((platform) => platform.id === 'mimocode');
+      expect(mimocode).toBeDefined();
+      if (!mimocode) return;
+
+      await fs.mkdir(path.join(tmpDir, '.mimocode', 'skills', 'opensuper'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, '.mimocode', 'skills', 'opensuper-open'), {
+        recursive: true,
+      });
+
+      expect(await hasSkills(tmpDir, mimocode, 'opensuper')).toBe(false);
+
+      await fs.mkdir(path.join(tmpDir, '.mimocode', 'commands'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, '.mimocode', 'commands', 'opensuper.md'), '');
+      await fs.writeFile(path.join(tmpDir, '.mimocode', 'commands', 'opensuper-open.md'), '');
+
+      expect(await hasSkills(tmpDir, mimocode, 'opensuper')).toBe(true);
+    });
+
+    it('detects Antigravity global skills in the Gemini Antigravity directory', async () => {
+      const antigravity = PLATFORMS.find((platform) => platform.id === 'antigravity');
+      expect(antigravity).toBeDefined();
+      if (!antigravity) return;
+
+      const fakeHome = os.homedir();
+      await fs.mkdir(path.join(fakeHome, '.gemini', 'antigravity', 'skills', 'opensuper'), {
+        recursive: true,
+      });
+
+      expect(await hasSkills(fakeHome, antigravity, 'opensuper', [], 'global')).toBe(true);
+    });
+
+    it('detects Antigravity 2.0 global skills in the Gemini config directory', async () => {
+      const antigravity2 = PLATFORMS.find((platform) => platform.id === 'antigravity2');
+      expect(antigravity2).toBeDefined();
+      if (!antigravity2) return;
+
+      const fakeHome = os.homedir();
+      await fs.mkdir(path.join(fakeHome, '.gemini', 'config', 'skills', 'opensuper'), {
+        recursive: true,
+      });
+
+      expect(await hasSkills(fakeHome, antigravity2, 'opensuper', [], 'global')).toBe(true);
+    });
+
+    it('returns false for missing skills', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills'), { recursive: true });
+      expect(await hasSkills(tmpDir, mockPlatform, 'opensuper')).toBe(false);
+    });
+
+    it('returns false when skills directory does not exist', async () => {
+      expect(await hasSkills(tmpDir, mockPlatform, 'opensuper')).toBe(false);
+    });
+
+    it('returns false when a platform directory exists without a skills directory', async () => {
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+      expect(await hasSkills(tmpDir, mockPlatform, 'opensuper')).toBe(false);
+    });
+
+    it('detects plugin-installed superpowers for claude platform', async () => {
+      const origEnv = process.env.CLAUDE_CONFIG_DIR;
+      const pluginDir = path.join(tmpDir, '.claude');
+      process.env.CLAUDE_CONFIG_DIR = pluginDir;
+
+      const skillsDir = path.join(
+        pluginDir,
+        'plugins',
+        'cache',
+        'claude-plugins-official',
+        'superpowers',
+        '5.0.0',
+        'skills',
+      );
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.mkdir(path.join(skillsDir, 'brainstorming'));
+      await fs.mkdir(path.join(skillsDir, 'using-superpowers'));
+
+      // No skills in the normal location
+      await fs.mkdir(path.join(tmpDir, '.claude', 'skills'), { recursive: true });
+
+      expect(await hasSkills(tmpDir, mockPlatform, 'superpowers')).toBe(true);
+
+      if (origEnv !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+    });
+
+    it('does not detect plugin superpowers for non-claude platforms', async () => {
+      const origEnv = process.env.CLAUDE_CONFIG_DIR;
+      const pluginDir = path.join(tmpDir, '.claude');
+      process.env.CLAUDE_CONFIG_DIR = pluginDir;
+
+      const skillsDir = path.join(
+        pluginDir,
+        'plugins',
+        'cache',
+        'claude-plugins-official',
+        'superpowers',
+        '5.0.0',
+        'skills',
+      );
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.mkdir(path.join(skillsDir, 'brainstorming'));
+
+      const cursorPlatform: Platform = {
+        id: 'cursor',
+        name: 'Cursor',
+        skillsDir: '.cursor',
+        openspecToolId: 'cursor',
+      };
+
+      expect(await hasSkills(tmpDir, cursorPlatform, 'superpowers')).toBe(false);
+
+      if (origEnv !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+    });
+
+    it('detects plugin-installed superpowers for codex platform', async () => {
+      const origEnv = process.env.CODEX_HOME;
+      const pluginDir = path.join(tmpDir, '.codex');
+      process.env.CODEX_HOME = pluginDir;
+
+      try {
+        const skillsDir = path.join(
+          pluginDir,
+          'plugins',
+          'cache',
+          'openai-curated',
+          'superpowers',
+          'c6ea566d',
+          'skills',
+        );
+        await fs.mkdir(skillsDir, { recursive: true });
+        await fs.mkdir(path.join(skillsDir, 'brainstorming'));
+        await fs.mkdir(path.join(skillsDir, 'using-superpowers'));
+
+        // Keep the canonical project Skill location empty so detection comes from the plugin cache.
+        await fs.mkdir(path.join(tmpDir, '.agents', 'skills'), { recursive: true });
+
+        const codexPlatform = PLATFORMS.find((platform) => platform.id === 'codex');
+        expect(codexPlatform).toBeDefined();
+        if (!codexPlatform) return;
+
+        expect(await hasSkills(tmpDir, codexPlatform, 'superpowers')).toBe(true);
+      } finally {
+        if (origEnv !== undefined) {
+          process.env.CODEX_HOME = origEnv;
+        } else {
+          delete process.env.CODEX_HOME;
+        }
+      }
+    });
+  });
+
+  describe('hasPluginSuperpowers', () => {
+    it('returns true when superpowers plugin is installed', async () => {
+      const origEnv = process.env.CLAUDE_CONFIG_DIR;
+      const pluginDir = path.join(tmpDir, '.claude');
+      process.env.CLAUDE_CONFIG_DIR = pluginDir;
+
+      const skillsDir = path.join(
+        pluginDir,
+        'plugins',
+        'cache',
+        'test-marketplace',
+        'superpowers',
+        '5.0.0',
+        'skills',
+      );
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.mkdir(path.join(skillsDir, 'brainstorming'));
+      await fs.mkdir(path.join(skillsDir, 'using-superpowers'));
+
+      expect(await hasPluginSuperpowers()).toBe(true);
+
+      if (origEnv !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+    });
+
+    it('returns false when no plugin cache exists', async () => {
+      const origEnv = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(tmpDir, 'nonexistent');
+
+      expect(await hasPluginSuperpowers()).toBe(false);
+
+      if (origEnv !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+    });
+
+    it('returns false when plugin exists but has no matching skills', async () => {
+      const origEnv = process.env.CLAUDE_CONFIG_DIR;
+      const pluginDir = path.join(tmpDir, '.claude');
+      process.env.CLAUDE_CONFIG_DIR = pluginDir;
+
+      const skillsDir = path.join(
+        pluginDir,
+        'plugins',
+        'cache',
+        'test-marketplace',
+        'superpowers',
+        '5.0.0',
+        'skills',
+      );
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.mkdir(path.join(skillsDir, 'unrelated-skill'));
+
+      expect(await hasPluginSuperpowers()).toBe(false);
+
+      if (origEnv !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+    });
+
+    it('skips a stray non-directory entry in the plugin cache instead of crashing', async () => {
+      const origEnv = process.env.CLAUDE_CONFIG_DIR;
+      const pluginDir = path.join(tmpDir, '.claude');
+      process.env.CLAUDE_CONFIG_DIR = pluginDir;
+
+      const cacheDir = path.join(pluginDir, 'plugins', 'cache');
+      await fs.mkdir(cacheDir, { recursive: true });
+      // A stray file (e.g. macOS .DS_Store) sitting where a marketplace
+      // directory is expected used to make fs.access throw ENOTDIR and crash
+      // opensuper init instead of being skipped like a missing marketplace.
+      await fs.writeFile(path.join(cacheDir, '.DS_Store'), '');
+
+      const skillsDir = path.join(cacheDir, 'test-marketplace', 'superpowers', '5.0.0', 'skills');
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.mkdir(path.join(skillsDir, 'brainstorming'));
+      await fs.mkdir(path.join(skillsDir, 'using-superpowers'));
+
+      await expect(hasPluginSuperpowers()).resolves.toBe(true);
+
+      if (origEnv !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+    });
+  });
+
+  describe('hasOpenCodePluginSuperpowers', () => {
+    it('returns true when superpowers plugin source directory exists with skills', async () => {
+      const origEnv = process.env.OPENCODE_CONFIG_DIR;
+      const opencodeDir = path.join(tmpDir, '.config', 'opencode');
+      process.env.OPENCODE_CONFIG_DIR = opencodeDir;
+
+      const skillsDir = path.join(opencodeDir, 'superpowers', 'skills');
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.mkdir(path.join(skillsDir, 'brainstorming'));
+      await fs.mkdir(path.join(skillsDir, 'using-superpowers'));
+
+      expect(await hasOpenCodePluginSuperpowers()).toBe(true);
+
+      if (origEnv !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      }
+    });
+
+    it('returns true when opencode.json contains superpowers plugin entry', async () => {
+      const origEnv = process.env.OPENCODE_CONFIG_DIR;
+      const opencodeDir = path.join(tmpDir, '.config', 'opencode');
+      process.env.OPENCODE_CONFIG_DIR = opencodeDir;
+
+      await fs.mkdir(opencodeDir, { recursive: true });
+      await fs.writeFile(
+        path.join(opencodeDir, 'opencode.json'),
+        JSON.stringify({
+          plugin: ['superpowers@git+https://github.com/obra/superpowers.git'],
+        }),
+      );
+
+      expect(await hasOpenCodePluginSuperpowers()).toBe(true);
+
+      if (origEnv !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      }
+    });
+
+    it('returns false when no superpowers plugin is installed', async () => {
+      const origEnv = process.env.OPENCODE_CONFIG_DIR;
+      process.env.OPENCODE_CONFIG_DIR = path.join(tmpDir, 'nonexistent');
+
+      expect(await hasOpenCodePluginSuperpowers()).toBe(false);
+
+      if (origEnv !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      }
+    });
+
+    it('returns false when opencode.json exists but has no superpowers entry', async () => {
+      const origEnv = process.env.OPENCODE_CONFIG_DIR;
+      const opencodeDir = path.join(tmpDir, '.config', 'opencode');
+      process.env.OPENCODE_CONFIG_DIR = opencodeDir;
+
+      await fs.mkdir(opencodeDir, { recursive: true });
+      await fs.writeFile(
+        path.join(opencodeDir, 'opencode.json'),
+        JSON.stringify({ plugin: ['some-other-plugin'] }),
+      );
+
+      expect(await hasOpenCodePluginSuperpowers()).toBe(false);
+
+      if (origEnv !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      }
+    });
+
+    it('returns false when opencode.json is invalid JSON', async () => {
+      const origEnv = process.env.OPENCODE_CONFIG_DIR;
+      const opencodeDir = path.join(tmpDir, '.config', 'opencode');
+      process.env.OPENCODE_CONFIG_DIR = opencodeDir;
+
+      await fs.mkdir(opencodeDir, { recursive: true });
+      await fs.writeFile(path.join(opencodeDir, 'opencode.json'), 'not valid json');
+
+      expect(await hasOpenCodePluginSuperpowers()).toBe(false);
+
+      if (origEnv !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      }
+    });
+  });
+
+  describe('hasSkills for OpenCode plugin-installed superpowers', () => {
+    it('detects superpowers via OpenCode plugin when normal skills dir is empty', async () => {
+      const origEnv = process.env.OPENCODE_CONFIG_DIR;
+      const opencodeDir = path.join(tmpDir, '.config', 'opencode');
+      process.env.OPENCODE_CONFIG_DIR = opencodeDir;
+
+      const opencode = PLATFORMS.find((platform) => platform.id === 'opencode');
+      expect(opencode).toBeDefined();
+      if (!opencode) return;
+
+      // Create the plugin source directory with superpowers skills
+      const pluginSkillsDir = path.join(opencodeDir, 'superpowers', 'skills');
+      await fs.mkdir(pluginSkillsDir, { recursive: true });
+      await fs.mkdir(path.join(pluginSkillsDir, 'brainstorming'));
+      await fs.mkdir(path.join(pluginSkillsDir, 'using-superpowers'));
+
+      // Normal skills directory is empty — no skills there
+      await fs.mkdir(path.join(tmpDir, '.opencode', 'skills'), { recursive: true });
+
+      expect(await hasSkills(tmpDir, opencode, 'superpowers')).toBe(true);
+
+      if (origEnv !== undefined) {
+        process.env.OPENCODE_CONFIG_DIR = origEnv;
+      } else {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      }
+    });
+  });
+});

@@ -1,55 +1,152 @@
+## 回复语言
+
+必须采用中文回答用户
+
+## 开发工作区保护
+
+开始修改前检查当前分支、比较基线、未提交文件和子模块状态。保留所有无关修改，不得通过 `reset`、`clean`、删除或格式化无关文件来换取检查通过。提交时只显式暂存本任务文件。
+
+本仓库不包含 `website` 子模块；Dashboard 网站演示构建只输出到可丢弃的 `dist/website-dashboard-demo/`，不得从上游恢复网站 gitlink。
+
+`.agents/skills/opensuper*`、`.claude/skills/opensuper*`、平台安装目录和测试生成目录是本地安装或 dogfood 副本，不是产品源码。产品行为应修改 `app/`、`domains/`、`platform/`、`assets/` 或对应构建脚本。
+
+## 分层开发规则
+
+修改目标文件前，读取从仓库根到该文件目录沿途的 `AGENTS.md`；路径更深的文件补充或覆盖上层规则。`.claude/rules/*.md` 是 Claude Code 的对应路径规则，`.codex/rules/*.rules` 只用于 Codex 命令执行策略，不承载开发行为说明。
+
+规则文件的数字前缀只用于分组和稳定排序，不表示优先级。发生冲突时按平台自身的作用域规则处理，不根据编号判断覆盖关系。
+
+## 问题证据与验证结论
+
+Issue、Review 意见、Project Knowledge、Memory 和历史记录只提供调查线索。可能变化的事实必须在当前分支重新核对；行为缺陷应先在最小临时项目、对应发布包或真实 Runtime 中复现。
+
+单元测试、生成 Runtime、npm 打包产物、真实平台 Hook 和真实模型 Eval 是不同证据层级，前一层通过不能证明后一层通过。完成报告必须列出实际执行的检查、真实结果、未执行项及原因；超时、依赖缺失和环境不可用均视为未完成。
+
 ## 测试
 
+验证范围必须与改动风险相匹配，不要在每次编辑后默认运行全量测试。
+
+- 每轮先运行覆盖当前改动的最小相关测试。
+- 纯文档或 Skill 内容修改：运行相关契约测试和受影响文件的 Prettier 检查。
+- 单一 `app/`、`domains/` 或 `platform/` 模块修改：运行对应测试；涉及编译、Runtime 或生成物时再运行 build。
+- 只有当前差异实际跨越多个生产模块，或涉及 Runtime、安装/路由、发布准备等高风险边界时，才在最终交付前运行一次全量测试；仅修改多个文件、生成资产或多个测试文件不自动构成全量测试理由。
+- 全量测试失败或超时时，先定位原因；只有修正了明确原因后才重跑，不盲目重复。
+- CI 已覆盖全量检查时，可以在本地只运行相关验证，但交付时必须明确说明未在本地运行的检查。
+- Native 的“完整独立验收”是当前候选的全部验收项，不等于仓库全量测试；优先复用仍与候选和执行上下文匹配的 Runtime 检查，只补跑缺失或已失效的检查。
+- 全量测试同一时刻只允许有一轮；启动前记录原因、范围和预计耗时。出现首个明确失败或超时后先收集结果并分类，不能因为等待工具超时、单个长测试或未收到汇总就并行重启另一轮。
+
 ```bash
-npx vitest run test/ts/OpenSuper-scripts.test.ts   # shell 脚本测试
-npx vitest run                                   # 全量测试
+npx vitest run <相关测试文件>                     # 默认：最小相关测试
+npx vitest run                                   # 高风险修改或最终交付前的全量测试
 ```
 
 ## 提交前检查
 
-仓库已配置 Git pre-commit 钩子（husky + lint-staged），每次 `git commit` 会自动对 `src/` 下的暂存源文件运行 `prettier --write`（与 CI `format:check` 范围一致），编辑器无关，所有贡献者生效。
+仓库已配置 Git pre-commit 钩子（husky + lint-staged），每次 `git commit` 会自动对 `app/`、`domains/`、`platform/`、`scripts/`、`test/`、`.github/`、`config/` 下的暂存源文件运行 `prettier --write`（与 CI `format:check` 范围一致；冻结的 `test/fixtures/` 除外），编辑器无关，所有贡献者生效。
 
-提交前建议手动确认（CI 会强制检查）：
+根据改动范围选择提交前检查；不要求每个提交机械地运行全部命令（CI 会执行完整检查）：
 
 ```bash
-pnpm format:check   # Prettier 格式检查
-pnpm lint           # ESLint
-pnpm build          # TypeScript 构建
-pnpm test           # 单元测试
+pnpm format:check   # 大范围格式检查；小范围可只检查受影响文件
+pnpm lint           # 修改源码、测试、脚本或配置时
+pnpm build          # 涉及编译、Runtime、生成物或发布资产时
+pnpm test           # 高风险修改或最终交付前需要本地全量验证时
 ```
 
 注：本地 Windows 若 `core.autocrlf=true`，未改动的旧文件可能因 CRLF 被 `prettier --check` 误报；钩子只处理暂存文件，不受影响，旧文件下次编辑时会自动转为 LF。
 
-## Shell 脚本规范
+## Commit 规范
 
-脚本位于 `assets/skills/OpenSuper/scripts/`，必须跨平台兼容（macOS / Linux / Windows Git Bash）：
+提交信息必须使用类型前缀，格式为 `<type>: <summary>`，scope 可选：`<type>(<scope>): <summary>`。
 
-- **禁止** `sed -i`（GNU/BSD 不兼容），用 `awk` 做字段替换
-- 必须兼容 `sha256sum`（GNU）和 `shasum -a 256`（BSD/macOS）
-- 所有可选 grep 结果加 `|| true` 防止 `pipefail` 误杀
-- 新增脚本必须加入 `beforeEach` 的拷贝列表和 manifest.json
+常用类型包括：`feat`、`fix`、`docs`、`chore`、`refactor`、`test`、`build`、`ci`、`perf`。
+
+示例：
+
+- `feat: add eval report language switch`
+- `fix(eval): prevent chart labels from overlapping`
+- `docs: update contributor commit rules`
+
+## 项目结构规范
+
+当前源码目录按责任分层：
+
+- `app/`：CLI 入口、命令编排和用户交互层。只能组合 domain/platform 能力，不承载领域规则。
+- `domains/`：业务领域模块。每个子目录是一个可独立维护的领域模块，例如 `domains/bundle/`、`domains/opensuper-classic/`、`domains/opensuper-native/`、`domains/opensuper-entry/`、`domains/dashboard/`、`domains/skill/`、`domains/workflow-contract/`。
+- `platform/`：文件系统、进程、安装平台、版本、路径等平台适配能力。domain 不应直接散落平台差异逻辑。
+- `scripts/`：构建、发布、benchmark、lint 等仓库自动化脚本。可调用源码模块，但不要成为运行时业务入口。
+- `assets/`：发布资产和内置 Skill 内容。修改 runtime 源码后必须通过构建同步生成资产，不要把业务逻辑只写在生成物里。
+- `eval/scaffold/shell/` 中仅允许 `config/repository-layout.json` 明确列出的隔离评审 sidecar 入口；它们属于 Eval 容器边界，不是产品 Runtime 入口。
+
+测试目录必须跟随被测对象归属：
+
+- `test/app/` 覆盖 `app/` 命令和 CLI 行为。
+- `test/domains/<domain>/` 覆盖对应 `domains/<domain>/` 模块；新增 domain 时同步新增同名测试目录。
+- `test/platform/` 覆盖 `platform/` 适配层。
+- `test/scripts/` 覆盖 `scripts/` 自动化脚本。
+- `test/repository/` 覆盖 README、CI、仓库布局等跨层约束。
+- `test/fixtures/` 和 `test/helpers/` 只放测试数据与测试工具。
+- 禁止新增或恢复 `test/ts/` 这种横向桶；旧文件应迁移到上面对应目录。
+
+架构约束由 `pnpm run lint:architecture` 校验，并已接入 `pnpm lint`。它会检查顶层目录白名单、活跃源码根、app/domain/platform 子模块、脚本模块、Classic/Native/Entry runtime 入口与生成物、内置 Skill 根目录、测试归属和禁止旧目录回归。如果确实需要新增顶层目录、源码模块、测试根目录或例外，必须先更新 `config/repository-layout.json`、架构 linter 和本节说明。
+
+## Classic runtime 脚本规范
+
+脚本位于 `assets/skills/opensuper/scripts/`，当前发布形态是 CLI 聚合 runtime + 每命令独立的自包含 `.mjs` bundle：
+
+- 运行时源码与每命令 entry 位于 `domains/opensuper-classic/`，修改后必须运行 `pnpm build:classic-runtime` 同步 `opensuper-runtime.mjs` 和所有 `opensuper-*.mjs` 命令 bundle
+- 命令 bundle 必须由对应 entry 构建为自包含产物；不要在生成物中直接编写业务逻辑，也不要恢复对 `opensuper-runtime.mjs` 的运行时 import
+- 不再新增 `.sh` runtime；测试 fixture `test/fixtures/classic-0.3.9/` 是冻结参考实现，只用于差分兼容
+- 新增命令 bundle 或 runtime 文件必须加入 `test/domains/opensuper-classic/opensuper-scripts.test.ts` 的 `beforeEach` 拷贝列表、`config/repository-layout.json` 和 `assets/manifest.json`
+- `opensuper-hook-guard.mjs` 是 Classic Guard 的自包含命令 bundle，不作为平台 Hook 直接安装；平台统一安装的 Hook 入口是 `opensuper-hook-router.mjs`
+
+## Native 与 Entry runtime 规范
+
+- Native 运行时源码与每命令 entry 位于 `domains/opensuper-native/`，修改后必须运行 `pnpm build:native-runtime` 同步 `opensuper-native-runtime.mjs` 和所有 `opensuper-native-*.mjs` 命令 bundle
+- `opensuper-native-hook-guard.mjs` 是 Native Guard 的自包含命令 bundle，不作为平台 Hook 直接安装；Native 主流程与 Guard 都不得依赖外部 Skill
+- 共享入口与 Hook Router 源码位于 `domains/opensuper-entry/`，修改后必须运行 `pnpm build:entry-runtime`，同步 `opensuper-entry-runtime.mjs` 与 `opensuper-hook-router.mjs`
+- 每个平台只安装一份 `opensuper-workflow-guard` Rule；支持 Hook 的平台只安装一个 `opensuper-hook-router.mjs`
+- Router 通过 `.opensuper/current-change.json` 的 `workflow + change` 确定当前需求归属，一次写入最多调用一个 workflow Guard；Native 与 Classic 的 phase、目录、schema 和 Guard 逻辑保持独立
+- 新增或重命名 runtime 入口/生成物时，同步 `config/repository-layout.json`、`assets/manifest.json` 和对应的 `test/repository/*-runtime-assets.test.ts`
 
 ## 脚本依赖关系
 
 ```
-OpenSuper-state.sh ← OpenSuper-guard.sh, OpenSuper-handoff.sh, OpenSuper-archive.sh
-OpenSuper-yaml-validate.sh ← OpenSuper-guard.sh (preflight 阶段)
-OpenSuper-handoff.sh ← OpenSuper-state.sh (写入 handoff_context/handoff_hash)
-OpenSuper-hook-guard.sh ← (独立脚本，由 .claude/settings.local.json 的 PreToolUse hook 调用)
+opensuper-runtime.mjs ← domains/opensuper-classic/*
+opensuper-state.mjs ← domains/opensuper-classic/classic-state-entry.ts
+opensuper-guard.mjs ← domains/opensuper-classic/classic-guard-entry.ts
+opensuper-handoff.mjs ← domains/opensuper-classic/classic-handoff-entry.ts (写入 handoff_context/handoff_hash)
+opensuper-archive.mjs ← domains/opensuper-classic/classic-archive-entry.ts
+opensuper-yaml-validate.mjs ← domains/opensuper-classic/classic-validate-entry.ts
+opensuper-hook-guard.mjs ← domains/opensuper-classic/classic-hook-guard-entry.ts (不直接安装为平台 Hook)
+opensuper-native-runtime.mjs ← domains/opensuper-native/*
+opensuper-native-<command>.mjs ← domains/opensuper-native/native-<command>-entry.ts
+opensuper-native-hook-guard.mjs ← domains/opensuper-native/native-hook-guard-entry.ts (不直接安装为平台 Hook)
+opensuper-entry-runtime.mjs ← domains/opensuper-entry/*
+opensuper-hook-router.mjs ← domains/opensuper-entry/* (平台唯一 Hook 入口，路由一个 workflow Guard)
 ```
 
-新增共享工具函数时（如 hash、yaml 解析），如果两个脚本都需要，允许在各自脚本中独立实现，不强制抽共享文件。
+Classic 命令之间新增共享工具函数时（如 archive 目录解析、change name 校验、hash、yaml 解析），优先放在 `domains/opensuper-classic/` 的共享模块中，再重新生成全部 bundle，避免多个命令漂移。跨 workflow 的稳定契约放在 `domains/workflow-contract/`，入口归属与路由放在 `domains/opensuper-entry/`；不要为了复用而合并 Native 与 Classic 的状态机或 Guard。
 
-## .OpenSuper.yaml 状态机
+## .opensuper.yaml 状态机
 
 每个 change 的状态文件，字段变更需要同步三处：
-1. `OpenSuper-state.sh` — `cmd_set` 白名单 + enum 验证
-2. `OpenSuper-yaml-validate.sh` — schema 校验 + KNOWN_KEYS
-3. `test/ts/OpenSuper-scripts.test.ts` — 测试中的 yaml 字符串
+
+1. `domains/opensuper-classic/classic-state-command.ts` — `set` 白名单 + enum 验证
+2. `domains/opensuper-classic/classic-validate-command.ts` — schema 校验 + KNOWN_KEYS
+3. `test/domains/opensuper-classic/opensuper-scripts.test.ts` — 测试中的 yaml 字符串
 
 ## 双语言 Skill
 
 skill 优化时先写中文版本（`assets/skills-zh/`），用户确认后再修改英文版本（`assets/skills/`）。
+
+## 中文术语翻译规范
+
+中文文档不得把英文 “gate” 直译为“门”（如“压缩门”“调试门”“确认门”），这种译法在中文语境下不自然。应按实际含义翻译：
+
+- `gate`（阶段性检查/阻塞点）→ 根据语境用“协议”“阶段”“检查”“阻塞点”等，如 `debug gate` → “异常调试协议”
+- 修饰词性质的 `proactive/active` → “主动式”，如 `proactive context compression` → “主动式上下文压缩”，不写作“主动压缩门”
+- 英文版保持原术语（如 Debug Gate），仅中文版需要遵循本规范
 
 ## Skill 触发表述规范
 
@@ -60,6 +157,8 @@ skill 优化时先写中文版本（`assets/skills-zh/`），用户确认后再�
 - 后续输入、上下文或执行要求写在“技能加载后 / After the skill loads”段落，不要把 `ARGUMENTS`、`fast-forward` 等另一套调用术语混入触发句。
 
 ## Changelog 规范
+
+Changelog写英文
 
 每次代码产生变更你都应该在完成后写Changelog，并确定是否需要升级版本号，版本号只会比master分支的版本号大一个版本，你需要确定一下当前master的版本号后做决定
 
@@ -78,16 +177,88 @@ skill 优化时先写中文版本（`assets/skills-zh/`），用户确认后再�
 ```
 
 要点：
+
 - 版本号与 `package.json` 的 `version` 字段一致
 - 每条以 `- **粗体关键词**: ` 开头，后接具体变更内容
 - 按类型分组：Added → Changed → Fixed → Tests → Removed → Security
 - 描述侧重 **行为变更**（what + why），不是实现细节
 - `### Tests` 条目汇总新增测试覆盖的场景，不逐条列出测试用例
 
+写的Changelog应该是用户可视的版本，如果在一个分支上多次解决问题，但又不是master中的问题，而是开发中的问题，那这种内容不需要写入
+
+### 常见错误：写偏问题
+
+**核心规则：每个版本条目只描述与上一个 tag 之间的差异，不是开发过程记录。**
+
+错误做法：
+
+- 把开发分支上的所有迭代都写进 changelog
+- 记录设计过程、文档迭代、重构历史
+- 把已经在上一个 tag 中发布的内容重复写入
+- 把开发中解决的内部问题（而非最终用户可见的改动）写入
+
+正确做法：
+
+- 先用 `git log <上一个tag>..HEAD --oneline` 确认实际改动范围
+- 只写最终用户升级后能感知到的变化
+- 如果一个功能经历了多轮迭代，只写最终形态，不写中间过程
+- 如果一个改动在开发中解决了多个内部问题，合并为一条用户视角的描述
+- 开发中的设计文档、重构、内部修复不需要出现在 changelog 中（除非它们改变了用户可见行为）
+
+判断标准：**"一个从上个版本升级的用户，会注意到这个变化吗？"** 如果不会，不要写入。
+
+### Changelog 发布视角检查
+
+写 `CHANGELOG.md` 前必须先完成以下检查，不允许直接把 commit log 改写成 changelog：
+
+1. **确定比较基线**
+   - 确认 `package.json` 当前版本、`origin/master` 版本、上一个发布 tag。
+   - 用 `git log <上一个tag>..HEAD --oneline` 只生成候选清单，不等于逐条写入。
+   - 如果当前分支已有高于 master 的版本条目，只重写/追加到同一个版本条目，不新增流水账版本。
+
+2. **先列候选，再筛选**
+   每个候选变化都必须先判断：
+   - 用户从上一个版本升级后是否会感知到？
+   - 它是最终能力/行为，还是开发中间状态？
+   - 它应该归类为 Added / Changed / Fixed / Removed / Security 中哪一类？
+   - 是否有 issue / PR / 用户报告可追溯？
+
+3. **禁止写入开发过程**
+   不写：
+   - 分支内反复修正、review follow-up、doc sync、coverage、test refactor
+   - “修复刚新增功能里的问题”，除非该问题已经存在于 master / 已发布版本
+   - 设计过程、重构过程、命名迁移过程
+   - 预发布内部格式、未公开 CLI 别名、后端术语清理
+
+   应合并为：
+   - 一个最终用户可见能力
+   - 一个从已发布版本继承来的用户可见修复
+   - 一个安全/依赖风险修复
+
+`### Tests` 只在测试/评估能力本身是用户可运行的发布能力时使用；普通回归测试、覆盖率补充、测试文件迁移不写入 changelog。
+
+### Changelog 分类规则
+
+- `Added`: 新命令、新平台、新 workflow、新用户可运行能力。
+- `Changed`: 已有行为的用户可见语义变化，例如默认值、路由、升级判定、输出结构。
+- `Fixed`: 修复已发布版本或 master 中用户会遇到的问题；新功能开发过程中发现并修掉的问题不算 Fixed。
+- `Removed`: 移除用户曾经可见或可用的能力；未发布的内部别名/临时格式不要写。
+- `Security`: 依赖漏洞、权限、路径穿越、敏感信息、执行安全相关修复。
+
 ## 修改Skill规范
 
 不能够直接修改Superpowers和OpenSpec的原始Skill
 
+除非用户明确同意，否则不得使用 Superpowers 的任何 Skill。
+
 ## github规范
 
 不能未经过同意直接在github上评论或者提交PR
+
+## README改动
+
+先写中文，再写英文，当feature更新后，更新README应该保持克制，确定是否是必要的需要列在READMD的内容，这部分要用户阅读友好，必要的亮点特性应该以文档引用的形式存在docs目录下
+
+## OpenSuper Dashboard规范
+
+OpenSuper Dashboard实现时尽量采用使用AntD React组件

@@ -1,0 +1,5 @@
+interface:
+  display_name: 'OpenSuper Classic Phase 2: Design'
+  short_description: 'Discuss technical choices and confirm the design with the user'
+policy:
+  allow_implicit_invocation: true

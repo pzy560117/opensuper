@@ -1,0 +1,9 @@
+You are working on a Python project named `wordcount-cli` and evaluating Native's same-root parallel safety. Do not implement a product feature.
+
+Begin by invoking `/opensuper-native`. Initialize Native under `docs/opensuper/`, establish one canonical specification for `word-normalization`, and create two distinct active changes named `normalize-case` and `preserve-acronyms`. Give each a real brief and a complete target specification that modifies the same capability and artifact with distinct proposed behavior. Native must remain process-free; do not initialize Git or depend on VCS metadata.
+
+Run the Runtime's read-only status inspection for `normalize-case` and save its exact JSON envelope to `.cache/opensuper-native-eval/conflict-status.json`. The status must report the definite active-change conflict without exposing machine identity or path details.
+
+Read the current `state_version` of `normalize-case`, prepare one normal Runtime state update, and launch two real concurrent submissions against that same state version with different summaries. Save each exact JSON envelope separately as `.cache/opensuper-native-eval/mutation-attempt-a.json` and `.cache/opensuper-native-eval/mutation-attempt-b.json`. Exactly one write must succeed; the other must be rejected by Runtime's lock or state-version conflict. The validator will inspect both outcomes and the final portable state.
+
+Keep both changes active and do not archive either one. Do not serialize the writes, retry away the conflict, or hand-edit state. Do not fabricate or hand-author the three required command envelopes. Use only the OpenSuper Native Skill and bundled Runtime; do not create OpenSpec, Classic, or change-local `runtime/`, trajectory, checkpoint, receipt, evidence, snapshot, or hash files. `.opensuper/runtime` is Runtime-owned and is allowed.

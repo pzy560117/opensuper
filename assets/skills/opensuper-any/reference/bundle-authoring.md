@@ -1,0 +1,166 @@
+# Bundle Authoring Reference
+
+`opensuper creator` is `/opensuper-any`'s ordinary CLI surface, backed by the deterministic `opensuper bundle` backend. Ordinary users should not memorize Bundle subcommands; Skill Creator turns the confirmed Workflow Contract into a plan and uses the CLI to maintain state.
+
+## Workflow Contract Input
+
+The new `plan.json` uses `workflow` as the primary input:
+
+```json
+{
+  "goal": "Customize /opensuper-classic five-phase Skills with component and whitebox review requirements.",
+  "skillCreatorIntent": "customize-opensuper",
+  "workflow": {
+    "kind": "opensuper-five-phase-overlay",
+    "name": "team-opensuper",
+    "goal": "Require component and whitebox review Skills.",
+    "nodes": {
+      "execute": {
+        "requiredSkillCalls": [
+          {
+            "skill": "elementui",
+            "reason": "Use project component library during direct implementation."
+          }
+        ]
+      },
+      "subagent-execute": {
+        "requiredSkillCalls": [
+          {
+            "skill": "elementui",
+            "scope": "handoff"
+          }
+        ]
+      },
+      "review": {
+        "requiredSkillCalls": [
+          {
+            "skill": "whitebox-code-standard",
+            "scope": "review"
+          }
+        ]
+      }
+    }
+  },
+  "engineMode": "deterministic",
+  "runnerMode": "standalone"
+}
+```
+
+Field rules:
+
+- `workflow.kind`: `opensuper-five-phase-overlay` or `workflow-kernel`.
+- `workflow.nodes`: per-Node patches for the workflow.
+- `implementation`: replace Node implementation. Only allowed on Nodes that support override.
+- `requiredSkillCalls`: Required Skill Calls inside the Node.
+- `augmentations`: helper Skills that do not replace the main implementation. Every new binding or schema must declare enforcement: `guarded`, `handoff-guarded`, `evidence-only`, or `advisory`.
+- `satisfies`: Output Schema ids satisfied by a producer override.
+- `outputSchemas`: advanced `workflow-kernel` definitions may add custom Output Schemas. Output Schema must be attached to a concrete Workflow Node before it is effective; defining it only in `workflow.outputSchemas` does not trigger guard, eval, or readiness.
+- `customNodes[].responsibility`: every custom Node must declare its Agent workflow responsibility.
+- `customNodes[].requiredSkillCalls`: custom Nodes may directly declare required Skill calls; generated scripts block progress until evidence is recorded.
+
+## Built-In OpenSuper Nodes
+
+`opensuper-five-phase-overlay` includes these Workflow Nodes:
+
+- `opensuper-five-phase-overlay` primary state comes only from `<classic-change-dir>/.opensuper.yaml` bound by the Classic layout resolver; no active change or multiple active changes must block and ask the user to choose.
+- The overlay must not create `.opensuper/runs/<workflow>/state.json` as the OpenSuper overlay primary state; overlay scripts only read and advance `.opensuper.yaml`, while other files may be draft, eval, or publish evidence.
+- `open`: control, preserves OpenSuper intake and `.opensuper.yaml` initialization.
+- `design`: producer, may be overridden only when it satisfies `opensuper.design.v1`.
+- `plan`: producer, may be overridden only when it satisfies `opensuper.plan.v1`.
+- `execute`: control, may require or augment Skills such as `elementui`.
+- `subagent-execute`: Handoff, may require subagents to use `elementui` and return evidence.
+- `review`: Guardrail, may require `whitebox-code-standard`.
+- `verify`: control, preserves verification and branch finishing.
+- `archive`: control, preserves OpenSpec archive and delta sync.
+
+Custom `workflow-kernel` Node example:
+
+```json
+{
+  "id": "delegate-notes",
+  "label": "Delegate Notes",
+  "kind": "handoff",
+  "responsibility": "Delegate release note drafting and require returned evidence.",
+  "implementation": {
+    "skill": "handoff-coordinator",
+    "scope": "handoff"
+  },
+  "requiredSkillCalls": [
+    {
+      "skill": "release-notes",
+      "scope": "handoff"
+    }
+  ],
+  "operations": ["require", "augment"],
+  "outputSchemas": ["release.notes.v1"],
+  "guardrails": [
+    {
+      "id": "handoff-returned",
+      "label": "Handoff returned evidence",
+      "validation": "semantic"
+    }
+  ]
+}
+```
+
+## Generated Package
+
+Factory must generate:
+
+- entry `SKILL.md`
+- one internal Skill per Workflow Node
+- `reference/workflow-protocol.json`
+- `reference/resolved-skills.json`
+- `reference/decision-points.md`
+- `reference/recovery.md`
+- `reference/authoring-lanes.json`
+- `reference/skill-review.md`
+- `scripts/workflow-state.mjs`
+- `scripts/workflow-guard.mjs`
+- `scripts/workflow-handoff.mjs`
+- `scripts/opensuper-plan.mjs`
+- `scripts/opensuper-check.mjs`
+- `scripts/opensuper-hook-guard.mjs`
+- `opensuper/eval.yaml`
+
+The three `workflow-*.mjs` scripts are authored per workflow contract; the three `opensuper-*.mjs` scripts are deterministically generated by the factory (plan alias, required-files check, hook guard) and read the same `workflow-protocol.json`.
+
+`workflow-protocol.json` is the shared source of truth for runtime, eval, review, and publish readiness.
+
+## CLI Lifecycle
+
+Common Creator commands:
+
+```bash
+opensuper creator guide --project . --json
+opensuper creator candidates --json
+opensuper creator propose <name> --file <plan.json> --json
+opensuper creator init <name> --file <plan.json> --confirmed-proposal --json
+opensuper creator resolve <name> --candidate <query> --source <root-or-hash> --json
+opensuper creator generate <name> --json
+opensuper bundle compile <name> --platform <id> --json
+opensuper eval <generated-skill>/opensuper/eval.yaml --quick --html
+opensuper eval <generated-skill>/opensuper/eval.yaml --full --html
+opensuper publish review <name> --platform <reference-platform> --json
+opensuper publish approve <name> --reviewer <reviewer> --json
+opensuper publish run <name> --platform <reference-platform> --json
+opensuper publish distribute <name> --platform <id> --scope project --preview --json
+```
+
+`<generated-skill>` is the directory for the compiled Skill. Eval results must be recorded as current draft hash eval evidence; readiness reads only evidence for that hash. Stale eval evidence may remain for audit, but cannot advance ready.
+
+## Readiness
+
+Readiness must check:
+
+- resolved Skills have no missing or ambiguous entries.
+- the proposal has been confirmed.
+- `workflow-protocol.json` loads successfully.
+- no ordinary control Node override exists.
+- producer overrides satisfy Output Schemas.
+- every new binding or schema has `guarded`, `handoff-guarded`, `evidence-only`, or `advisory` enforcement.
+- current draft hash eval evidence exists and is not stale.
+- human review approved the current hash.
+- capability gaps and executable disclosures have been shown.
+
+Non-JSON output must still show `Readiness:`, `Blockers:`, `Warnings:`, and `Evidence:`.

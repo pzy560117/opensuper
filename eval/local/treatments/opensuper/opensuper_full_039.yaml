@@ -1,0 +1,141 @@
+# Full opensuper skill treatment (0.3.9 baseline, .sh runtime)
+# Injects: the 0.3.9 OpenSuper snapshot plus the same benchmark dependency
+# snapshots used by the 0.4.0 treatment. Source dirs are prefixed
+# opensuper-classic-039* to avoid colliding with the 0.4.0 sources, but the
+# injected skill names are restored to opensuper/opensuper-open/etc. so the 0.3.9
+# boilerplate `find ... */opensuper/scripts/opensuper-env.sh` resolves.
+OPENSUPER_FULL_039:
+  description: "0.3.9 baseline opensuper skill (shell runtime) with OpenSuper, OpenSpec, and Superpowers dependencies"
+  skills:
+    # Main dispatcher (carries scripts/ with the frozen 0.3.9 .sh launchers)
+    - name: opensuper
+      skill: 039-release/opensuper-classic-039
+      variant: all
+      base: benchmarks
+    # Phase sub-skills — source is the 0.3.9 snapshot, injected under canonical names
+    - name: opensuper-open
+      skill: 039-release/opensuper-classic-039-open
+      variant: all
+      base: benchmarks
+    - name: opensuper-design
+      skill: 039-release/opensuper-classic-039-design
+      variant: all
+      base: benchmarks
+    - name: opensuper-build
+      skill: 039-release/opensuper-classic-039-build
+      variant: all
+      base: benchmarks
+    - name: opensuper-verify
+      skill: 039-release/opensuper-classic-039-verify
+      variant: all
+      base: benchmarks
+    - name: opensuper-archive
+      skill: 039-release/opensuper-classic-039-archive
+      variant: all
+      base: benchmarks
+    - name: opensuper-hotfix
+      skill: 039-release/opensuper-classic-039-hotfix
+      variant: all
+      base: benchmarks
+    - name: opensuper-tweak
+      skill: 039-release/opensuper-classic-039-tweak
+      variant: all
+      base: benchmarks
+    # OpenSpec workflow dependencies (benchmark dependency snapshots).
+    - name: openspec-apply-change
+      skill: dependency/openspec/openspec-apply-change
+      variant: all
+      base: benchmarks
+    - name: openspec-archive-change
+      skill: dependency/openspec/openspec-archive-change
+      variant: all
+      base: benchmarks
+    - name: openspec-bulk-archive-change
+      skill: dependency/openspec/openspec-bulk-archive-change
+      variant: all
+      base: benchmarks
+    - name: openspec-continue-change
+      skill: dependency/openspec/openspec-continue-change
+      variant: all
+      base: benchmarks
+    - name: openspec-explore
+      skill: dependency/openspec/openspec-explore
+      variant: all
+      base: benchmarks
+    - name: openspec-ff-change
+      skill: dependency/openspec/openspec-ff-change
+      variant: all
+      base: benchmarks
+    - name: openspec-new-change
+      skill: dependency/openspec/openspec-new-change
+      variant: all
+      base: benchmarks
+    - name: openspec-onboard
+      skill: dependency/openspec/openspec-onboard
+      variant: all
+      base: benchmarks
+    - name: openspec-propose
+      skill: dependency/openspec/openspec-propose
+      variant: all
+      base: benchmarks
+    - name: openspec-sync-specs
+      skill: dependency/openspec/openspec-sync-specs
+      variant: all
+      base: benchmarks
+    - name: openspec-verify-change
+      skill: dependency/openspec/openspec-verify-change
+      variant: all
+      base: benchmarks
+    # Superpowers dependencies used by OpenSuper phase guidance and recovery paths.
+    - name: brainstorming
+      skill: dependency/superpowers/brainstorming
+      variant: all
+      base: benchmarks
+    - name: dispatching-parallel-agents
+      skill: dependency/superpowers/dispatching-parallel-agents
+      variant: all
+      base: benchmarks
+    - name: executing-plans
+      skill: dependency/superpowers/executing-plans
+      variant: all
+      base: benchmarks
+    - name: finishing-a-development-branch
+      skill: dependency/superpowers/finishing-a-development-branch
+      variant: all
+      base: benchmarks
+    - name: receiving-code-review
+      skill: dependency/superpowers/receiving-code-review
+      variant: all
+      base: benchmarks
+    - name: requesting-code-review
+      skill: dependency/superpowers/requesting-code-review
+      variant: all
+      base: benchmarks
+    - name: subagent-driven-development
+      skill: dependency/superpowers/subagent-driven-development
+      variant: all
+      base: benchmarks
+    - name: systematic-debugging
+      skill: dependency/superpowers/systematic-debugging
+      variant: all
+      base: benchmarks
+    - name: test-driven-development
+      skill: dependency/superpowers/test-driven-development
+      variant: all
+      base: benchmarks
+    - name: using-git-worktrees
+      skill: dependency/superpowers/using-git-worktrees
+      variant: all
+      base: benchmarks
+    - name: verification-before-completion
+      skill: dependency/superpowers/verification-before-completion
+      variant: all
+      base: benchmarks
+    - name: writing-plans
+      skill: dependency/superpowers/writing-plans
+      variant: all
+      base: benchmarks
+    - name: writing-skills
+      skill: dependency/superpowers/writing-skills
+      variant: all
+      base: benchmarks

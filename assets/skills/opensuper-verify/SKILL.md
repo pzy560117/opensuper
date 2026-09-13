@@ -1,302 +1,227 @@
 ---
 name: opensuper-verify
-description: "opensuper Phase 4: Verify and Close. Invoke with /opensuper-verify. Verify implementation matches design, handle development branch."
+description: 'Verify a Classic change and record the results. Use when the user invokes /opensuper-verify or Classic Runtime enters Verify.'
 ---
 
-# opensuper Phase 4: Verify and Close (Verify)
+# OpenSuper Phase 4: Verify
 
-## Output Language Contract
-
-- Output language: English.
-- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
-- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
-- Use another prose language only when the user explicitly requests it.
+After entry returns layout, follow `opensuper-classic/reference/classic-layout.md` to bind each logical root to its directory. Do not reload the protocol if it is already in context. Use the adapter for OpenSpec CLI calls and the bound `<classic-*>` roots for paths; do not run an extra root show first.
 
 ## Prerequisites
 
-- Code committed (Phase 3 complete)
-- All tasks.md tasks completed
+- Code is committed; Phase 3 is complete.
+- Every task in tasks.md is complete.
 
 ## Steps
 
-### 0a. Output Language Constraint
+### 0a. Set the output language
 
-Verification reports and branch-handling notes must use the language of the user request that triggered this workflow.
+Use configuration.language from this invocation's entry result for the report. Do not query the language field separately.
 
-### 0b. Entry State Verification (Entry Check)
+### 0b. Validate entry state
 
-Execute entry verification:
-
-```bash
-opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
-if [ -z "$opensuper_ENV" ]; then
-  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
-  return 1
-fi
-. "$opensuper_ENV"
-"$opensuper_BASH" "$opensuper_STATE" check <change-name> verify
-```
-
-Proceed to Step 1 after verification passes. The script outputs specific failure reasons when verification fails.
-
-**Idempotency**: All verify phase checks can be safely re-executed. If `verify_result` is already `pass` and `branch_status` is `handled`, verification is complete — execute guard to transition. If `verify_result` is `pending`, start verification from the beginning.
-
-### 1. Scale Assessment
-
-Execute scale assessment:
+Use the supported `opensuper` CLI in `opensuper-classic/reference/scripts.md` for these checks. When resuming from any entry, first follow `opensuper-classic/reference/context-recovery.md`:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" scale <change-name>
+opensuper state select <change-name>
+opensuper state check <change-name> verify --json
 ```
 
-The script automatically counts tasks, delta spec count, changed file count, determines light or full verification mode, and sets the verify_mode field. Decision rule (any condition triggers full): tasks > 3, delta spec capabilities > 1, changed files > 4.
+Continue from the returned layout, configuration, nextAction, task information, and coordination summary. If checks and the integration review remain valid, finish only the missing work instead of rerunning the phase. After context loss, use --recover --details --json when full records are needed. Handle the reported cause of any failure.
 
-Before verification begins, handle uncommitted changes through `opensuper/reference/dirty-worktree.md` protocol. Verify phase special handling:
+If select/check returns `BLOCKED` because `bound_branch` differs from the current branch, pause under `opensuper-classic/reference/decision-point.md`. Offer a single choice: return to the bound branch and rerun entry checks, or, after the user explicitly confirms that the current branch should take over this change, run `opensuper state rebind <change-name>` and rerun entry checks. Do not switch or rebind branches yourself.
 
-1. If dirty diff belongs to current change and involves implementation, tests, tasks, delta spec, or design doc changes, do not fix or commit directly in verify phase; report failures and enter Step 1b verification failure decision blocking point
-2. If dirty diff is only verify phase artifacts (e.g., verification report draft, branch handling records), may continue and record state in verify phase
-3. If dirty diff shows implementation but tasks.md not checked, treat as build state lag; report failures and enter Step 1b, let user decide to roll back for fix or accept deviation
+**Continue from recorded results:** If `verify_result` is `pass`, proceed to archive. Keep `branch_status` at `pending` until the archive commit and final branch handling are complete. If `verify_result` is `pending`, inspect existing reports and results, then resume unfinished checks.
 
-Only after user chooses fix, allow rollback to build phase:
+After context loss, follow `evidence.scopes`: reuse local results marked `revalidated`; rerun the parts marked `rerun-required`. Do not repeat completed requirements analysis or reviews that still apply. Do not assume external checks are idempotent or their environments remain unchanged.
+
+### 1. Assess the change size
+
+Run:
 
 ```bash
-# Execute only after user confirms fix
-"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail
+opensuper state scale <change-name>
 ```
 
-Note: When verify-fail rolls back to build, `branch_status` is not reset. If branch handling was already completed during the first verify attempt, skip the branch handling step on re-verify and keep the existing `branch_status: handled`.
+The script counts tasks, delta specs, and changed files, returning a light/full recommendation without changing `verify_mode`. Use `--json` for `data.recommendation`, `data.selected`, and `data.metrics`. Preserve an already selected mode. Otherwise, choose based on risk and record it with `opensuper state set <change-name> verify_mode <light|full>`. Scale recommends full if any of these hold: tasks > 3, delta-spec capabilities > 1, or changed files > 8.
 
-Note: If every task in build phase was committed, the script's file count based on working tree diff may underestimate change scale. In this case, must read plan file header `base-ref` and verify with commit range:
+`opensuper state scale` resolves the baseline from the plan's `base-ref`, falling back to state `base_ref` when the plan is unavailable. Do not reread plan frontmatter or build a second scale calculation manually.
+
+Before verification, inspect uncommitted changes under `opensuper-classic/reference/dirty-worktree.md`. Apply these Verify-specific rules:
+
+1. Include uncommitted changes clearly belonging to this change in the verification input. Continue verifying, but do not modify or commit implementation, tests, tasks, delta spec, or the Design Doc in Verify.
+2. If uncommitted changes are Verify artifacts, such as a draft report, continue completing them and recording state in Verify.
+3. If implementation exists but tasks.md is unchecked, Build's task record is behind the code. Run `verify-fail` directly to return to Build, inspect evidence, and update task state. Do not ask whether to accept unfinished tasks.
+4. If ownership cannot be established or the changes belong to another change, report the stopping condition from dirty-worktree. Do not offer “continue/ignore” before ownership is known.
+
+To return to Build for repairs or missing state:
 
 ```bash
-PLAN=$("$opensuper_BASH" "$opensuper_STATE" get <change-name> plan)
-BASE_REF=$(grep '^base-ref:' "$PLAN" 2>/dev/null | head -1 | sed 's/^base-ref: *//')
-git diff --stat "$BASE_REF"...HEAD
+opensuper state transition <change-name> verify-fail
 ```
 
-If commit range shows changes exceed lightweight threshold (> 4 files, cross-module coordination, or delta spec spans more than 1 capability), manually set to full verification:
+**Adjust verification mode:** If the Agent or user considers the automatic recommendation unsuitable, change the mode with `opensuper state set <change-name> verify_mode <light|full>`.
+
+Small changes do not waive risk checks. Authentication/authorization, data migrations, concurrency, public APIs, and cross-module interface requirements need their relevant risk scenarios verified. Use full when light cannot cover them.
+
+### 1b. Repair verification failures and handle user decisions
+
+On failure, read the consecutive failure count and nextAction from the latest entry. Query `opensuper state get <change-name> verify_failures` only if the field is missing; do not treat a missing field as zero. Automatically return to Build for the first 3 repairable failures: report the failure, run `opensuper state transition <change-name> verify-fail`, then invoke `/opensuper-build` to finish only missing implementation, checks, reviews, or task marks. Do not repeat completed work.
+
+Report:
+
+- The failed items.
+- Whether they are CRITICAL or IMPORTANT: build/test failures, security issues, core acceptance failures, or correctness/security/edge-case issues from the simplified code review.
+- The recommended response.
+
+**When severity is uncertain**, use the lower level. Use CRITICAL only for build failures, test failures, or security issues. Use IMPORTANT for definite effects on core acceptance or correctness. Mark vague or uncertain issues WARNING or SUGGESTION.
+
+Handle them as follows:
+
+- **CRITICAL/IMPORTANT or a clearly repairable in-scope issue:** return to Build automatically while below the limit. Do not add “should I fix it?” approval or allow the deviation to be accepted.
+- **WARNING/SUGGESTION whose fix changes behavior, scope, or risk tradeoffs:** follow `opensuper-classic/reference/decision-point.md` and let the user choose repair or acceptance. Record the reason and affected scope if accepted.
+- **WARNING/SUGGESTION with a safe, local fix and no tradeoff:** repair automatically while below the limit; low severity alone does not require a pause.
+
+Accepting WARNING/SUGGESTION deviations or choosing a strategy after the fourth failure requires a user decision. When current `verify_failures >= 3`, do not automatically run another `verify-fail`. Offer only “Continue repairing” or “Stop this workflow and seek an external decision.” Record the next failure and return to Build only after the user chooses to continue. CRITICAL/IMPORTANT findings can never be waived.
+
+### 2. Read the artifacts needed for verification
+
+When verification needs OpenSpec artifacts, use the handoff status already returned by entry. Run this only if entry lacks the current hash comparison:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" set <change-name> verify_mode full
+opensuper handoff <change-name> --hash-only
 ```
 
-**Override mechanism**: If the agent or user believes the automated assessment is inappropriate, override at any time with `"$opensuper_BASH" "$opensuper_STATE" set <change-name> verify_mode <light|full>`.
+- Compare the current hash with the recorded value from entry. Query `opensuper state get <change-name> handoff_hash` only if that value is absent. If both hashes are nonempty, non-null, and equal, reuse content only if that version is still in context. Read any missing sections needed for acceptance, and still verify task completion marks.
+- If `RECORDED_HASH` is empty, `null`, or differs from `CURRENT_HASH`, read every required source file in full because artifacts changed or the hash was not recorded.
 
-### 1b. Verification Failure Decision (Blocking Point)
+Matching hashes do not mean the content remains in context. After context loss, truncation, or uncertainty about what was read, reload the corresponding sources. A handoff summary cannot replace acceptance clauses that have not been read.
 
-When verification does not pass, **must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user to decide whether to fix or accept the deviation**. Must not automatically run `"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail`, nor automatically invoke `/opensuper-build`.
+Autonomous performs the actual checks and records results under this Skill without requiring an external verification skill. Other strategies load Superpowers `verification-before-completion` through the Skill tool. No strategy may declare verification successful based only on self-assessment.
 
-When pausing, must list:
-- Failed items
-- Whether CRITICAL or IMPORTANT (build failure, test failure, security issues, core acceptance scenario failure, lightweight code review correctness/security/edge-case issue)
-- Recommended handling approach
+Verify owns the single final integration code review for the whole change. Build retains task/section reviews only. Before taking the verify_mode branch, review the final diff, including fixes from Build reviews:
 
-**Uncertainty principle**: When severity is unclear, downgrade (SUGGESTION > WARNING > CRITICAL). Only use CRITICAL for build failures, test failures, and security issues; ambiguous or uncertain issues should be WARNING or SUGGESTION.
+- `review_mode: off`: skip automatic code review and record why in the report.
+- `review_mode: standard|thorough`: dispatch an independent reviewer across the entire change. Check requirements, actual diffs, check results, and repairs, focusing on correctness, security, and edge cases. Autonomous needs no external review skill; other strategies load requesting-code-review once. Reuse a valid review covering the current final diff. After input changes, review affected parts rather than unconditionally repeating the whole review. Stop if independent review is unavailable; implementer self-review is not a substitute.
 
-After user selection, continue as follows:
-- **Fix all**: Run `"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail`, then invoke `/opensuper-build` to fix
-- **Handle item by item**: CRITICAL or IMPORTANT failures must be fixed; WARNING/SUGGESTION failures may choose to accept deviation, but must record acceptance reason and impact scope in verification report. If any CRITICAL or IMPORTANT failure exists, skipping fix to accept all is not allowed
+Return CRITICAL/IMPORTANT integration-review findings to Build under Step 1b. Handle non-CRITICAL deviations using Step 1b's tradeoff rules. Then follow verify_mode:
 
-**Retry limit**: After 3 consecutive verify-fail cycles, on the 4th failure the agent must not automatically choose to continue fixing; **must use the current platform's available user input/confirmation mechanism to pause** with only two options: "Accept all deviations and record" or "Continue fixing", for the user to explicitly decide.
+### 2a. Light verification
 
-### 2. Artifact Context Loading (Hash On-Demand Read)
+Check all 7 items:
 
-When verification needs to read OpenSpec artifacts, first check whether they have changed since the design phase:
+1. Every tasks.md task is completed `[x]`.
+2. Changed files match tasks.md; compare task content against `git diff --stat` / `git diff --cached --stat` / `git diff --stat <base-ref>...HEAD`.
+3. Compilation passes; reuse Build evidence only when Runtime confirms it remains valid, otherwise rerun it.
+4. Relevant tests pass.
+5. No obvious security issues, such as hard-coded secrets or new unsafe operations.
+6. Final integration review passes, or its omission under non-full-autonomous `review_mode: off` is recorded. Full autonomous cannot skip independent review.
+7. Core success, important failure/edge cases, and the high-risk requirements affected by this change all pass. Small changes may not omit these.
+
+To reuse a build, call `opensuper check run <change-name> build --local -- <program> [args...]` with the same cwd, program, and arguments used in Build. Reuse counts only when Runtime returns `reused=true`; changed inputs or environment cause an actual rerun. A past conversation saying “build passed” does not justify skipping the check.
+
+Both light and full must execute actual verification commands through Runtime. Record the intended report path first so changes to the report are not counted as changes to verification inputs. Fill in results after tests and acceptance checks finish:
 
 ```bash
-RECORDED_HASH=$("$opensuper_BASH" "$opensuper_STATE" get <change-name> handoff_hash)
-CURRENT_HASH=$("$opensuper_BASH" "$opensuper_HANDOFF" <change-name> --hash-only 2>/dev/null || echo "")
+opensuper state set <change-name> verification_report docs/superpowers/reports/YYYY-MM-DD-<change-name>-verify.md
+opensuper check run <change-name> verify --local -- <program> [args...]
 ```
 
-- If `RECORDED_HASH` = `CURRENT_HASH` and both are non-empty and neither is `null`: OpenSpec artifacts are unchanged. **tasks.md does not need to be re-read in full** (use `grep -c '\- \[ \]' tasks.md` to confirm completion count). proposal.md, design.md, and delta specs must still be read for comparison checks.
-- If `RECORDED_HASH` is empty, is `null`, or differs from `CURRENT_HASH`: artifacts have changed or hash was never recorded. Read all required files in full normally.
+Use `--local` only for deterministic local checks. Omit it for external-service checks; their results may support only one successful phase transition. Guard preview does not consume them. `--apply` rechecks them and makes them unusable again after successful advancement. After context loss or input/environment changes, let Runtime decide which checks need rerunning.
 
-This optimization only skips re-reading tasks.md in full. proposal.md and design.md contain the full context needed for verification checks and must not be skipped due to hash match.
+The platform adapter handles ordinary Windows npm/pnpm shims. Batch arguments containing shell metacharacters are rejected. Execute multiple required commands through an existing project verification entry that propagates any failure; a successful last command must not hide an earlier failure. Manual `record-check` only stores a declaration and cannot automatically advance the phase. Verify and Build evidence are separate and cannot substitute for one another. `OPENSUPER_SKIP_BUILD=1` is not a verifiable check record. Read logs through `logRef` as needed.
 
-**Immediately execute:** Use the Skill tool to load the Superpowers `verification-before-completion` skill. Skipping this step is prohibited.
+The integration review uses this change's diff, tasks.md, and necessary test results. It does not replace spec coverage, Design Doc consistency, or divergence checks. `review_mode: off` skips only automatic code review, not builds, tests, security checks, or the debugging protocol.
 
-After the skill loads, follow the `verify_mode` branch:
+**Pass criteria:** all 7 items pass, with no CRITICAL or IMPORTANT issues.
 
-### 2a. Lightweight Verification (Small Changes)
-
-Run these 6 checks:
-
-1. All tasks.md tasks completed `[x]`
-2. Changed files match tasks.md descriptions (`git diff --stat` / `git diff --cached --stat` / `git diff --stat <base-ref>...HEAD` compared against tasks content)
-3. Build passes (run project-specific build command, e.g., `npm run build`, `mvn compile`, `cargo build`, etc.)
-4. Related tests pass
-5. No obvious security issues (no hardcoded keys, no new unsafe operations)
-6. Lightweight code review passes: use the Skill tool to load the Superpowers `requesting-code-review` skill and request a lightweight review that checks only correctness, security, and edge cases
-
-The lightweight code review input should be limited to this change's diff, tasks.md, and necessary test results; the review scope covers implementation correctness, security risk, and edge cases only, and does not perform spec coverage, Design Doc consistency, or drift checks. If the review finds CRITICAL or IMPORTANT issues, treat verification as failed and enter Step 1b.
-
-**Pass criteria**: All 6 items OK, no CRITICAL or IMPORTANT issues.
-
-**When not passing**: Report failures, enter Step 1b verification failure decision blocking point. Only after user confirms fix, execute the following command to record failure and roll back to build phase, then invoke `/opensuper-build` to fix:
+**On failure:** report and classify under Step 1b. If repair is required or suitable and the automatic limit has not been reached, return to Build and invoke `/opensuper-build`:
 
 ```bash
-# Execute only after user confirms fix
-"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail
+opensuper state transition <change-name> verify-fail
 ```
 
-**Report format**: Brief table listing 6 check results + PASS/FAIL.
+**Report:** use a compact table for all 7 results, evidence references, and PASS/FAIL.
 
-**Skipped items** (not checked in lightweight verification):
-- spec scenario coverage
-- design doc consistency deep comparison
-- code pattern consistency suggestions that do not affect correctness, security, or edge cases
-- delta spec and design doc drift detection
+**Not included in light verification:**
 
-### 2b. Full Verification (Large Changes)
+- A scenario-by-scenario coverage count for all specs; core and high-risk scenarios remain mandatory.
+- Detailed comparison of implementation against the Design Doc.
+- Code-pattern consistency suggestions unrelated to correctness, security, or edge cases.
+- Delta-spec/Design-Doc divergence detection.
 
-When scale assessment result is "large":
+### 2b. Full verification
 
-**Immediately execute:** Use the Skill tool to load the `openspec-verify-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
+When the size assessment selects a large change:
 
-After the skill loads, follow its guidance to verify. Check items:
-1. All tasks.md tasks completed (`[x]`)
-2. Implementation matches `openspec/changes/<name>/design.md` high-level design decisions
-3. Implementation matches Design Doc (technical design documents under `docs/superpowers/specs/`)
-4. All capability spec scenarios pass
-5. proposal.md goals are satisfied
-6. No contradictions between delta spec and design doc (if Build phase had incremental spec modifications, check if design doc has corresponding records)
-7. Associated design documents under `docs/superpowers/specs/` are locatable (file exists and is related to current change)
+**Required now:** Load `openspec-verify-change` using the Skill tool. Do not skip this step.
 
-When verification does not pass: report missing items, enter Step 1b verification failure decision blocking point. Only after user confirms fix, execute the following command to record failure and roll back to build phase, then invoke `/opensuper-build` to supplement:
+<!-- external-openspec-skill-override -->
+
+**Adapt external OpenSpec instructions:** Use its verification method only. Replace direct official CLI calls, fixed cwd, and fixed physical OpenSpec paths with `opensuper classic openspec -- <args...>` and resolver-provided `<classic-*>` logical roots.
+
+Follow the skill and check:
+
+1. Every tasks.md task is completed `[x]`.
+2. Implementation follows the high-level decisions in `<classic-change-dir>/design.md`.
+3. Implementation follows the Design Doc, the technical design document under `docs/superpowers/specs/`.
+4. All capability-spec scenarios pass.
+5. proposal.md goals are met.
+6. Delta spec and Design Doc do not conflict; if Build updated the spec, check for corresponding design records.
+7. The linked design document under `docs/superpowers/specs/` exists and belongs to this change.
+
+On failure, report missing items and classify them under Step 1b. If they can be completed within this change and the automatic repair limit has not been reached, return to Build and invoke `/opensuper-build`:
 
 ```bash
-# Execute only after user confirms fix
-"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail
+opensuper state transition <change-name> verify-fail
 ```
 
-**Spec Drift Handling** (user decision point):
-- If check item 6 finds contradictions (delta spec has content but design doc does not reflect it), **must use the current platform's available user input/confirmation mechanism as a single-select question to pause and wait for the user to choose the handling method**; must not select automatically. Options:
-  - Option A: Append "Implementation Divergence" section to design doc recording deviation reason. Option A is a verify phase allowed artifact; after writing, must not re-trigger Step 1b dirty-worktree decision due to that design doc change
-  - Option B: After user selects B, run `"$opensuper_BASH" "$opensuper_STATE" transition <change-name> verify-fail`, then invoke `/opensuper-build`; `/opensuper-build`'s Spec Incremental Update rules will load the Superpowers `brainstorming` skill to update Design Doc + delta spec
-  - Option C: Confirm deviation is acceptable, continue verification (design doc will be marked as `superseded-by-main-spec` during archiving)
+**Resolve spec divergence with the user:**
 
-### 2c. OpenTest Strict Quality Evidence (State-Selected)
+- If item 6 finds content in delta spec that the Design Doc does not reflect, **pause, present a single-choice question, and wait for the user**. Do not choose automatically. Include:
+  - A: append an “Implementation Divergence” section explaining the deviation to the Design Doc. This is an allowed Verify artifact; do not trigger another Step 1b dirty-worktree decision because of this design edit.
+  - B: run `opensuper state transition <change-name> verify-fail` after the user chooses B, then invoke `/opensuper-build`. Build loads Superpowers `brainstorming` under its spec-update rules to update the Design Doc + delta spec.
+  - C: accept the deviation and continue verification. Archive will mark the Design Doc `superseded-by-main-spec`.
 
-OpenTest only produces quality evidence. OpenSuper still owns TDD mode, build execution, Superpowers verification, branch handling, phase transitions, and archive. The target project that installs both independent packages owns the strict artifact, `.opentest.yaml`, ledger, reports, and evidence.
+### 3. Record verification evidence
 
-Read `opentest_gate` first:
-
-#### `required`
-
-1. Confirm `opentest_strict_result` is a non-empty canonical project-relative path with no parent traversal or symlink escape.
-2. After the final commit and evidence update, run the OpenTest producer first from the target project. The OpenSuper guard does not generate this output, and JSON must never be hand-edited:
+Save the report as a file and record its path in `.opensuper.yaml`. Do not handle, merge, or discard branches in Verify, or write `branch_status: handled`. Archive still produces spec and metadata changes that must be in the final commit, so `/opensuper-archive` handles branches after that commit. Do not manually set `verify_result: pass`; the phase guard with `--apply` updates state and advances.
 
 ```bash
-OPENTEST_RESULT=$("$opensuper_BASH" "$opensuper_STATE" get <change-name> opentest_strict_result)
-opentest verify --strict --json --output "$OPENTEST_RESULT"
+opensuper state set <change-name> verification_report docs/superpowers/reports/YYYY-MM-DD-<change-name>-verify.md
 ```
 
-3. The producer must exit 0. Record the strict artifact path, a backlink to the OpenTest final evidence note, and the ledger status in the verification report. Local generation alone is `pass-local` and cannot pass the OpenSuper gate.
-4. After the report is complete, run the verify guard. OpenSuper's shipped adapter discovers the provider consumer in this order: `OPENSUPER_OPENTEST_CONSUMER` → sibling installed `opentest` skill → target-project `node_modules/@pzy560117/opentest/assets/skills/opentest/scripts/opentest-strict-result.mjs`, then delegates semantic recomputation. Each required gate check invokes the provider exactly once, with a fixed 120-second timeout and 1 MiB output-buffer limit. It must validate supported schema `1.x`, the same change, current Git `HEAD`, `state-evidence-v1`, canonical in-project paths, required roles/hashes, no `.pending` marker, and a result of `pass` or valid `risk-accepted`. Before and after the provider call, it resolves the strict result and its `state_file` again, requires both canonical path identities to stay unchanged, and compares the result text plus state raw bytes. Never authorize by reading only the top-level `result`.
+Create `docs/superpowers/reports/` and the report with file tools, not POSIX-only directory commands.
 
-A missing consumer, result, or provider; any non-zero producer/adapter/provider exit; provider timeout/overflow; or missing, malformed, unsupported, failing, stale, wrong-change, path-escaping, hash-mismatched, semantically forged, pending, or call-time identity/byte-changing evidence fails verification and enters Step 1b. `required` never falls back to legacy fields.
+## Exit conditions
 
-If provider recomputation returns `risk-accepted`, follow `opensuper/reference/decision-point.md` to pause for item-by-item human approval. `accepted_by` declares the approver identity; it does not authenticate a human. It must name a specific real person, and an agent/AI/assistant/bot/system/automation/generic-role or placeholder identity cannot self-approve. The verification report must contain exactly one complete, non-empty, parseable delimited machine block below; empty blocks, duplicates, unmatched/extra delimiters, and malformed JSON block. Every accepted entry must contain exactly one of `strict_finding_id` or `strict_key` and match exactly one producer finding:
+- The verification report passes.
+- `.opensuper.yaml` `verification_report` points to an existing report file.
+- `branch_status` remains `pending`.
+- **Phase guard:** run `opensuper guard <change-name> verify --apply`. After all checks pass, the guard uses `opensuper state transition verify-pass` to advance to `phase: archive`, independently of `auto_transition`.
 
-```markdown
-<!-- OPENTEST_GATE_JSON
-{"schema_version":"1.0","change_id":"change-name","gate":"risk-accepted","accepted_findings":[{"strict_finding_id":"RISK-001","reason":"bounded reason","owner":"owner","accepted_by":"Jane Smith","impact_scope":"bounded scope","expires_at":"2099-01-01T00:00:00Z","recovery_path":"issue or concrete remediation"}]}
-OPENTEST_GATE_JSON -->
-```
-
-Every entry requires a non-empty `reason`, `owner`, declarative real-human `accepted_by`, `impact_scope`, future ISO-8601 `expires_at`, and concrete `recovery_path`. `expires_at` may use `Z` or a `±HH:MM` offset and any fractional-second length, but its calendar date, time, and offset must be valid and the resulting instant strictly in the future. A missing/both/type-mismatched selector, unknown or duplicate match, expired value, or any other incomplete entry blocks. Critical, security, data-integrity, money/payment, and other irreversible categories are forbidden regardless of human approval.
-
-#### `not-applicable`
-
-This is only for a docs-only change with no runtime behavior, security, data, payment, or integration change. First pause for human approval. `accepted_by` only declares a specific real-human identity; an agent/AI/generic-role or placeholder value cannot self-approve. The verification report must contain exactly one complete, non-empty, parseable delimited machine block:
-
-```markdown
-<!-- OPENTEST_GATE_JSON
-{"schema_version":"1.0","change_id":"change-name","gate":"not-applicable","scope":"docs-only","reason":"no runtime behavior changes","accepted_by":"Jane Smith"}
-OPENTEST_GATE_JSON -->
-```
-
-`change_id` must match, `reason` must be non-empty, and `accepted_by` must declare a specific non-placeholder real human. Surrounding prose is not authorization; an empty/duplicate block, unmatched/extra delimiter, malformed JSON, missing block, prose-only statement, or `not-run` alone blocks.
-
-In addition to structured approval, the adapter requires `.opensuper.yaml` `base_ref` to be a full 40/64-character immutable commit id that resolves unchanged and is an ancestor of current `HEAD`. It checks committed (`base_ref...HEAD`), staged, unstaged, and untracked paths together. The allowlist is exact: `docs/` accepts only `.md/.txt/.rst/.adoc` and static `.png/.jpg/.jpeg/.gif/.svg/.webp`; the active or dated-archive current-change directory accepts only `.md`, `.openspec.yaml`, and `.opensuper.yaml`; outside those directories, only root ARCHITECTURE/README/CHANGELOG/CONTRIBUTING/LICENSE documents with no extension or `.md/.txt/.rst/.adoc` are accepted. JSON/YAML/MDX, scripts, nested Markdown, and runtime/config paths such as `src/`, `assets/`, `packages/`, `config/`, `.codex/`, CI workflows, and tests block.
-
-#### Absent Field or Literal `null`
-
-Only an absent `opentest_gate` field or its literal value `null` keeps legacy verify/archive behavior without requiring OpenTest. Empty, other, malformed, or duplicate state values block. Legacy is compatibility mode only: never record it as `pass-contract` or claim fusion-complete.
-
-#### Evidence Ledger Values in the Verification Report
-
-| Value | Meaning | Satisfies Gate? |
-|-------|---------|-----------------|
-| `pass-contract` | OpenSuper's adapter/provider consumer successfully recomputed and consumed the strict artifact | Yes, for `required` |
-| `pass-local` | Only the OpenTest-local command passed; OpenSuper has not consumed it | No |
-| `not-run` | OpenTest was not executed | Only with the approved docs-only `not-applicable` exception |
-| `deferred` | Evidence is postponed with follow-up ownership recorded | No; handoff tracking only |
-
-The same gate is called by direct `opensuper-state transition <change-name> verify-pass` and the actual archive preflight, so a direct state transition cannot bypass this step. When an archived locator uses `YYYY-MM-DD-<change-name>`, the adapter locates that dated directory but still compares strict-result and machine-block `change_id` with the original `<change-name>`.
-
-### 3. Finishing (Superpowers)
-
-**Immediately execute:** Use the Skill tool to load the Superpowers `finishing-a-development-branch` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
-
-If the Superpowers `finishing-a-development-branch` skill is unavailable, stop the process and prompt to install or enable Superpowers skills. Do not substitute this step with normal conversation.
-
-After the skill loads, follow its guidance to finish. Branch handling options:
-1. Merge to main branch locally
-2. Push and create PR
-3. Keep branch (handle later)
-4. Discard work
-
-This is a user decision point. **Must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user to choose branch handling method**. Must not select based on recommendations, defaults, or current branch status. Only after the user completes selection and the corresponding operation finishes, may `branch_status: handled` be written.
-
-**Confirmation items**:
-- All tests pass
-- No hardcoded keys or security issues
-
-### 4. Record Verification Evidence
-
-Verification report must be saved to disk and recorded in `.opensuper.yaml`; after branch handling completes, state fields must also be written. Do not manually set `verify_result: pass`; use guard for auto-transition.
+After recording all evidence, advance with the guard:
 
 ```bash
-mkdir -p docs/superpowers/reports
-# Write verification conclusions to report file, e.g.:
-# docs/superpowers/reports/YYYY-MM-DD-<change-name>-verify.md
-
-"$opensuper_BASH" "$opensuper_STATE" set <change-name> verification_report docs/superpowers/reports/YYYY-MM-DD-<change-name>-verify.md
-"$opensuper_BASH" "$opensuper_STATE" set <change-name> branch_status handled
+opensuper guard <change-name> verify --apply
 ```
 
-## Exit Conditions
+State becomes `phase: archive`, `verify_result: pass`, and `verified_at: YYYY-MM-DD`.
 
-- Verification report passed
-- Branch handled
-- `verification_report` in `.opensuper.yaml` points to an existing verification report file
-- `branch_status: handled` in `.opensuper.yaml`
-- With `opentest_gate: required`, the adapter/provider consumer has validated the strict artifact as `pass-contract`; with `not-applicable`, the structured docs-only block is valid; only absent-field/literal-null legacy state is compatible and it must not be labeled fusion-complete
-- **Phase guard**: Run `"$opensuper_BASH" "$opensuper_GUARD" <change-name> verify --apply`; after all PASS, auto-transitions to `phase: archive` through `opensuper-state transition verify-pass`
+## Recover after context compaction
 
-After both verification and branch handling are complete, run guard for auto-transition:
+Follow `opensuper-classic/reference/context-recovery.md` with phase `verify`.
+
+## Continue to the next phase
+
+Follow `opensuper-classic/reference/auto-transition.md` and `agent.continuation` from the successful result. Do not repeat next, select, or check while valid state information is available. Run this only after context loss, external state changes, or when an older result lacks that information:
 
 ```bash
-"$opensuper_BASH" "$opensuper_GUARD" <change-name> verify --apply
+opensuper state next <change-name>
 ```
 
-State file auto-updates to `phase: archive`, `verify_result: pass`, `verified_at: YYYY-MM-DD`.
+- `NEXT: auto`: invoke the skill named by `SKILL`.
+- `NEXT: manual`: do not invoke the next skill. Follow `HINT`, return control, and end this invocation without another confirmation question.
+- `NEXT: done`: the workflow is complete.
 
-## Automatic Handoff to Next Phase
-
-Follow `opensuper/reference/auto-transition.md`. Key command:
-
-```bash
-"$opensuper_BASH" "$opensuper_STATE" next <change-name>
-```
-
-- `NEXT: auto` → invoke the skill pointed to by `SKILL` to enter the next phase
-- `NEXT: manual` → do not invoke the next skill; prompt user to run `/<SKILL>` manually
-- `NEXT: done` → workflow is complete, no further action needed
-
-Note: after `opensuper-archive` starts, it must first execute the final archive confirmation blocking point and wait for the user to explicitly choose "Confirm archive" before running the archive script. Must not automatically archive just because verification passed.
-
-## Context Compression Recovery
-
-Follow `opensuper/reference/context-recovery.md` with phase set to `verify`.
+Archive always requires explicit user authorization, whether NEXT is auto or manual. On first archive, obtain confirmation under opensuper-archive. On recovery, inspect saved delivery records and do not repeat a still-valid choice. Passing verification alone does not authorize archive.

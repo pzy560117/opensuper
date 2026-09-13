@@ -1,0 +1,1207 @@
+from pathlib import Path
+
+import pytest
+
+from scaffold.python.profiles import (
+    AUTHORING_SKILL_PROFILE,
+    OPENSUPER_WORKFLOW_PROFILE,
+    GENERIC_PROFILE,
+    get_profile,
+    list_profiles,
+    resolve_profile_name,
+    run_profile_rubric,
+)
+from scaffold.python.tasks import load_task
+
+
+def test_profile_registry_exposes_generic_and_opensuper_workflow():
+    assert list_profiles() == ["authoring-skill", "opensuper-workflow", "generic"]
+
+    generic = get_profile(GENERIC_PROFILE)
+    opensuper = get_profile(OPENSUPER_WORKFLOW_PROFILE)
+    authoring = get_profile(AUTHORING_SKILL_PROFILE)
+
+    assert generic.name == "generic"
+    assert opensuper.name == "opensuper-workflow"
+    assert authoring.name == "authoring-skill"
+    assert "completion" in generic.rubric_dimensions
+    assert "main_flow" in opensuper.rubric_dimensions
+    assert "generated_package" in authoring.rubric_dimensions
+
+
+def test_get_profile_rejects_unknown_names():
+    with pytest.raises(KeyError, match="Profile not found: unknown"):
+        get_profile("unknown")
+
+
+def test_resolve_profile_name_prefers_cli_override():
+    task = load_task("opensuper-full-workflow")
+
+    assert resolve_profile_name(task, override="generic") == "generic"
+
+
+def test_resolve_profile_name_uses_task_profile_by_default():
+    task = load_task("opensuper-full-workflow")
+
+    assert resolve_profile_name(task) == "opensuper-workflow"
+
+
+def test_opensuper_profile_requires_opensuper_skill_invocation(tmp_path: Path):
+    outputs = {
+        "completion": {"passed": ["median fixed"], "failed": []},
+        "events": {
+            "skills_invoked": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, failed = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert "Required skill not invoked: opensuper" in failed
+    assert any("[RUBRIC] skill_invocation: 0.00" in msg for msg in passed)
+
+
+def test_opensuper_profile_requires_nested_and_dependency_skill_invocations(tmp_path: Path):
+    outputs = {
+        "completion": {"passed": ["median fixed"], "failed": []},
+        "events": {
+            "skills_invoked": ["opensuper"],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, failed = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert "Required nested OpenSuper stage skill not invoked" in failed
+    assert "Required OpenSpec dependency skill not invoked" in failed
+    assert "Required Superpowers dependency skill not invoked" in failed
+    assert any("[RUBRIC] skill_invocation: 0.20" in msg for msg in passed)
+    assert any("opensuper_stage=missing" in msg for msg in passed)
+
+
+def test_opensuper_profile_scores_observed_nested_and_dependency_skill_invocations(
+    tmp_path: Path,
+):
+    outputs = {
+        "completion": {"passed": ["median fixed"], "failed": []},
+        "events": {
+            "skills_invoked": [
+                "opensuper",
+                "opensuper-hotfix",
+                "openspec-new-change",
+                "opensuper-verify",
+                "verification-before-completion",
+            ],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, failed = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert "Required nested OpenSuper stage skill not invoked" not in failed
+    assert "Required OpenSpec dependency skill not invoked" not in failed
+    assert "Required Superpowers dependency skill not invoked" not in failed
+    assert any("[RUBRIC] skill_invocation: 1.00" in msg for msg in passed)
+    assert any("opensuper_stage=opensuper-hotfix, opensuper-verify" in msg for msg in passed)
+    assert any("openspec=openspec-new-change" in msg for msg in passed)
+    assert any("superpowers=verification-before-completion" in msg for msg in passed)
+
+
+def test_opensuper_profile_scores_hotfix_with_hotfix_specific_rubric(tmp_path: Path):
+    change_dir = tmp_path / "openspec" / "changes" / "archive" / "2026-07-01-fix-median"
+    change_dir.mkdir(parents=True)
+    opensuper_dir = change_dir / ".opensuper"
+    opensuper_dir.mkdir()
+    (opensuper_dir / "checkpoint.json").write_text(
+        '{"runId":"r1","contextHash":null,"artifactsHash":"abc","createdAt":"2026-07-01"}',
+        encoding="utf-8",
+    )
+    (opensuper_dir / "run-state.json").write_text(
+        '{"status":"completed","currentStep":"completed"}',
+        encoding="utf-8",
+    )
+    (opensuper_dir / "state-events.jsonl").write_text(
+        '{"to":{"workflow":"hotfix","phase":"archive","archived":true}}\n',
+        encoding="utf-8",
+    )
+    (opensuper_dir / "trajectory.jsonl").write_text("{}\n", encoding="utf-8")
+    (change_dir / "proposal.md").write_text(
+        "\n".join(f"line {i}" for i in range(12)),
+        encoding="utf-8",
+    )
+    (change_dir / "design.md").write_text("Focused hotfix design.", encoding="utf-8")
+    (change_dir / "tasks.md").write_text(
+        "- [x] Reproduce median bug\n- [x] Fix even median\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_stats.py").write_text("def test_even():\n    assert True\n", encoding="utf-8")
+
+    outputs = {
+        "completion": {"passed": ["median fixed"], "failed": []},
+        "events": {
+            "skills_invoked": [
+                "opensuper",
+                "opensuper-hotfix",
+                "openspec-new-change",
+                "opensuper-verify",
+                "verification-before-completion",
+                "opensuper-archive",
+            ],
+            "commands_run": [
+                "node opensuper-state.mjs set fix-median verify_mode light",
+                "node opensuper-state.mjs transition fix-median verify-pass",
+            ],
+            "files_created": [
+                "openspec/changes/archive/2026-07-01-fix-median/proposal.md",
+                "openspec/changes/archive/2026-07-01-fix-median/tasks.md",
+                "openspec/changes/archive/2026-07-01-fix-median/.opensuper/state-events.jsonl",
+                "openspec/changes/archive/2026-07-01-fix-median/verification.md",
+            ],
+            "files_modified": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any("[RUBRIC] main_flow: 1.00 - workflow=hotfix" in msg for msg in passed)
+    assert any("[RUBRIC] decision_point_compliance: 1.00" in msg for msg in passed)
+    assert any("no hotfix decision mutations observed" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_quality: 1.00" in msg for msg in passed)
+    assert any("workflow=hotfix" in msg and "tasks=2 boxes" in msg for msg in passed)
+    assert any("[RUBRIC] recovery_resilience: 1.00" in msg for msg in passed)
+
+
+def test_opensuper_profile_scores_tweak_with_tweak_specific_rubric(tmp_path: Path):
+    change_dir = tmp_path / "openspec" / "changes" / "archive" / "2026-07-01-adjust-copy"
+    change_dir.mkdir(parents=True)
+    (change_dir / ".opensuper").mkdir()
+    (change_dir / ".opensuper.yaml").write_text(
+        "classic_profile: tweak\nphase: archive\nverify_result: pass\n",
+        encoding="utf-8",
+    )
+    (change_dir / "proposal.md").write_text(
+        "\n".join(f"line {i}" for i in range(12)),
+        encoding="utf-8",
+    )
+    (change_dir / "tasks.md").write_text("- [x] Apply copy tweak\n", encoding="utf-8")
+    (tmp_path / "test_copy.py").write_text("def test_copy():\n    assert True\n", encoding="utf-8")
+
+    outputs = {
+        "completion": {"passed": ["copy adjusted"], "failed": []},
+        "events": {
+            "skills_invoked": [
+                "opensuper",
+                "opensuper-tweak",
+                "openspec-new-change",
+                "openspec-apply-change",
+                "opensuper-verify",
+                "verification-before-completion",
+                "opensuper-archive",
+            ],
+            "commands_run": ["node opensuper-state.mjs set adjust-copy verify_mode light"],
+            "files_created": [
+                "openspec/changes/archive/2026-07-01-adjust-copy/proposal.md",
+                "openspec/changes/archive/2026-07-01-adjust-copy/tasks.md",
+                "openspec/changes/archive/2026-07-01-adjust-copy/.opensuper/state-events.jsonl",
+                "openspec/changes/archive/2026-07-01-adjust-copy/verification.md",
+            ],
+            "files_modified": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any("[RUBRIC] main_flow: 1.00 - workflow=tweak" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_quality: 1.00" in msg for msg in passed)
+    assert any("workflow=tweak" in msg and "tasks=1 boxes" in msg for msg in passed)
+
+
+def test_opensuper_profile_scores_full_with_full_specific_rubric(tmp_path: Path):
+    change_dir = tmp_path / "openspec" / "changes" / "archive" / "2026-07-01-add-api"
+    change_dir.mkdir(parents=True)
+    (change_dir / ".opensuper" / "handoff").mkdir(parents=True)
+    (change_dir / ".opensuper.yaml").write_text(
+        "workflow: full\nphase: archive\nverify_result: pass\n",
+        encoding="utf-8",
+    )
+    (change_dir / ".opensuper" / "handoff" / "design-context.md").write_text(
+        "context",
+        encoding="utf-8",
+    )
+    (change_dir / "proposal.md").write_text(
+        "\n".join(f"line {i}" for i in range(12)),
+        encoding="utf-8",
+    )
+    (change_dir / "design.md").write_text(
+        "Tradeoff and alternative option with risk to consider.",
+        encoding="utf-8",
+    )
+    (change_dir / "tasks.md").write_text(
+        "- [x] Design API\n- [x] Implement API\n- [x] Verify API\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_api.py").write_text("def test_api():\n    assert True\n", encoding="utf-8")
+
+    outputs = {
+        "completion": {"passed": ["api added"], "failed": []},
+        "events": {
+            "skills_invoked": [
+                "opensuper",
+                "opensuper-open",
+                "openspec-new-change",
+                "opensuper-design",
+                "brainstorming",
+                "opensuper-build",
+                "writing-plans",
+                "opensuper-verify",
+                "verification-before-completion",
+                "opensuper-archive",
+            ],
+            "commands_run": [
+                "node opensuper-state.mjs set add-api build_mode executing-plans",
+                "node opensuper-state.mjs transition add-api verify-pass",
+            ],
+            "tool_calls": [{"tool": "AskUserQuestion", "input": {}}],
+            "files_created": [
+                "openspec/changes/archive/2026-07-01-add-api/proposal.md",
+                "openspec/changes/archive/2026-07-01-add-api/tasks.md",
+                "docs/superpowers/specs/add-api.md",
+                "docs/superpowers/plans/add-api.md",
+                "openspec/changes/archive/2026-07-01-add-api/verification.md",
+            ],
+            "files_modified": [],
+            "num_turns": 1,
+            "duration_seconds": 5,
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any("[RUBRIC] main_flow: 1.00 - workflow=full" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_quality: 1.00" in msg for msg in passed)
+    assert any("workflow=full" in msg and "design=deep" in msg for msg in passed)
+
+
+def test_opensuper_profile_scores_docs_layout_from_treatment(tmp_path: Path):
+    change_dir = tmp_path / "docs" / "openspec" / "changes" / "archive" / "2026-07-28-add-sentences"
+    opensuper_dir = change_dir / ".opensuper"
+    (opensuper_dir / "handoff").mkdir(parents=True)
+    (change_dir / ".opensuper.yaml").write_text(
+        "workflow: full\nphase: archive\nverify_result: pass\narchived: true\n",
+        encoding="utf-8",
+    )
+    (opensuper_dir / "state-events.jsonl").write_text(
+        '{"event":"archived","from":{"phase":"archive"},"to":{"phase":"archive"}}\n',
+        encoding="utf-8",
+    )
+    (opensuper_dir / "trajectory.jsonl").write_text("{}\n", encoding="utf-8")
+    (opensuper_dir / "handoff" / "design-context.json").write_text(
+        '{"change":"add-sentences"}',
+        encoding="utf-8",
+    )
+    (change_dir / "proposal.md").write_text(
+        "\n".join(f"proposal line {index}" for index in range(12)),
+        encoding="utf-8",
+    )
+    (change_dir / "design.md").write_text(
+        "Tradeoff and alternative option with risk to consider.",
+        encoding="utf-8",
+    )
+    (change_dir / "tasks.md").write_text(
+        "- [x] Design\n- [x] Implement\n- [x] Verify\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs/superpowers/specs").mkdir(parents=True)
+    (tmp_path / "docs/superpowers/specs/add-sentences.md").write_text(
+        "# Design\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs/superpowers/plans").mkdir(parents=True)
+    (tmp_path / "docs/superpowers/plans/add-sentences.md").write_text(
+        "# Plan\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs/superpowers/reports").mkdir(parents=True)
+    (tmp_path / "docs/superpowers/reports/add-sentences.md").write_text(
+        "# Verification\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_sentences.py").write_text(
+        "def test_sentences():\n    assert True\n",
+        encoding="utf-8",
+    )
+    outputs = {
+        "treatment_name": "OPENSUPER_CLASSIC_DOCS_LAYOUT",
+        "completion": {"passed": ["sentences added"], "failed": []},
+        "events": {
+            "skills_invoked": [
+                "opensuper",
+                "opensuper-open",
+                "openspec-new-change",
+                "opensuper-design",
+                "brainstorming",
+                "opensuper-build",
+                "writing-plans",
+                "opensuper-verify",
+                "verification-before-completion",
+                "opensuper-archive",
+            ],
+            "commands_run": [],
+            "files_created": [
+                "docs/openspec/changes/archive/2026-07-28-add-sentences/proposal.md",
+                "docs/openspec/changes/archive/2026-07-28-add-sentences/tasks.md",
+                "docs/superpowers/specs/add-sentences.md",
+                "docs/superpowers/plans/add-sentences.md",
+                "docs/superpowers/reports/add-sentences.md",
+            ],
+            "files_modified": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any("[RUBRIC] main_flow: 1.00 - workflow=full" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_quality: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] recovery_resilience: 1.00" in msg for msg in passed)
+
+
+@pytest.mark.parametrize(
+    ("artifact_root", "treatment_name"),
+    [
+        ("openspec", "OPENSUPER_CLASSIC_LEGACY_LAYOUT"),
+        ("docs/openspec", "OPENSUPER_CLASSIC_DOCS_LAYOUT"),
+    ],
+)
+def test_opensuper_profile_recognizes_proxied_openspec_spec_reconciliation(
+    tmp_path: Path,
+    artifact_root: str,
+    treatment_name: str,
+):
+    outputs = {
+        "treatment_name": treatment_name,
+        "completion": {"passed": ["spec reconciled"], "failed": []},
+        "events": {
+            "skills_invoked": [],
+            "commands_run": ["opensuper classic openspec -- archive demo -y"],
+            "files_created": [
+                f"{artifact_root}/changes/demo/specs/example/spec.md",
+            ],
+            "files_modified": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 1,
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any(
+        "[RUBRIC] spec_drift: 1.00 - spec_written=True spec_synced=True" in msg for msg in passed
+    )
+
+
+def test_opensuper_profile_still_recognizes_direct_openspec_spec_reconciliation(tmp_path: Path):
+    outputs = {
+        "completion": {"passed": ["spec reconciled"], "failed": []},
+        "events": {
+            "skills_invoked": [],
+            "commands_run": ["openspec sync demo"],
+            "files_created": ["openspec/changes/demo/specs/example/spec.md"],
+            "files_modified": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 1,
+        },
+        "interaction": {"mode": "auto_user", "max_turns": 3},
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any(
+        "[RUBRIC] spec_drift: 1.00 - spec_written=True spec_synced=True" in msg for msg in passed
+    )
+
+
+def test_generic_profile_scores_completion_skill_artifact_and_efficiency(tmp_path: Path):
+    (tmp_path / "result.md").write_text("done")
+    outputs = {
+        "completion": {"passed": ["validator ok"], "failed": []},
+        "events": {
+            "skills_invoked": ["target-skill"],
+            "num_turns": 3,
+            "tool_calls": [{"tool": "Read", "input": {}}],
+            "duration_seconds": 12,
+            "commands_run": [],
+        },
+        "required_skills": ["target-skill"],
+        "expected_artifacts": ["result.md"],
+        "interaction": {"mode": "none"},
+    }
+
+    passed, failed = run_profile_rubric("generic", tmp_path, outputs)
+
+    assert failed == []
+    assert any("[RUBRIC] completion: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] skill_invocation: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_presence: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] weighted_score:" in msg for msg in passed)
+
+
+def test_generic_profile_rejects_artifacts_outside_the_test_directory(tmp_path: Path):
+    outside = tmp_path.parent / "outside-artifact.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        (tmp_path / "outside-link.txt").symlink_to(outside)
+        (tmp_path / "outside-dir").symlink_to(outside.parent, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"Symbolic links are unavailable: {error}")
+
+    outputs = {
+        "completion": {"passed": ["validator ok"], "failed": []},
+        "events": {"skills_invoked": [], "commands_run": []},
+        "expected_artifacts": [
+            str(outside),
+            "../outside-artifact.txt",
+            "outside-link.txt",
+            "outside-dir/*.txt",
+        ],
+        "interaction": {"mode": "none"},
+    }
+
+    passed, failed = run_profile_rubric("generic", tmp_path, outputs)
+
+    assert failed == []
+    assert any("[RUBRIC] artifact_presence: 0.00 - 0/4 passed" in msg for msg in passed)
+
+
+def test_generic_profile_can_fail_required_skill_invocation(tmp_path: Path):
+    outputs = {
+        "completion": {"passed": [], "failed": ["validator failed"]},
+        "events": {"skills_invoked": [], "commands_run": []},
+        "required_skills": ["target-skill"],
+        "expected_artifacts": [],
+        "require_skill_invocation": True,
+        "interaction": {"mode": "none"},
+    }
+
+    passed, failed = run_profile_rubric("generic", tmp_path, outputs)
+
+    assert any("Required skill not invoked: target-skill" in msg for msg in failed)
+    assert any("[RUBRIC] skill_invocation: 0.00" in msg for msg in passed)
+
+
+def test_authoring_profile_scores_generated_package_and_engine_contract(tmp_path: Path):
+    package = tmp_path / "authoring-skill"
+    (package / "reference").mkdir(parents=True)
+    (package / "opensuper").mkdir(parents=True)
+    node_skill = tmp_path / "authoring-skill-open"
+    node_skill.mkdir()
+    (package / "SKILL.md").write_text(
+        "# Demo\n\n## Workflow Nodes\n- `authoring-skill-open`\n\n## 用户停顿点\n- Confirm before exit.\n\n## 自动推进与恢复\n- scripts/workflow-guard.mjs\n\n## 参考\n- `reference/workflow-protocol.json`\n- `reference/resolved-skills.json`\n",
+        encoding="utf-8",
+    )
+    (node_skill / "SKILL.md").write_text(
+        "# Node\n\n## Node Goal\n- open\n",
+        encoding="utf-8",
+    )
+    (package / "reference" / "resolved-skills.json").write_text(
+        '{"sourceSummaries":[{"name":"demo-source"}]}',
+        encoding="utf-8",
+    )
+    (package / "reference" / "workflow-protocol.json").write_text(
+        '{"name":"authoring-skill","nodes":[{"id":"open","disabled":false}]}',
+        encoding="utf-8",
+    )
+    (package / "reference" / "authoring-lanes.json").write_text(
+        '{"lanes":[{"lane":"script"},{"lane":"reference"},{"lane":"pause-points"},{"lane":"workflow-entry"},{"lane":"skill-core"},{"lane":"skill-review"}],"review":{"passed":true,"blockingFindings":[]}}',
+        encoding="utf-8",
+    )
+    (package / "reference" / "skill-review.md").write_text(
+        "# Skill Review\n\nPassed: yes.\n",
+        encoding="utf-8",
+    )
+    for name in ("skill.yaml", "guardrails.yaml", "checks.yaml"):
+        (package / "opensuper" / name).write_text("name: demo\n", encoding="utf-8")
+    (package / "opensuper" / "eval.yaml").write_text(
+        "evaluation:\n"
+        "  recommendedTasks:\n"
+        "    - workflow-route-conformance\n"
+        "  generatedNodeSkills:\n"
+        "    - authoring-skill-open\n"
+        "  routeConformance:\n"
+        "    task: workflow-route-conformance\n"
+        "    expectedNodeOrder:\n"
+        "      - open\n",
+        encoding="utf-8",
+    )
+
+    outputs = {
+        "completion": {"passed": ["validator ok"], "failed": []},
+        "events": {
+            "skills_invoked": ["opensuper-any"],
+            "num_turns": 4,
+            "tool_calls": [{"tool": "Read", "input": {}}],
+            "duration_seconds": 20,
+            "commands_run": [],
+        },
+        "required_skills": ["opensuper-any"],
+        "expected_artifacts": [],
+        "interaction": {"mode": "auto_user", "max_turns": 8},
+        "skill_package_path": str(package),
+        "generated_node_skills": ["authoring-skill-open"],
+        "route_conformance_expected_node_order": ["open"],
+    }
+
+    passed, failed = run_profile_rubric("authoring-skill", tmp_path, outputs)
+
+    assert failed == []
+    assert any("[RUBRIC] generated_package: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] resolved_skill_evidence: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] engine_contract: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] workflow_route_conformance: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] authoring_lanes: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] review_gate: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] weighted_score:" in msg for msg in passed)
+
+
+def test_authoring_profile_allows_lightweight_package_without_engine_files(tmp_path: Path):
+    package = tmp_path / "authoring-skill"
+    (package / "reference").mkdir(parents=True)
+    node_skill = tmp_path / "authoring-skill-open"
+    node_skill.mkdir()
+    (package / "SKILL.md").write_text(
+        "# Demo\n\n## Workflow Nodes\n- `authoring-skill-open`\n\n## 用户停顿点\n- Confirm before exit.\n\n## 自动推进与恢复\n- scripts/workflow-guard.mjs\n\n## 参考\n- `reference/workflow-protocol.json`\n- `reference/resolved-skills.json`\n",
+        encoding="utf-8",
+    )
+    (node_skill / "SKILL.md").write_text(
+        "# Node\n\n## Node Goal\n- open\n",
+        encoding="utf-8",
+    )
+    (package / "reference" / "resolved-skills.json").write_text(
+        '{"sourceSummaries":[{"name":"demo-source"}]}',
+        encoding="utf-8",
+    )
+    (package / "reference" / "workflow-protocol.json").write_text(
+        '{"name":"authoring-skill","nodes":[{"id":"open","disabled":false}]}',
+        encoding="utf-8",
+    )
+    (package / "reference" / "authoring-lanes.json").write_text(
+        '{"lanes":[{"lane":"script"},{"lane":"reference"},{"lane":"pause-points"},{"lane":"workflow-entry"},{"lane":"skill-core"},{"lane":"skill-review"}],"review":{"passed":true,"blockingFindings":[]}}',
+        encoding="utf-8",
+    )
+    (package / "reference" / "skill-review.md").write_text(
+        "# Skill Review\n\nPassed: yes.\n",
+        encoding="utf-8",
+    )
+
+    outputs = {
+        "completion": {"passed": ["validator ok"], "failed": []},
+        "events": {
+            "skills_invoked": ["opensuper-any"],
+            "num_turns": 2,
+            "tool_calls": [],
+            "duration_seconds": 10,
+            "commands_run": [],
+        },
+        "required_skills": ["opensuper-any"],
+        "expected_artifacts": [],
+        "interaction": {"mode": "auto_user", "max_turns": 8},
+        "skill_package_path": str(package),
+        "generated_node_skills": ["authoring-skill-open"],
+        "route_conformance_expected_node_order": ["open"],
+    }
+
+    passed, failed = run_profile_rubric("authoring-skill", tmp_path, outputs)
+
+    assert failed == []
+    assert any(
+        "[RUBRIC] engine_contract: 1.00 - Engine disabled for lightweight package" in msg
+        for msg in passed
+    )
+
+
+# ---------------------------------------------------------------------------
+# N/A dimension scoring tests
+# ---------------------------------------------------------------------------
+
+
+def test_generic_rubric_na_dimensions_emit_na_format(tmp_path: Path):
+    """When required_skills and expected_artifacts are empty, those dimensions
+    should emit N/A instead of a numeric score."""
+    outputs = {
+        "completion": {"passed": ["ok"], "failed": []},
+        "events": {
+            "skills_invoked": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "required_skills": [],
+        "expected_artifacts": [],
+        "interaction": {"mode": "none"},
+    }
+
+    passed, failed = run_profile_rubric("generic", tmp_path, outputs)
+
+    assert any("[RUBRIC] skill_invocation: N/A -" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_presence: N/A -" in msg for msg in passed)
+    # Numeric dimensions should still have scores.
+    assert any("[RUBRIC] completion: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] efficiency:" in msg for msg in passed)
+    assert not any("skill_invocation: 0.50" in msg for msg in passed)
+    assert not any("artifact_presence: 0.50" in msg for msg in passed)
+
+
+def test_generic_rubric_skips_na_dimensions_from_weighted_score(tmp_path: Path):
+    """The weighted score should only average over applicable dimensions,
+    not dilute with 0.5 for unconfigured ones."""
+    outputs_all_na = {
+        "completion": {"passed": ["ok"], "failed": []},
+        "events": {
+            "skills_invoked": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "required_skills": [],
+        "expected_artifacts": [],
+        "interaction": {"mode": "none"},
+    }
+    outputs_with_skills = {
+        "completion": {"passed": ["ok"], "failed": []},
+        "events": {
+            "skills_invoked": ["target-skill"],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "required_skills": ["target-skill"],
+        "expected_artifacts": ["result.md"],
+        "interaction": {"mode": "none"},
+    }
+    (tmp_path / "result.md").write_text("done")
+
+    passed_na, _ = run_profile_rubric("generic", tmp_path, outputs_all_na)
+    passed_full, _ = run_profile_rubric("generic", tmp_path, outputs_with_skills)
+
+    def _extract_weighted(passed_list: list[str]) -> float:
+        for msg in passed_list:
+            if "[RUBRIC] weighted_score:" in msg:
+                return float(msg.split("weighted_score:")[1].strip())
+        return 0.0
+
+    score_na = _extract_weighted(passed_na)
+    score_full = _extract_weighted(passed_full)
+
+    # Both should produce valid scores between 0 and 1.
+    assert 0.0 <= score_na <= 1.0
+    assert 0.0 <= score_full <= 1.0
+    # When all checks pass and no N/A dimensions, score should be 1.0.
+    assert score_full == 1.00
+
+
+def test_generic_rubric_with_required_skills_scores_numeric(tmp_path: Path):
+    """When required_skills is configured, skill_invocation should be numeric."""
+    outputs = {
+        "completion": {"passed": ["ok"], "failed": []},
+        "events": {
+            "skills_invoked": ["target-skill"],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+        "required_skills": ["target-skill"],
+        "expected_artifacts": [],
+        "interaction": {"mode": "none"},
+    }
+
+    passed, _ = run_profile_rubric("generic", tmp_path, outputs)
+
+    assert any("[RUBRIC] skill_invocation: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] artifact_presence: N/A -" in msg for msg in passed)
+
+
+def test_generic_interaction_compliance_uses_driver_turns(tmp_path: Path):
+    outputs = {
+        "completion": {"passed": ["ok"], "failed": []},
+        "events": {"num_turns": 28, "tool_calls": [], "duration_seconds": 5, "commands_run": []},
+        "required_skills": [],
+        "expected_artifacts": [],
+        "interaction": {"mode": "auto_user", "max_turns": 4, "actual_turns": 4},
+    }
+
+    passed, _ = run_profile_rubric("generic", tmp_path, outputs)
+
+    assert any(
+        "[RUBRIC] interaction_compliance: 1.00 - turns=4, max=4" in message for message in passed
+    )
+
+
+def test_opensuper_control_marks_workflow_dimensions_not_applicable(tmp_path: Path):
+    """CONTROL should score business completion without requiring OpenSuper Skill use."""
+    outputs = {
+        "treatment_name": "CONTROL",
+        "business_completion": {"passed": ["sentence_feature"], "failed": []},
+        "workflow_completion": {"passed": [], "failed": ["tests_exist: No test files found"]},
+        "events": {
+            "skills_invoked": [],
+            "num_turns": 2,
+            "tool_calls": [],
+            "duration_seconds": 5,
+            "commands_run": [],
+        },
+    }
+
+    passed, failed = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert failed == []
+    assert any("[RUBRIC] main_flow: N/A -" in msg for msg in passed)
+    assert any("[RUBRIC] gate_guard: N/A -" in msg for msg in passed)
+    assert any("[RUBRIC] skill_invocation: N/A -" in msg for msg in passed)
+    assert any("[RUBRIC] spec_drift: N/A -" in msg for msg in passed)
+    assert any("[RUBRIC] business_completion: 1.00" in msg for msg in passed)
+    assert any("[RUBRIC] workflow_completion: N/A -" in msg for msg in passed)
+    assert any("[RUBRIC] efficiency:" in msg for msg in passed)
+    assert any("[RUBRIC] weighted_score: 1.00" in msg for msg in passed)
+
+
+def test_opensuper_profile_splits_business_and_workflow_completion(tmp_path: Path):
+    outputs = {
+        "business_completion": {
+            "passed": ["sentence_feature"],
+            "failed": ["business_rule: failed"],
+        },
+        "workflow_completion": {
+            "passed": ["openspec_artifacts"],
+            "failed": ["tests_exist: No test files found"],
+        },
+        "events": {
+            "skills_invoked": [
+                "opensuper",
+                "opensuper-hotfix",
+                "openspec-new-change",
+                "verification-before-completion",
+            ],
+            "commands_run": [],
+            "files_created": [],
+            "files_modified": [],
+            "num_turns": 1,
+            "tool_calls": [],
+            "duration_seconds": 5,
+        },
+    }
+
+    passed, _ = run_profile_rubric("opensuper-workflow", tmp_path, outputs)
+
+    assert any("[RUBRIC] business_completion: 0.50" in msg for msg in passed)
+    assert any("[RUBRIC] workflow_completion: 0.50" in msg for msg in passed)
+    assert not any("[RUBRIC] completion:" in msg for msg in passed)
+
+
+# ---------------------------------------------------------------------------
+# LLM judge prompt tests
+# ---------------------------------------------------------------------------
+
+
+def test_generic_llm_judge_prompt_includes_custom_criteria(tmp_path: Path):
+    """The judge prompt should include rubric_criteria from task config."""
+    from scaffold.python.generic_llm_judge import _build_generic_judge_prompt
+
+    (tmp_path / "output.txt").write_text("hello world")
+    outputs = {
+        "completion": {"passed": ["ok"], "failed": []},
+        "rubric_criteria": [
+            "The function handles edge cases",
+            "Error messages are user-friendly",
+        ],
+    }
+
+    prompt = _build_generic_judge_prompt(tmp_path, outputs)
+
+    assert "The function handles edge cases" in prompt
+    assert "Error messages are user-friendly" in prompt
+    assert "custom_0" in prompt
+    assert "custom_1" in prompt
+    assert "task_completion" in prompt
+    assert "output_quality" in prompt
+    assert "instruction_adherence" in prompt
+
+
+def test_generic_llm_judge_prompt_without_custom_criteria(tmp_path: Path):
+    """Without custom criteria, prompt should have exactly 3 standard dimensions."""
+    from scaffold.python.generic_llm_judge import _build_generic_judge_prompt
+
+    (tmp_path / "output.txt").write_text("hello world")
+    outputs = {"completion": {"passed": ["ok"], "failed": []}}
+
+    prompt = _build_generic_judge_prompt(tmp_path, outputs)
+
+    assert "EXACTLY 3 lines" in prompt
+    assert "custom_0" not in prompt
+    assert "task_completion" in prompt
+
+
+def test_generic_llm_judge_collects_workspace_files(tmp_path: Path):
+    """The artifact collector should find non-hidden files."""
+    from scaffold.python.generic_llm_judge import _collect_workspace_artifacts
+
+    (tmp_path / "result.md").write_text("# Result\nDone")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hello')")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("ignored")
+
+    artifacts = _collect_workspace_artifacts(tmp_path)
+
+    assert "result.md" in artifacts
+    assert str(Path("src") / "main.py") in artifacts
+    assert ".git" not in artifacts
+
+
+def test_generic_llm_judge_ignores_harness_transport_files(tmp_path: Path):
+    """The judge should use adapted completion output, not stale container transport."""
+    from scaffold.python.generic_llm_judge import _collect_workspace_artifacts
+
+    (tmp_path / "result.md").write_text("# Result\nDone")
+    (tmp_path / "_test_context.json").write_text('{"treatment_name":"legacy"}')
+    (tmp_path / "_test_results.json").write_text('{"failed":["openspec missing"]}')
+
+    artifacts = _collect_workspace_artifacts(tmp_path)
+
+    assert "result.md" in artifacts
+    assert "_test_context.json" not in artifacts
+    assert "_test_results.json" not in artifacts
+    assert "openspec missing" not in artifacts
+
+
+def test_judge_env_requires_explicit_judge_model(monkeypatch):
+    """LLM judge must not silently reuse the subject model."""
+    from scaffold.python.judge_config import build_judge_invocation
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "subject-model")
+    monkeypatch.delenv("BENCH_JUDGE_MODEL", raising=False)
+
+    try:
+        build_judge_invocation()
+    except ValueError as exc:
+        assert "BENCH_JUDGE_MODEL" in str(exc)
+    else:
+        raise AssertionError("expected missing BENCH_JUDGE_MODEL to fail")
+
+
+def test_judge_env_maps_independent_provider(monkeypatch):
+    """Judge subprocess env should use BENCH_JUDGE_* instead of subject ANTHROPIC_*."""
+    from scaffold.python.judge_config import build_judge_invocation
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "subject-model")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://subject.example")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "subject-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "subject-key")
+    monkeypatch.setenv("BENCH_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("BENCH_JUDGE_BASE_URL", "https://judge.example")
+    monkeypatch.setenv("BENCH_JUDGE_AUTH_TOKEN", "judge-token")
+
+    invocation = build_judge_invocation()
+
+    assert invocation.model_flag == ["--model", "judge-model"]
+    assert invocation.env["ANTHROPIC_MODEL"] == "judge-model"
+    assert invocation.env["ANTHROPIC_BASE_URL"] == "https://judge.example"
+    assert invocation.env["ANTHROPIC_AUTH_TOKEN"] == "judge-token"
+    assert "ANTHROPIC_API_KEY" not in invocation.env
+    assert "subject-model" not in invocation.env.values()
+    assert "subject-token" not in invocation.env.values()
+
+
+def test_judge_env_selects_the_same_agent_with_isolated_credentials(monkeypatch):
+    from scaffold.python.judge_config import build_judge_invocation
+
+    monkeypatch.setenv("OPENAI_API_KEY", "subject-key")
+    monkeypatch.setenv("BENCH_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("BENCH_JUDGE_API_KEY", "judge-key")
+
+    invocation = build_judge_invocation(agent="codex")
+
+    assert invocation.agent == "codex"
+    assert invocation.env["OPENAI_API_KEY"] == "judge-key"
+    assert "ANTHROPIC_API_KEY" not in invocation.env
+    assert "subject-key" not in invocation.env.values()
+
+
+def test_judge_env_maps_codebuddy_credentials_and_endpoint(monkeypatch):
+    from scaffold.python.judge_config import build_judge_invocation
+
+    monkeypatch.setenv("CODEBUDDY_API_KEY", "subject-key")
+    monkeypatch.setenv("CODEBUDDY_MODEL", "subject-model")
+    monkeypatch.setenv("BENCH_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("BENCH_JUDGE_API_KEY", "judge-key")
+    monkeypatch.setenv("BENCH_JUDGE_AUTH_TOKEN", "judge-token")
+    monkeypatch.setenv("BENCH_JUDGE_BASE_URL", "https://judge.example")
+
+    invocation = build_judge_invocation(agent="codebuddy")
+
+    assert invocation.agent == "codebuddy"
+    assert invocation.env["CODEBUDDY_API_KEY"] == "judge-key"
+    assert invocation.env["CODEBUDDY_AUTH_TOKEN"] == "judge-token"
+    assert invocation.env["CODEBUDDY_BASE_URL"] == "https://judge.example"
+    assert invocation.env["CODEBUDDY_MODEL"] == "judge-model"
+    assert invocation.env["OPENSUPER_EVAL_AGENT_ROLE"] == "judge"
+    assert "subject-key" not in invocation.env.values()
+    assert "subject-model" not in invocation.env.values()
+
+
+def test_codebuddy_judge_extracts_response_text_from_json_stream():
+    from scaffold.python.judge_config import _extract_agent_text
+
+    assert _extract_agent_text('{"response":"[RUBRIC-JUDGE] ok"}') == "[RUBRIC-JUDGE] ok"
+
+
+def test_judge_session_ids_are_extracted_from_nested_agent_events():
+    import json
+
+    from scaffold.python.judge_config import _extract_agent_session_ids
+
+    output = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "judge-thread"}),
+            json.dumps({"message": {"sessionId": "judge-session"}}),
+        ]
+    )
+
+    assert _extract_agent_session_ids(output) == ["judge-thread", "judge-session"]
+
+
+def test_judge_provider_uses_direct_http_when_base_url_is_configured(monkeypatch):
+    """Dedicated judge providers should not require Claude CLI compatibility."""
+    import json
+    from unittest.mock import patch
+
+    from scaffold.python.judge_config import run_judge_prompt
+
+    monkeypatch.setenv("BENCH_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("BENCH_JUDGE_BASE_URL", "https://judge.example/api/anthropic")
+    monkeypatch.setenv("BENCH_JUDGE_AUTH_TOKEN", "judge-token")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "[RUBRIC-JUDGE] task_completion: 1.00 - ok",
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    with patch("urllib.request.urlopen", return_value=FakeResponse()) as urlopen:
+        output = run_judge_prompt("score this")
+
+    request = urlopen.call_args.args[0]
+    assert request.full_url == "https://judge.example/api/anthropic/v1/messages"
+    assert request.headers["Authorization"] == "Bearer judge-token"
+    assert json.loads(request.data.decode("utf-8"))["model"] == "judge-model"
+    assert output == "[RUBRIC-JUDGE] task_completion: 1.00 - ok"
+
+
+def test_opensuper_llm_judge_reports_skipped_without_success_status(monkeypatch, tmp_path: Path):
+    """Missing judge config should be visible and not reported as successful."""
+    from scaffold.python.llm_judge import judge_messages
+
+    change = tmp_path / "openspec" / "changes" / "demo"
+    change.mkdir(parents=True)
+    (change / "proposal.md").write_text("proposal")
+    monkeypatch.setenv("BENCH_LLM_JUDGE", "1")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "subject-model")
+    monkeypatch.delenv("BENCH_JUDGE_MODEL", raising=False)
+
+    messages = judge_messages(tmp_path)
+
+    assert messages == [
+        "[RUBRIC-JUDGE] status: skipped - BENCH_JUDGE_MODEL is required when BENCH_LLM_JUDGE=1"
+    ]
+    assert not any("enabled_and_successful" in msg for msg in messages)
+
+
+def test_opensuper_profile_does_not_mark_skipped_judge_successful(monkeypatch, tmp_path: Path):
+    """Profile rubric should not add success status when judge config is missing."""
+    from scaffold.python.profiles import run_profile_rubric
+
+    change = tmp_path / "openspec" / "changes" / "demo"
+    change.mkdir(parents=True)
+    (change / "proposal.md").write_text("proposal")
+    monkeypatch.setenv("BENCH_LLM_JUDGE", "1")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "subject-model")
+    monkeypatch.delenv("BENCH_JUDGE_MODEL", raising=False)
+
+    passed, _ = run_profile_rubric(
+        "opensuper-workflow",
+        tmp_path,
+        {"completion": {"passed": ["ok"], "failed": []}},
+    )
+
+    assert any("[RUBRIC-JUDGE] status: skipped" in msg for msg in passed)
+    assert not any("[RUBRIC-JUDGE] status: enabled_and_successful" in msg for msg in passed)
+
+
+def test_generic_llm_judge_parses_output(tmp_path: Path):
+    """judge_generic_artifacts should parse [RUBRIC-JUDGE] lines correctly."""
+    from unittest.mock import patch
+    from scaffold.python.generic_llm_judge import judge_generic_artifacts
+
+    mock_output = (
+        "[RUBRIC-JUDGE] task_completion: 0.80 - output present and mostly correct\n"
+        "[RUBRIC-JUDGE] output_quality: 0.90 - well-structured code\n"
+        "[RUBRIC-JUDGE] instruction_adherence: 1.00 - all constraints followed\n"
+    )
+    outputs = {"completion": {"passed": [], "failed": []}, "agent": "codebuddy"}
+
+    with patch(
+        "scaffold.python.generic_llm_judge._run_judge",
+        return_value=mock_output,
+    ) as run_judge:
+        scores = judge_generic_artifacts(tmp_path, outputs)
+
+    assert scores["task_completion"] == (0.80, "output present and mostly correct")
+    assert scores["output_quality"] == (0.90, "well-structured code")
+    assert scores["instruction_adherence"] == (1.00, "all constraints followed")
+    assert run_judge.call_args.kwargs["agent"] == "codebuddy"
+    assert run_judge.call_args.kwargs["evidence"] is outputs
+
+
+def test_generic_llm_judge_parses_custom_dimensions(tmp_path: Path):
+    """Custom rubric criteria should produce custom_N dimensions in output."""
+    from unittest.mock import patch
+    from scaffold.python.generic_llm_judge import judge_generic_artifacts
+
+    mock_output = (
+        "[RUBRIC-JUDGE] task_completion: 1.00 - done\n"
+        "[RUBRIC-JUDGE] output_quality: 0.80 - good\n"
+        "[RUBRIC-JUDGE] instruction_adherence: 1.00 - ok\n"
+        "[RUBRIC-JUDGE] custom_0: 0.90 - handles edge cases well\n"
+        "[RUBRIC-JUDGE] custom_1: 0.70 - error messages could improve\n"
+    )
+    outputs = {
+        "completion": {"passed": [], "failed": []},
+        "rubric_criteria": ["edge cases", "error messages"],
+    }
+
+    with patch(
+        "scaffold.python.generic_llm_judge._run_judge",
+        return_value=mock_output,
+    ):
+        scores = judge_generic_artifacts(tmp_path, outputs)
+
+    assert "custom_0" in scores
+    assert "custom_1" in scores
+    assert scores["custom_0"] == (0.90, "handles edge cases well")
+
+
+def test_generic_rubric_scores_structured_expected_artifact_paths(tmp_path: Path):
+    artifact_dir = tmp_path / ".opensuper" / "runs" / "fix-from-issues"
+    artifact_dir.mkdir(parents=True)
+    for name in ("state.json", "plan.json", "verification.json"):
+        (artifact_dir / name).write_text("{}\n", encoding="utf-8")
+
+    passed, failed = run_profile_rubric(
+        "generic",
+        tmp_path,
+        {
+            "completion": {"passed": ["workflow completed"], "failed": []},
+            "expected_artifacts": [
+                {
+                    "node": "prepare",
+                    "schema": "fix-from-issues.prepare.v1",
+                    "artifact": "workflow-run-state",
+                    "paths": [".opensuper/runs/fix-from-issues/state.json"],
+                },
+                {
+                    "node": "plan",
+                    "schema": "fix-from-issues.plan.v1",
+                    "artifact": "repair-plan",
+                    "path": ".opensuper/runs/fix-from-issues/plan.json",
+                },
+                {
+                    "node": "verify",
+                    "schema": "fix-from-issues.implementation.v1",
+                    "artifact": "verification",
+                    "paths": [
+                        ".opensuper/runs/fix-from-issues/state.json",
+                        ".opensuper/runs/fix-from-issues/verification.json",
+                    ],
+                },
+                {
+                    "node": "watch",
+                    "schema": "fix-from-issues.watch.v1",
+                    "artifact": "run-records",
+                    "path": ".opensuper/runs/fix-from-issues/*.json",
+                },
+            ],
+        },
+    )
+
+    assert failed == []
+    assert any("[RUBRIC] artifact_presence: 1.00 - 4/4 passed" in item for item in passed)
+
+
+def test_generic_rubric_rejects_artifact_paths_outside_task_directory(tmp_path: Path):
+    outside = tmp_path.parent / "outside-artifact.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    escaped_link = tmp_path / "escaped-artifact.json"
+    try:
+        escaped_link.symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"Symbolic links are unavailable: {error}")
+
+    passed, failed = run_profile_rubric(
+        "generic",
+        tmp_path,
+        {
+            "completion": {"passed": ["workflow completed"], "failed": []},
+            "expected_artifacts": [
+                {"path": "../outside-artifact.json"},
+                {"path": str(outside)},
+                {"path": "escaped-artifact.json"},
+                {"path": "escaped-*.json"},
+            ],
+        },
+    )
+
+    assert failed == []
+    assert any("[RUBRIC] artifact_presence: 0.00 - 0/4 passed" in item for item in passed)

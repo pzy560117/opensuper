@@ -2,13 +2,17 @@
 
 Languages: [English](CONTRIBUTING.md) | [中文](CONTRIBUTING-zh.md)
 
-Thank you for helping improve OpenSuper. This guide is meant to be practical: it
-explains how to set up the project, prepare a change, keep branches healthy,
-submit a pull request, and update project-specific assets such as skills and
-shell scripts.
+Thank you for helping improve OpenSuper. This guide explains how to set up the
+project, prepare a change, keep branches healthy, submit a pull request, and
+update project-specific assets such as skills and workflow runtimes.
+
+Deeper project conventions (Chinese terminology, changelog authoring, bilingual
+skill sync, restraint on README updates, etc.) live in `CLAUDE.md`. This guide
+covers only the contribution flow itself and does not repeat those rules.
 
 ## Before You Start
 
+- First-time contributors can look for issues labeled `good first issue`.
 - For bug fixes, first check whether an issue or recent PR already covers the
   same problem.
 - For larger behavior changes, open an issue or draft PR early so the direction
@@ -16,38 +20,87 @@ shell scripts.
 - Keep each contribution focused on one purpose. Split unrelated changes into
   separate PRs.
 - Include tests or explain why a change does not need tests.
-- Update documentation when behavior, commands, workflows, or user-facing text
-  changes.
+- Update documentation and `CHANGELOG.md` when behavior, commands, workflows, or
+  user-facing text changes.
+- A PR version may only be ahead of `master` by exactly one version. For
+  example, if `master` is `0.3.0`, the PR version must be `0.3.1`.
+
+## Standard Contribution Workflow
+
+- Leave a comment under the issue you want to claim, to avoid duplicate work.
+- Create a task branch from the latest `master`, named after the feature or fix
+  area, for example `fix/dev-resync-docs` or `docs/contributing-guide`.
+- Implement the change locally, add tests, and run targeted checks.
+- Before PR review, run the full verification command:
+  `pnpm build && pnpm lint && pnpm format:check && pnpm test`, unless the change
+  is documentation-only.
+- Open a PR against `master` and follow the template to describe what changed,
+  why it changed, and how it was verified.
+- After the PR is submitted, three AI reviewers will leave feedback. Their
+  suggestions are not always correct — you need to identify which comments are
+  actionable and which are AI misjudgments, and address everything genuinely
+  related to your PR.
+- Once you fix the AI review comments, just push your changes; the PR updates
+  automatically. You must reply to every AI comment and click
+  `Resolve conversation` on the ones you consider resolved.
+- After everything is resolved, wait for the human maintainer's review
+  feedback.
+
+## Issues You Can Claim
+
+- Issues labeled `good first issue`.
+- Issues labeled `task`.
+- Issues labeled `bug`.
+- Before claiming, confirm the issue has not already been claimed by or
+  assigned to someone else, to avoid duplicate work.
 
 ## Development Setup
 
 ```bash
 git clone https://github.com/pzy560117/opensuper
-cd OpenSuper
+cd opensuper
 pnpm install
 pnpm build
 ```
 
-Use the Node.js and pnpm versions supported by the repository lockfile and CI.
-If dependency installation or build behavior differs locally, mention it in the
-PR.
+- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` for development dependencies; the published package supports Node.js 22.16+ within 22.x, or 24+. The pnpm version is pinned in `package.json`'s `packageManager`
+  field (currently `pnpm@10.18.3`).
+- If dependency installation or build behavior differs locally, mention it in
+  the PR.
 
 ## Commands
 
-| Command              | Purpose                                |
-| -------------------- | -------------------------------------- |
-| `pnpm dev`           | Watch mode (TypeScript)                |
-| `pnpm build`         | Compile TypeScript                     |
-| `pnpm test`          | Run unit tests                         |
-| `pnpm test:coverage` | Run tests with coverage                |
-| `pnpm test:shell`    | Run shell script tests (requires bats) |
-| `pnpm lint`          | Run ESLint                             |
-| `pnpm format`        | Run Prettier                           |
+| Command                      | Purpose                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| `pnpm dev`                   | Watch mode (TypeScript)                                                               |
+| `pnpm build`                 | Full build (Classic, Native, and entry runtimes + dashboard)                          |
+| `pnpm build:classic-runtime` | Build only the Classic runtime (`scripts/build/build-classic-runtime.mjs`)            |
+| `pnpm build:native-runtime`  | Build only the Native runtime (`scripts/build/build-native-runtime.mjs`)              |
+| `pnpm build:entry-runtime`   | Build only the shared entry and Hook Router (`scripts/build/build-entry-runtime.mjs`) |
+| `pnpm build:dashboard`       | Build only the `opensuper dashboard` frontend (Vite)                                      |
+| `pnpm dev:dashboard`         | Dashboard frontend dev mode                                                           |
+| `pnpm test`                  | Run unit tests (Vitest)                                                               |
+| `pnpm test:coverage`         | Run tests with coverage                                                               |
+| `pnpm test:script-smoke`     | Run the Classic launcher smoke suite; CI entry point                                  |
+| `pnpm test:watch`            | Vitest watch mode                                                                     |
+| `pnpm lint`                  | ESLint + architecture linter                                                          |
+| `pnpm lint:architecture`     | Repository layering linter (`scripts/lint/architecture.mjs`)                          |
+| `pnpm lint:fix`              | ESLint auto-fix                                                                       |
+| `pnpm format`                | Prettier formatting for `app/`, `domains/`, `platform/`                               |
+| `pnpm format:check`          | Prettier check (CI-enforced)                                                          |
+| `pnpm benchmark:context`     | Context compression benchmark                                                         |
+| `pnpm benchmark:execution`   | Context execution benchmark                                                           |
+| `pnpm benchmark:classic`     | Classic baseline regression benchmark                                                 |
+| `pnpm benchmark:bundle`      | Bundle compatibility benchmark (includes build)                                       |
 
-For shell-script work, the most useful targeted check is:
+For workflow runtime work, first check freshness for the affected owner. Classic
+launchers also have a focused smoke suite:
 
 ```bash
-npx vitest run test/ts/OpenSuper-scripts.test.ts
+node scripts/build/build-classic-runtime.mjs --check
+node scripts/build/build-native-runtime.mjs --check
+node scripts/build/build-entry-runtime.mjs --check
+npx vitest run test/domains/opensuper-classic/opensuper-scripts.test.ts
 ```
 
 Before opening or updating a PR, run the full verification command unless the
@@ -145,17 +198,32 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```text
 <type>: <description>
+<type>(<scope>): <description>
 ```
 
-Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `build`, `ci`
 
 Examples:
 
 ```text
-docs: expand contribution workflow
-fix: preserve stderr when superpowers install fails
-test: cover OpenSuper state transitions
+feat: add eval report language switch
+fix(eval): prevent chart labels from overlapping
+docs: update contributor commit rules
 ```
+
+## Local Pre-commit Hook
+
+The repository ships a Git pre-commit hook (`.husky/pre-commit` + `lint-staged`)
+that runs `prettier --write` on every `git commit` against staged source files
+under `app/`, `domains/`, and `platform/`. The scope matches CI `format:check`,
+is editor-independent, and applies to every contributor.
+
+- The hook is installed by `husky` during `pnpm install`.
+- On Windows with `core.autocrlf=true`, untouched legacy files may be falsely
+  flagged by `prettier --check` due to CRLF. The hook only processes staged
+  files; legacy files are auto-converted to LF the next time they are edited.
+- You should still run `pnpm lint`, `pnpm build`, and `pnpm test` manually
+  before committing — CI enforces all of them.
 
 ## PR Process
 
@@ -171,49 +239,127 @@ test: cover OpenSuper state transitions
 9. Delete or recreate the source branch after merge; do not keep merging
    `master` back into a squashed branch.
 
-For documentation-only changes, run at least the relevant formatter check, for
-example:
+For documentation-only changes, run at least the relevant formatter check. Root
+`README.md` and `README-zh.md` are listed in `.prettierignore` and are not
+checked by Prettier, for example:
 
 ```bash
-npx prettier --check CONTRIBUTING.md CONTRIBUTING-zh.md README.md README-zh.md
+npx prettier --check CONTRIBUTING.md CONTRIBUTING-zh.md
 ```
 
 ## Project Structure
 
+Source code is layered by responsibility, with each layer having a clear scope:
+
 ```text
-src/
-├── cli/index.ts       # Commander registration
-├── commands/          # Command orchestrators
-│   ├── init.ts        # OpenSuper init
-│   ├── status.ts      # OpenSuper status
-│   ├── doctor.ts      # OpenSuper doctor
-│   └── update.ts      # OpenSuper update
-├── core/              # Business logic (platform-agnostic)
-│   ├── platforms.ts   # Platform definitions
-│   ├── detect.ts      # Platform detection
-│   ├── skills.ts      # Skill file operations
-│   ├── openspec.ts    # OpenSpec installation
-│   └── superpowers.ts # Superpowers installation
-└── utils/
-    └── file-system.ts # File I/O utilities
+app/                 # CLI entry and command orchestration. Composes domain/platform capabilities only; holds no domain rules.
+├── cli/             # Commander registration
+└── commands/        # opensuper init / status / doctor / update / bundle / publish / skill / creator / eval / dashboard ...
+
+domains/             # Business domain modules
+├── agent-learning/  # Shared Experience, Reflection, context selection, and application feedback
+├── bundle/          # Skill bundle compilation, publishing, loading
+├── opensuper-classic/   # Classic workflow (state / guard / handoff / archive / intent / hook-guard)
+├── opensuper-entry/     # Shared Native/Classic entry, selection, and Hook Router
+├── opensuper-memory/    # Personal-memory formation, retrieval, and provider contracts
+├── opensuper-native/    # Native workflow (change / state / evidence / archive / guard)
+├── dashboard/       # opensuper dashboard backend + frontend (web/)
+├── engine/          # Generic execution engine (loop / state / guardrails / evals)
+├── eval/            # opensuper eval harness
+├── factory/         # Skill creator artifact packaging
+├── integrations/    # Third-party integrations (openspec / superpowers / codegraph)
+├── project-knowledge/ # Local/remote retrieval of OpenSuper-managed project documents
+├── skill/           # Skill install, discovery, preferences, snapshot
+└── workflow-contract/ # Cross-workflow contracts
+
+platform/            # Platform adaptation; domain code does not leak platform differences
+├── fs/              # Filesystem utilities
+├── http/            # Bounded HTTP requests and response reads
+├── install/         # Platform definitions, detection, install paths
+├── paths/           # Repository layout resolution
+├── process/         # Subprocesses, error handling, shell quoting
+└── version/         # Version comparison
+
+scripts/             # Repository automation (build / release / benchmark / lint / install)
+├── benchmark/       # Benchmark suites
+├── build/           # Classic, Native, and entry runtime builders
+├── install/         # postinstall.js
+├── lib/             # Cross-script utilities
+├── lint/            # architecture.mjs, gitignore-top-level.mjs
+└── release/         # prepare.js, prepublish-check.js
+
+assets/              # Release assets: built-in skill content and install manifest
+├── skills/          # English skills
+├── skills-zh/       # Chinese skills
+└── manifest.json    # Install entry point
+
+docs/                # Architecture, operations, and design docs (docs/superpowers/ is written by the workflow)
 ```
+
+`bin/opensuper.js` is the npm `bin` entry; `build.js` is the top-level build
+script; `vitest.config.ts` / `eslint.config.js` / `tsconfig.json` are tooling
+configurations.
+
+## Architecture Linter
+
+`pnpm lint:architecture` (`scripts/lint/architecture.mjs`) verifies:
+
+- The top-level directory whitelist
+  (`config/repository-layout.json`'s `allowedTopLevelEntries`).
+- Active source roots are restricted to `app` / `domains` / `platform`
+  (`sourceRoots`).
+- Sub-modules of each layer
+  (`appModules` / `domainModules` / `platformModules` / `scriptModules`).
+- Classic, Native, and entry runtime entry/output consistency.
+- Built-in skill roots and the install manifest are consistent.
+- Test ownership (see the next section).
+- Migration-legacy directories (e.g. `src/`, `test/ts/`) are not reintroduced.
+
+If you genuinely need to add a top-level directory, source module, test root,
+or exception, **you must update `config/repository-layout.json`, the
+architecture linter rules, and the relevant sections of this guide before
+opening the PR**.
+
+## Test Directory Layout
+
+Test directories strictly follow the ownership of the code under test:
+
+| Test directory           | Coverage                                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `test/app/`              | CLI and commands under `app/`                                                                              |
+| `test/domains/<domain>/` | The matching `domains/<domain>/` (each domain has a same-named subdirectory)                               |
+| `test/platform/`         | The `platform/` adaptation layer                                                                           |
+| `test/scripts/`          | The `scripts/` automation scripts                                                                          |
+| `test/repository/`       | Cross-layer constraints: README, CI workflows, repository layout, package scripts, workflow runtime assets |
+| `test/fixtures/`         | Test data                                                                                                  |
+| `test/helpers/`          | Test utilities (`opensuper-test-utils.ts`, `ensure-cli-built.ts`, `workflow-plan.ts`)                          |
+
+Do not add horizontal buckets like `test/ts/`; legacy files should be migrated
+to the directories above. The CI smoke entry point is
+`pnpm test:script-smoke`; GitHub Actions and local runs share the same Classic
+launcher smoke suite.
 
 ## Adding a New Platform
 
-1. Add an entry to `PLATFORMS` in `src/core/platforms.ts`.
-2. Add the mapping to `SKILLS_AGENT_MAP` in `src/core/superpowers.ts` if it
-   differs.
-3. Add or update tests that cover detection, installation paths, and generated
-   instructions.
-4. Update README documentation if the platform is user-facing.
+1. Add an entry to `PLATFORMS` in `platform/install/platforms.ts`.
+2. Add the mapping to `SKILLS_AGENT_MAP` in `domains/integrations/superpowers.ts`
+   if it differs.
+3. Add or update tests (`test/platform/` and the relevant domain tests) that
+   cover detection, installation paths, and generated instructions.
+4. Update `assets/manifest.json` and the README documentation.
+5. If the platform is user-facing, record it in `CHANGELOG.md`.
 
 ## Adding or Updating a Skill
 
 1. Write or update the Chinese version first under `assets/skills-zh/`.
-2. Get the wording and behavior confirmed.
-3. Sync the English version under `assets/skills/`.
-4. Add new skills to `assets/manifest.json`.
-5. Add tests for generated assets or installer behavior when applicable.
+2. Get the wording and behavior confirmed, then sync the English version under
+   `assets/skills/`. The two versions must be behaviorally equivalent.
+3. Add new skills to `assets/manifest.json`.
+4. Add tests for generated assets or installer behavior when applicable
+   (`test/domains/skill/`, `test/repository/classic-runtime-assets.test.ts`).
+5. When changing skill boilerplate, sync every copy across all `SKILL.md` and
+   `reference/*` files.
+6. **Never directly modify the original Superpowers or OpenSpec skills.**
 
 Skill design guidance:
 
@@ -222,52 +368,140 @@ Skill design guidance:
 - **Reference Appendix**: Field reference, script locations, and best practices
   go at the bottom.
 - Keep Chinese and English versions behaviorally equivalent, even when wording
-  differs naturally.
+  differs naturally. Chinese terminology follows the translation rules in
+  `CLAUDE.md` (do not translate `gate` as "门").
 
-## Shell Scripts
+## Workflow Runtimes and Hook Routing
 
-Shell scripts live under `assets/skills/OpenSuper/scripts/` and must work on macOS,
-Linux, and Windows Git Bash.
+Workflow scripts are **generated Node.js bundles** (`.mjs`). They
+depend only on Node.js and **never on Bash / Git Bash / WSL**, so behavior is
+identical on macOS, Linux, and Windows.
 
-Rules:
+- Classic logic and per-command entries live in `domains/opensuper-classic/`;
+  `pnpm build:classic-runtime` generates the aggregate CLI runtime and one
+  self-contained bundle per command in `assets/skills/opensuper/scripts/`.
+- Native logic lives in `domains/opensuper-native/`; `pnpm build:native-runtime`
+  generates the aggregate CLI runtime and one self-contained bundle per Native
+  command. The Native core workflow and Guard must not depend on external
+  Skills.
+- Shared entry resolution, selection, and Hook routing live in
+  `domains/opensuper-entry/`; `pnpm build:entry-runtime` generates
+  `opensuper-entry-runtime.mjs` and `opensuper-hook-router.mjs`.
+- Each platform installs one `opensuper-workflow-guard` Rule. Platforms with Hook
+  support install only `opensuper-hook-router.mjs`. The Router uses
+  `.opensuper/current-change.json` to invoke exactly one Native or Classic Guard per
+  write. Their phases, directories, schemas, and Guard logic remain separate.
+- `opensuper-hook-guard.mjs` and `opensuper-native-hook-guard.mjs` are self-contained
+  workflow Guard command bundles; neither is installed directly as a platform
+  Hook.
+- Cross-platform concerns are handled by Node: hashing via `node:crypto`, YAML
+  via the `yaml` package, subprocesses via `child_process`
+  (build/validate commands go through `spawnSync(cmd, { shell: true })`). There
+  are no `sed -i` / `sha256sum` vs `shasum` / `pipefail` portability hazards.
+- `opensuper-env.mjs` prints its own directory so Skill instructions can resolve
+  sibling bundle paths once. Instructions record literal absolute paths in task
+  context and must not rely on shell-local variables persisting across tool
+  calls.
+- When adding or renaming an entry or generated output, sync
+  `assets/manifest.json`, the matching runtime mapping in
+  `config/repository-layout.json`, and the corresponding
+  `test/repository/*-runtime-assets.test.ts`. Classic command bundles also require an
+  update to the fixture list in
+  `test/domains/opensuper-classic/opensuper-scripts.test.ts`.
 
-- Do not use `sed -i`; GNU and BSD behavior differ. Use `awk` for field
-  replacement.
-- Support both `sha256sum` on GNU systems and `shasum -a 256` on BSD/macOS.
-- Add `|| true` to optional `grep` results so `pipefail` does not abort the
-  script.
-- Add new scripts to the `beforeEach` copy list in
-  `test/ts/OpenSuper-scripts.test.ts`.
-- Add new scripts to `assets/manifest.json`.
-
-Script dependencies:
+Runtime dispatch:
 
 ```text
-OpenSuper-state.sh <- OpenSuper-guard.sh, OpenSuper-handoff.sh, OpenSuper-archive.sh
-OpenSuper-yaml-validate.sh <- OpenSuper-guard.sh (preflight phase)
-OpenSuper-handoff.sh <- OpenSuper-state.sh (writes handoff_context/handoff_hash)
+opensuper-runtime.mjs + opensuper-<command>.mjs               <- domains/opensuper-classic/*
+opensuper-native-runtime.mjs + opensuper-native-<command>.mjs <- domains/opensuper-native/*
+opensuper-entry-runtime.mjs                                <- domains/opensuper-entry/*
+opensuper-hook-router.mjs                                  <- only installed Hook entry -> one Guard selected by current ownership
 ```
 
-If two scripts need the same small helper, such as hashing or YAML parsing, it
-is acceptable to implement it independently in each script instead of forcing a
-shared shell library.
+## `.opensuper.yaml` State Changes
 
-## `.OpenSuper.yaml` State Changes
+When changing fields in a `.opensuper.yaml` state file, update all three places (all
+in TypeScript):
 
-When changing fields in a `.OpenSuper.yaml` state file, update all three places:
+1. `domains/opensuper-classic/classic-state-command.ts` for the `set` whitelist and
+   enum validation (`SETTABLE_FIELDS` / `MACHINE_OWNED_FIELDS`).
+2. `domains/opensuper-classic/classic-validate-command.ts` for schema validation
+   and the known field set.
+3. `test/domains/opensuper-classic/opensuper-scripts.test.ts` for YAML examples and
+   assertions.
 
-1. `assets/skills/OpenSuper/scripts/OpenSuper-state.sh` for the `cmd_set` whitelist and
-   enum validation.
-2. `assets/skills/OpenSuper/scripts/OpenSuper-yaml-validate.sh` for schema validation
-   and `KNOWN_KEYS`.
-3. `test/ts/OpenSuper-scripts.test.ts` for YAML examples and assertions.
+Then run `pnpm build` to regenerate `opensuper-runtime.mjs`, otherwise the freshness
+check in `classic-runtime.test.ts` will fail.
+
+## Dashboard / Eval / Skill Creator / Skill CLI
+
+OpenSuper has grown from a single `/opensuper` workflow bundle into a workflow + skill
+authoring platform. When working on these commands, note:
+
+- **`opensuper dashboard`**: A local browser dashboard for inspecting workflows and
+  managing supported project settings, plugin lifecycle, Personal Memory, and
+  Project Knowledge records. Frontend code lives in `domains/dashboard/web/`
+  and is built separately via `pnpm build:dashboard`. The backend
+  `domains/dashboard/server.ts` exposes `--json`, read APIs, and the scoped
+  mutation routes used by those controls.
+- **`opensuper eval`**: Repository-local evaluation, including profiles,
+  manifests, HTML reports, token/cost attribution, pass@k/pass^k. See
+  `docs/operations/EVAL-USAGE.md`.
+- **`opensuper creator` / `opensuper publish`**: Main skill-authoring flow. See
+  `docs/operations/SKILL-CREATION.md`. `domains/bundle/*` is their backend
+  tooling.
+- **`opensuper skill add|show|run|continue|check`**: Local skill package
+  management. Code lives in `domains/skill/`.
+
+When changing the behavior or output of these commands, update the
+corresponding `docs/operations/*` document and the matching
+`test/domains/<domain>/` tests.
+
+## Documentation and Bilingual Conventions
+
+Detailed rules live in `CLAUDE.md`. Quick reference:
+
+- **Bilingual order**: Write the Chinese version of skills / docs first
+  (`assets/skills-zh/`, `README-zh.md`, `CONTRIBUTING-zh.md`,
+  `docs/operations/*-ZH.md`), then sync the English version after user
+  confirmation. For skill content changes, do not write the changelog entry
+  until Chinese and English are fully in sync.
+- **README restraint**: After a feature update, do not pile every highlight
+  into the README. Necessary features should be referenced via `docs/`.
+- **Chinese terminology**: Do not translate `gate` as "门" (e.g. "压缩门" /
+  "调试门" reads unnaturally). Translate by context as "协议" (protocol),
+  "阶段" (phase), "检查" (check), or "阻塞点" (blocker). Modifying
+  `proactive` / `active` translates as "主动式".
+- **Skill trigger phrasing**: Chinese uses the unified
+  `**立即执行：** 使用 Skill 工具加载 <skill-name> 技能。禁止跳过此步骤。`
+  and English uses the unified
+  `**Immediately execute:** Use the Skill tool to load the <skill-name> skill. Skipping this step is prohibited.`.
+- **Commit / GitHub conventions**: Do not comment on or open PRs on GitHub
+  without explicit approval; do not append a `Co-Authored-By` line to commit
+  messages.
 
 ## Changelog
 
-Update `CHANGELOG.md` for user-facing behavior changes. New version entries go
-at the top and the version must match `package.json`.
+`CHANGELOG.md` is written in English and records **user-visible** behavior
+changes. See `CLAUDE.md` for the full categorization and the
+"release-perspective check" rules. Quick reference:
 
-Use this shape:
+- The version number must match `package.json`. New version entries go at the
+  top, and a PR may only be one version ahead of `master`.
+- If the current branch already has a version entry ahead of `master`, append
+  to that same entry instead of adding a new running-tally version.
+- Group order: `Added → Changed → Fixed → Tests → Removed → Security`. Each
+  entry starts with `- **Bold keyword**: `.
+- Describe behavior changes and rationale, not implementation trivia.
+- Before writing, run `git log <previous-tag>..HEAD --oneline` to see the real
+  diff; only write "what a user upgrading from the previous version would
+  notice".
+- Do not include branch-internal review follow-ups, doc syncs, test refactors,
+  or internal fixes in the changelog.
+- For skill content changes, the changelog entry must wait until Chinese and
+  English are fully in sync.
+
+Template:
 
 ```markdown
 ## What's Changed [x.y.z] - YYYY-MM-DD
@@ -287,12 +521,9 @@ Use this shape:
 ### Security
 ```
 
-Guidelines:
-
-- Group entries in this order: Added, Changed, Fixed, Tests, Removed, Security.
-- Start each entry with `- **Bold keyword**: `.
-- Describe behavior and rationale, not implementation trivia.
-- In `### Tests`, summarize coverage areas instead of listing every test case.
+`### Tests` is only used when the testing/evaluation capability itself is a
+user-runnable release feature; ordinary regression tests, coverage backfill,
+and test file migrations are not recorded in the changelog.
 
 ## Security
 
@@ -302,3 +533,6 @@ Guidelines:
 - Keep `.gitignore` coverage for secrets, credentials, and IDE-specific files.
 - Validate user-provided change names against path traversal before using them
   in filesystem paths.
+- In symlink install mode, skill installation must not replace a `skills/`
+  directory that contains files outside the managed manifest (see issue #159 in
+  the `0.4.0-beta.2` entry of `CHANGELOG.md`).

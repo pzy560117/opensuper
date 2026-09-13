@@ -1,124 +1,185 @@
 ---
 name: opensuper-archive
-description: "opensuper Phase 5: Archive. Invoke with /opensuper-archive. Merge delta specs into main specs with OpenSpec semantics, archive change."
+description: 'Archive and deliver a Classic change. Use when the user invokes /opensuper-archive or Classic Runtime enters Archive or resumes delivery.'
 ---
 
-# opensuper Phase 5: Archive (Archive)
+# OpenSuper Phase 5: Archive
 
-## Output Language Contract
-
-- Output language: English.
-- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
-- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
-- Use another prose language only when the user explicitly requests it.
+After entry returns layout, follow `opensuper-classic/reference/classic-layout.md` to bind each logical root to its directory. Do not reload the protocol if it is already in context. Use the adapter for OpenSpec CLI calls and the bound `<classic-*>` roots for paths; do not run an extra root show first.
 
 ## Prerequisites
 
-- Verification passed (Phase 4 complete)
-- Branch handled
-- `verify_result: pass` in `openspec/changes/<name>/.opensuper.yaml`
-- If `opentest_gate` is `required` or `not-applicable`, its gate passed during verify; archive still revalidates it and never trusts the old conclusion alone
+- Verification passed; Phase 4 is complete.
+- Archive or the selected delivery action is unfinished. Recovery does not require branch_status to remain pending.
+- `<classic-change-dir>/.opensuper.yaml` records `verify_result: pass`.
 
 ## Steps
 
-### 0. Output Language Constraint
+### 0. Set the output language
 
-Archive summaries and lifecycle closure notes must use the language of the user request that triggered this workflow.
+Use configuration.language from this invocation's entry result for the archive summary and completion message. Do not query the language separately.
 
-### 0. Entry State Verification (Entry Check)
+### 0b. Validate entry state
 
-Execute entry verification:
-
-```bash
-opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
-if [ -z "$opensuper_ENV" ]; then
-  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
-  return 1
-fi
-. "$opensuper_ENV"
-"$opensuper_BASH" "$opensuper_STATE" check <name> archive
-```
-
-Proceed to Step 1 after verification passes. The script outputs specific failure reasons when verification fails.
-
-### 1. Final Archive Confirmation (Blocking Point)
-
-After entry verification passes, **must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user to confirm whether to archive immediately**. Must not run `"$opensuper_BASH" "$opensuper_ARCHIVE" "<change-name>"` before user confirmation.
-
-Before confirmation, show the user a brief summary:
-- Change name
-- Verification report path and result
-- Branch handling status
-- OpenTest gate, strict artifact path, and evidence-ledger value when applicable
-- Irreversible actions this archive will perform: merge main specs with OpenSpec delta semantics, annotate design doc / plan, and move the change to the archive directory
-
-The user confirmation question must be presented as a single-select question with these options:
-- "Confirm archive" — record final confirmation, then run the archive script to complete spec merge and change movement
-- "Needs adjustment or re-verification" — do not archive; run `"$opensuper_BASH" "$opensuper_STATE" transition <change-name> archive-reopen` to return to `phase: verify`, then invoke `/opensuper-verify`. If verification confirms fixes are needed, follow `/opensuper-verify`'s verification-failure decision flow back to `/opensuper-build`
-- "Do not archive yet" — do not archive; keep the current `phase: archive` state and wait for the user to invoke `/opensuper-archive` again later
-
-After the user selects "Confirm archive", immediately run:
+Use the supported `opensuper` CLI in `opensuper-classic/reference/scripts.md` for these checks. When resuming from any entry, first follow `opensuper-classic/reference/context-recovery.md`:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" transition <change-name> archive-confirm
+opensuper state select <change-name>
+opensuper state check <name> archive --json
 ```
 
-If the transition exits non-zero, report the error and stop. Only after it succeeds may Step 2 continue. After the user selects "Needs adjustment or re-verification", must first run the `archive-reopen` state transition; do not edit `.opensuper.yaml` manually.
+Continue from returned layout, configuration, nextAction, and the delivery summary. After context loss, read details according to context-recovery.md. If authorization is still valid and the delivery target is unchanged, continue only unfinished actions without asking again. Handle the specific cause on failure.
 
-### 2. Execute Archive
+If select/check returns `BLOCKED` because `bound_branch` differs from the current branch, pause under `opensuper-classic/reference/decision-point.md`. Offer a single choice: return to the bound branch and rerun entry checks, or, after the user explicitly confirms that the current branch should take over this change, run `opensuper state rebind <change-name>` and rerun entry checks. Do not switch or rebind branches yourself.
 
-Run the archive script to automatically complete all steps:
+### 1. Ask the user to confirm archive and delivery
+
+Read configuration.isolation and delivery from entry. If valid authorization is absent or the delivery target changed, **pause under decision-point.md and ask the user to confirm archive and delivery**. If authorization exists, let Runtime verify actual Git state and delivery progress, then follow nextAction. Do not infer archive, push, or PR authorization solely from branch_status: handled. Do not run archive-confirm or archive before authorization.
+
+Before asking, show a short summary:
+
+- Change name.
+- Verification report path and conclusion.
+- Current branch/workspace and which work owns each uncommitted change.
+- The irreversible archive actions: merge delta changes into main spec, annotate the Design Doc/plan, and move the change to the archive directory.
+- How the archive commit will be handled: keep it local, push the bound branch, or push and create a PR.
+
+Present a single-choice question containing every option below. Use this table in text fallback mode. With structured questions, use “Method” as the short label and “Effect” as its description; do not shorten options until their meaning is unclear.
+
+| Option | Method                                 | Effect                                                                                                                                                                                                                     |
+| ------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A      | Archive locally; do not push           | Archive and create the single archive commit. Keep it on the currently bound branch; do not push or create a PR.                                                                                                           |
+| B      | Confirm archive and push now           | Archive, create the single archive commit, and push the currently bound branch. Do not create a PR.                                                                                                                        |
+| C      | Confirm archive, push, and create a PR | Archive, create the single archive commit, push the bound branch, and create a PR.                                                                                                                                         |
+| D      | Adjust or verify again                 | Do not archive. Run `opensuper state transition <change-name> archive-reopen` to return to `phase: verify`, then invoke `/opensuper-verify`. If repairs are needed, return to `/opensuper-build` under the verification-failure rules. |
+| E      | Do not archive yet                     | Do not run archive-confirm or archive, commit, or push. Keep the unarchived change, `phase: archive`, and `branch_status: pending` for a later `/opensuper-archive` invocation.                                                |
+
+Only after the user chooses A, B, or C, save the choice as JSON through Runtime, then confirm archive:
 
 ```bash
-"$opensuper_BASH" "$opensuper_ARCHIVE" "<change-name>"
+opensuper state delivery <change-name> --file <json-path>
+opensuper state transition <change-name> archive-confirm
 ```
 
-The script automatically executes:
-1. Entry state validation (phase=archive, verify_result=pass, archive_confirmation=confirmed, archived=false)
-2. Before any document annotation, `openspec archive`, or archive-state mutation, run the same OpenTest gate used by verify/direct `verify-pass` as the actual archive preflight
-3. Design doc frontmatter annotation (archived-with, status)
-4. Plan frontmatter annotation (archived-with)
-5. OpenSpec archive for delta-merge semantics and moving the change to the archive directory
-6. Main spec guard against leaked delta-only section headings
-7. Update `archived: true` through `opensuper-state transition <archive-name> archived`
+JSON contains action (A=local, B=push, C=pr), targetBranch, and optional remote, commit, and prUrl. Initially record only confirmed actions and targets. Do not fabricate unknown commit/prUrl values; add them after the operations actually complete.
 
-With `opentest_gate: required`, preflight rediscovers the shipped adapter/provider consumer and semantically recomputes the project-relative `opentest_strict_result` against current Git and hashes. Each required gate check invokes the provider exactly once with a fixed 120-second timeout and 1 MiB output-buffer limit; it also resolves the strict result and its `state_file` before and after the call and requires their canonical path identities and raw bytes to remain unchanged. A missing consumer, result, or provider, timeout/overflow, a present `.pending`, call-time artifact replacement/change, or any non-zero exit blocks before irreversible work. `risk-accepted` revalidates the single complete parseable `OPENTEST_GATE_JSON`, requires each item to contain exactly one of `strict_finding_id`/`strict_key`, a declarative real-human `accepted_by`, a calendar-valid future ISO-8601 expiry (offsets and variable-length fractional seconds supported), and a recovery path. Agents/AIs/placeholders cannot self-approve, and critical/security/data-integrity/money/payment/irreversible risks remain forbidden. `not-applicable` revalidates declarative real-human approval, `scope: "docs-only"`, and committed/staged/unstaged/untracked scope from immutable `base_ref`; `docs/` accepts only `.md/.txt/.rst/.adoc` and static `.png/.jpg/.jpeg/.gif/.svg/.webp`, the active or dated-archive current-change directory accepts only `.md/.openspec.yaml/.opensuper.yaml`, and outside those directories only root ARCHITECTURE/README/CHANGELOG/CONTRIBUTING/LICENSE documents with no extension or `.md/.txt/.rst/.adoc` pass. JSON/YAML/MDX, scripts, nested Markdown, and every runtime/config path block. Empty/duplicate blocks, unmatched delimiters, or malformed JSON block. Only an absent field or literal `null` stays legacy-compatible; empty/other values do not, and legacy is not fusion-complete.
+targetBranch is the bound branch receiving the archive commit, not the PR base branch. Use an explicit existing PR-base configuration; clarify ambiguity first. With multiple remotes, establish the destination rather than guessing. For example, after the user confirms push:
 
-When the archive-directory locator is `YYYY-MM-DD-<change-name>`, the gate reads state from that dated directory but still compares strict-result and machine-block `change_id` with the original `<change-name>`; never put the date prefix into evidence identity.
-
-Only ledger `pass-contract` satisfies `required`; `pass-local`, `not-run`, and `deferred` all block required archive. Only the approved docs-only `not-applicable` exception may close with `not-run`.
-
-If script returns non-zero exit code, report error and stop.
-If script returns zero exit code, archive is complete.
-The summary `X/Y steps succeeded` counts real executed steps and does not double-count delta spec sync or document annotation.
-
-The script calls OpenSpec archive to merge `ADDED/MODIFIED/REMOVED/RENAMED` delta semantics into main specs, then verifies main specs do not contain delta-only section headings.
-
-Use `--dry-run` flag to preview without executing.
-
-### 3. Lifecycle Closed Loop
-
-Spec lifecycle completes here:
+```json
+{
+  "action": "push",
+  "targetBranch": "<confirmed-bound-branch>",
+  "remote": "<confirmed-remote>"
+}
 ```
+
+Save JSON using file tools and pass it to delivery --file. Once the archive commit is confirmed, add `"commit": "<actual-archive-commit-sha>"` to the same complete record. For action pr, add the actual prUrl after PR creation. Local needs only action:local and the confirmed targetBranch; remote is not required.
+
+Plain `opensuper state delivery <change-name>` reads saved records only, and the entry summary does not access the network. Explicitly run the following when resuming remote delivery, resolving an uncertain call result, or preparing to announce completion:
+
+```bash
+opensuper state delivery <change-name> --verify
+```
+
+The result is `{delivery, verification}`. delivery contains saved choices and progress; verification contains Runtime's read-only checks of actual Git, remote branches, and PRs. A delivery record or successful ordinary entry check alone does not prove remote delivery. Handle the result as follows:
+
+- Confirmed not-yet-delivered, such as no first push or a completed push with no PR: if authorization and target remain valid, perform the missing action and check again with --verify. Do not stop solely because of notVerified/needsVerification.
+- unavailable, meaning network, permission, or service failures prevent determining the result, or a target conflict/uncertain outcome: keep the record and stop. Restore read-only verification first; do not blindly retry push or create duplicate PRs.
+
+Stop if either the delivery write or transition fails. Proceed to Step 2 only after both succeed. For D, run archive-reopen; the old delivery authorization must be invalidated, and obtain new confirmation after verification. For E, stop without archiving, committing, pushing, or setting handled.
+
+### 2. Run archive
+
+```bash
+opensuper archive "<change-name>"
+```
+
+The script automatically:
+
+1. Validates entry state: phase=archive, verify_result=pass, archive_confirmation=confirmed, archived=false.
+2. Updates Design Doc metadata before archive: archived-with, status.
+3. Updates Plan metadata before archive: archived-with.
+4. Calls OpenSpec archive to merge deltas into main spec and move the change to archive.
+5. Checks that main spec has no delta-only section headings.
+6. Updates archived state in the actual OpenSpec archive directory and reconciles pending recovery metadata so interrupted work can resume.
+
+Report and stop on a nonzero exit code. A zero exit code means archive completed.
+
+The script's `X/Y steps succeeded` counts actual steps, not duplicate counts for delta syncing or document annotations.
+
+It applies OpenSpec `ADDED/MODIFIED/REMOVED/RENAMED` delta semantics and verifies that main spec has no remaining delta-only section headings afterwards.
+
+Use `--dry-run` to preview without executing.
+
+### 3. Complete the spec workflow
+
+The full path from requirements discussion to archive is now complete:
+
+```text
 brainstorming → delta spec → implementation → verification → main spec merge → design doc annotation → archive
 ```
 
-## Exit Conditions
+### 4. Commit only the archive changes
 
-- Archive script executed successfully (exit code 0)
-- Archive directory `openspec/changes/archive/YYYY-MM-DD-<change-name>/` exists
-- Archived `.opensuper.yaml` contains `archived: true`
+Archive moves files and merges specs; it does not commit. Afterwards, expect these uncommitted changes:
 
-The archive script moves `openspec/changes/<name>/` to `openspec/changes/archive/YYYY-MM-DD-<name>/`.
+- The change moves from `<classic-change-dir>/` to `<classic-archive-root>/YYYY-MM-DD-<name>/`.
+- Main spec contains the merged delta changes.
+- The Design Doc/plan contains archive metadata.
 
-> **WARNING**: After successful archive, **do not run** `"$opensuper_BASH" "$opensuper_GUARD" <change-name> archive` against the old active change name; the active directory no longer exists. Doing so will cause the guard to error with "change directory not found". Archive completeness is determined by script exit code and archived directory state.
+Confirm that delivery still records valid authorization, then write the compatibility field and run the final archive guard:
 
-## Complete
+```bash
+opensuper state set <change-name> branch_status handled
+opensuper guard <change-name> archive
+```
 
-opensuper workflow complete. To start new work, invoke `/opensuper` or `/opensuper-open`.
+handled is only a legacy compatibility field. It neither authorizes local/push/pr nor proves those actions succeeded. Use delivery records and Runtime checks of actual Git/remotes for authorization and completion. Stop on state-write or guard failure. On recovery, check whether the archive commit already exists and reuse it rather than making a second one.
 
-## Context Compression Recovery
+Read `git status --short` after archive and reconcile it against the ownership records collected under dirty-worktree before archive. Stage only paths clearly belonging to this change: the original change path, actual archive path reported by the script, archived `.opensuper.yaml` containing `branch_status: handled`, main specs changed by this delta, and archive metadata in the current Design Doc/Plan. If ownership of any changed path is unclear, stop and ask the user to handle it.
 
-Follow `opensuper/reference/context-recovery.md` with phase set to `archive`. If `archived: true` and archive directory exists, archival is complete — do not re-execute archive operations.
+Use explicit pathspecs for the inspected paths, then inspect the staged diff. Do not stage the whole repository or include pre-existing user edits:
 
-If OpenTest preflight fails, never hand-edit strict JSON or skip the script. When the consumer is missing, install target-project `@pzy560117/opentest` or a sibling `opentest` skill (managed environments may set `OPENSUPER_OPENTEST_CONSUMER`). For a missing/stale result or Git/hash mismatch, confirm no writer is active, then rerun `opentest verify --strict --json --output <opentest_strict_result>` from the target project. If `.pending` exists, diagnose the producer and remove the marker manually only after confirming no writer remains and recovery is safe.
+```bash
+git add -- <individually-verified-archive-paths...>
+git diff --cached --stat
+git commit -m "chore: archive <change-name>"
+```
+
+Stop if commit fails or the staged diff contains unrelated paths. Do not continue branch handling.
+
+### 5. Deliver the archive commit and finish
+
+After commit succeeds, record its actual commit through `state delivery --file`, then let Runtime verify the archive commit and target. Perform only authorized, unfinished actions. Stop delivery if recording fails; do not commit again. On recovery, inspect existing Git commits and branch state before completing the record. Runtime stores delivery receipts; do not create more archive commits merely to record a commit hash.
+
+- A, archive locally: perform no remote operation; keep the archive commit on the bound branch.
+- B, archive and push now: push the bound branch once.
+- C, archive, push, and create a PR: push the bound branch once, then create a PR through the configured GitHub integration. The explicit Step 1 choice authorizes PR creation; do not replace it with another branch-handling method.
+
+After a push or PR call, use delivery --verify to check the actual remote branch and PR. After successful PR creation, record the actual prUrl through delivery --file while preserving action, target, and commit. On timeout or an uncertain response, inspect the actual result before retrying. Keep delivery and current selection on failure, and resume only missing authorized actions. Do not rewrite, delete, or switch branches.
+
+Local requires Runtime to confirm that the archive commit exists. Push additionally requires the remote to contain that commit. PR additionally requires the matching PR and target. Merely filling commit/prUrl does not prove delivery. Run clear-selection and announce completion only after Runtime verifies every selected action.
+
+Do not invoke Superpowers `finishing-a-development-branch` in Archive. Do not offer local merges, branch switches/deletion, rebases, or other branch-topology changes. Choose A for local archive completion or E to defer archive.
+
+## Exit conditions
+
+- The archive script succeeded with exit code 0.
+- `<classic-archive-root>/YYYY-MM-DD-<change-name>/` exists.
+- Archived `.opensuper.yaml` records `archived: true`.
+- The single archive commit includes `branch_status: handled` in archived state.
+- `opensuper guard <change-name> archive` passes.
+- The archive commit was handled as confirmed: A stays local, B was pushed successfully, or C was pushed and has a PR.
+- Current selection was cleared after the selected handling completed.
+
+The script moves `<classic-change-dir>/` to `<classic-archive-root>/YYYY-MM-DD-<name>/`.
+
+`opensuper guard <change-name> archive` resolves the actual archive directory from the original change name. Do not construct a dated directory manually.
+
+## Completion
+
+The OpenSuper Classic workflow is complete. Start new Classic work with `/opensuper-classic` or `/opensuper-open`.
+
+## Recover after context compaction
+
+Follow context-recovery.md with phase archive. Read saved delivery records rather than recalling A/B/C from conversation. After Runtime checks the archive directory, commits, remote, and PR, continue only missing actions; local performs no remote operations. Stop for explicit confirmation if an older change has only handled, authorization is missing, the target changed, or branch relationships differ from the record. Do not infer authorization or repair branch relationships automatically.

@@ -1,0 +1,73 @@
+"""Testing scaffold for OpenSuper skill benchmarks.
+
+Re-exports from scaffold.python for convenience.
+"""
+
+from .python import (
+    NoiseTask,
+    Treatment,
+    ValidatorFn,
+    build_docker_image,
+    check_claude_available,
+    check_code_execution,
+    check_docker_available,
+    check_file_exists,
+    check_no_pattern,
+    check_pattern,
+    check_skill_invoked,
+    compose_validators,
+    make_execution_validator,
+    run_claude_in_docker,
+    run_agent_in_docker,
+    run_agent_loop_in_docker,
+    run_command_in_docker,
+    run_eval_in_docker,
+    run_node_in_docker,
+    run_python_in_docker,
+    run_shell,
+    run_validators,
+)
+from .python.tasks import Task, TaskConfig, list_tasks, load_task
+from .python.treatments import (
+    TreatmentConfig,
+    build_treatment_skills,
+    list_treatments,
+    load_treatment,
+    load_treatments,
+    load_treatments_yaml,
+)
+
+__all__ = [
+    "Task",
+    "TaskConfig",
+    "load_task",
+    "list_tasks",
+    "TreatmentConfig",
+    "build_treatment_skills",
+    "list_treatments",
+    "load_treatment",
+    "load_treatments",
+    "load_treatments_yaml",
+    "NoiseTask",
+    "Treatment",
+    "ValidatorFn",
+    "compose_validators",
+    "run_validators",
+    "check_file_exists",
+    "check_pattern",
+    "check_no_pattern",
+    "check_skill_invoked",
+    "check_code_execution",
+    "run_shell",
+    "check_docker_available",
+    "check_claude_available",
+    "build_docker_image",
+    "run_python_in_docker",
+    "make_execution_validator",
+    "run_eval_in_docker",
+    "run_node_in_docker",
+    "run_claude_in_docker",
+    "run_agent_in_docker",
+    "run_agent_loop_in_docker",
+    "run_command_in_docker",
+]

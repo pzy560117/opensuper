@@ -8,8 +8,8 @@
 
 - [ ] CLI commands (`init`, `status`, `doctor`, `update`)
 - [ ] Core installer / platform detection
-- [ ] opensuper skills (`assets/skills/`, `assets/skills-zh/`)
-- [ ] opensuper shell scripts (`assets/skills/opensuper/scripts/`)
+- [ ] OpenSuper skills (`assets/skills/`, `assets/skills-zh/`)
+- [ ] OpenSuper shell scripts (`assets/skills/opensuper/scripts/`)
 - [ ] Tests / CI
 - [ ] Documentation / changelog
 - [ ] Other:
@@ -20,10 +20,10 @@
 
 - [ ] `pnpm build`
 - [ ] `pnpm lint`
+- [ ] `pnpm run lint:architecture`
 - [ ] `pnpm format:check`
 - [ ] `pnpm test`
-- [ ] `pnpm test -- test/ts/opensuper-scripts.test.ts`
-- [ ] `pnpm test:shell`
+- [ ] `pnpm test -- test/domains/opensuper-classic/opensuper-scripts.test.ts`
 - [ ] Not run:
 
 ## ✅ Checklist

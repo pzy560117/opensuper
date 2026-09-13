@@ -1,0 +1,125 @@
+import type { SkillLanguageId } from './languages.js';
+import { resolveProtectedProjectInstructionPath } from '../workflow-contract/protected-project-path.js';
+import {
+  mergeManagedMarkdownBlock,
+  removeManagedMarkdownBlock,
+  type ManagedMarkdownBlockResult,
+} from './managed-markdown.js';
+
+export const OPENSUPER_AMBIENT_RESUME_TAG = 'opensuper-ambient-resume';
+export const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+
+export interface ProjectInstructionResult {
+  files: Array<{ file: string; result: ManagedMarkdownBlockResult }>;
+  changed: number;
+}
+
+export interface ProjectInstructionRemovalResult {
+  files: Array<{ file: string; result: ManagedMarkdownBlockResult }>;
+  removed: number;
+}
+
+export function renderOpenSuperAmbientResumeContent(languageId: SkillLanguageId): string {
+  if (languageId === 'zh') {
+    return [
+      '<!-- Managed by OpenSuper. Edits inside this block may be replaced by opensuper init/update. -->',
+      '<!-- Contract: opensuper.resume_probe.v2 -->',
+      '',
+      '## OpenSuper Ambient Resume',
+      '',
+      '在这个仓库中，开始处理需要改动或调查的任务前，如果可能存在活跃 OpenSuper workflow，把当前用户请求传入只读探针：`opensuper resume-probe . --stdin --json`。',
+      '',
+      '- 如果用户通过宿主明确调用任意 OpenSuper Skill（例如 `@opensuper`、`/opensuper`、`@opensuper-native` 或 `/opensuper-hotfix`），显式调用优先于本恢复协议；不要运行 resume probe，直接进入被调用的 Skill。',
+      '- 如果用户通过宿主明确调用的是非 OpenSuper 的 Skill 或斜杠命令，任务意图已由该调用明确：不要运行 resume probe，直接执行该 Skill。',
+      '- 如果你正在 OpenSuper 流程内（包括正在等待用户回复你在流程中提出的问题），不要运行 resume probe；把这类回复（例如方案/选项选择）当作当前 change 的继续，直接按用户的选择推进。',
+      '- 只信任返回的 `workflow`、`skill` 和 `entrySource`；它们只由项目配置或无配置兼容回退决定。不得扫描或切换另一套 workflow。',
+      '- 如果 probe 返回 `auto_resume`，简短说明选中的 active change，并进入 `nextCommand` 指向的永久入口。不要把状态命令当作恢复入口直接推进。',
+      '- 如果 probe 返回 `ask_user`，只问一个简短问题并等待用户回复。',
+      '- 如果当前请求未明确调用 OpenSuper Skill，且 probe 返回 `out_of_scope` 或 `none`，不要进入 OpenSuper workflow。',
+      '- `out_of_scope` 或 `none` 只表示不要因为这个新请求进入 OpenSuper workflow；它绝不表示要暂停或退出一个已在进行的 OpenSuper 流程。',
+      '- 如果配置或状态无效且没有 `nextCommand`，停止并报告原因；不要猜测另一个 workflow。',
+      '- 不能只因为存在 active change 就把无关任务挂到该 change。Native 的未提交改动由 Native 入口检查，不由探针自动归因。',
+      '',
+    ].join('\n');
+  }
+
+  return [
+    '<!-- Managed by OpenSuper. Edits inside this block may be replaced by opensuper init/update. -->',
+    '<!-- Contract: opensuper.resume_probe.v2 -->',
+    '',
+    '## OpenSuper Ambient Resume',
+    '',
+    'In this repository, before starting work that may need code changes or investigation, pass the current user request to the read-only probe when a OpenSuper workflow may already be active: `opensuper resume-probe . --stdin --json`.',
+    '',
+    '- If the user explicitly invokes any OpenSuper Skill through the host (for example, `@opensuper`, `/opensuper`, `@opensuper-native`, or `/opensuper-hotfix`), that explicit invocation takes precedence over this resume protocol; do not run the resume probe, and enter the invoked Skill directly.',
+    '- If the user explicitly invokes a non-OpenSuper skill or slash command through the host, the task intent is already explicit in that invocation: do not run the resume probe, and execute the invoked skill directly.',
+    '- If you are already inside a OpenSuper flow (including while waiting for the user to answer a question you asked in that flow), do not run the resume probe; treat replies such as option picks as continuation of the current change and proceed directly with the chosen option.',
+    '- Trust only the returned `workflow`, `skill`, and `entrySource`; project configuration or the no-config compatibility fallback alone selects them. Do not scan or switch to the other workflow.',
+    '- If the probe returns `auto_resume`, briefly state the selected active change and enter the permanent entry in `nextCommand`. Do not treat a state command as the resume entry or advance it blindly.',
+    '- If the probe returns `ask_user`, ask one short question and wait.',
+    '- If the current request did not explicitly invoke a OpenSuper Skill and the probe returns `out_of_scope` or `none`, do not enter the OpenSuper workflow.',
+    '- An `out_of_scope` or `none` result only means do not enter the OpenSuper workflow for this new request; it never pauses or exits a OpenSuper flow that is already in progress.',
+    '- If configuration or state is invalid and `nextCommand` is absent, stop and report the reason; do not guess another workflow.',
+    '- Never attach unrelated work merely because an active change exists. The Native entry inspects uncommitted work; the probe does not attribute it automatically.',
+    '',
+  ].join('\n');
+}
+
+export async function installOpenSuperProjectInstructions(
+  projectPath: string,
+  languageId: SkillLanguageId,
+  platformIds: readonly string[] = ['claude'],
+): Promise<ProjectInstructionResult> {
+  const content = renderOpenSuperAmbientResumeContent(languageId);
+  const files = [];
+
+  for (const file of PROJECT_INSTRUCTION_FILES) {
+    if (file === 'CLAUDE.md' && !platformIds.includes('claude')) continue;
+    const instruction = await resolveProtectedProjectInstructionPath(projectPath, file);
+    const result = await mergeManagedMarkdownBlock(instruction.target, {
+      tagName: OPENSUPER_AMBIENT_RESUME_TAG,
+      content,
+    });
+    files.push({ file, result });
+  }
+
+  return {
+    files,
+    changed: files.filter((entry) => entry.result.changed).length,
+  };
+}
+
+export async function syncOpenSuperProjectInstructions(
+  projectPath: string,
+  languageId: SkillLanguageId,
+  ambientResumeEnabled: boolean,
+  platformIds: readonly string[] = ['claude'],
+): Promise<{ changed: number }> {
+  if (!ambientResumeEnabled) {
+    const result = await removeOpenSuperProjectInstructions(projectPath);
+    return { changed: result.removed };
+  }
+
+  const result = await installOpenSuperProjectInstructions(projectPath, languageId, platformIds);
+  return { changed: result.changed };
+}
+
+export async function removeOpenSuperProjectInstructions(
+  projectPath: string,
+): Promise<ProjectInstructionRemovalResult> {
+  const files = [];
+
+  for (const file of PROJECT_INSTRUCTION_FILES) {
+    const instruction = await resolveProtectedProjectInstructionPath(projectPath, file);
+    const result = await removeManagedMarkdownBlock(
+      instruction.target,
+      OPENSUPER_AMBIENT_RESUME_TAG,
+    );
+    files.push({ file, result });
+  }
+
+  return {
+    files,
+    removed: files.filter((entry) => entry.result.action === 'removed').length,
+  };
+}

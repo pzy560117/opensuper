@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 430" role="img" aria-label="Figure 3. Task outcome matrix">
+<style>
+text { font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif; }
+.title { fill: #1B1A18; font-size: 18px; font-weight: 700; }
+.subtitle, .tick { fill: #66615A; font-size: 12px; }
+.label { fill: #1B1A18; font-size: 13px; }
+.value { fill: #1B1A18; font-size: 12px; font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif; }
+.grid { stroke: #D8D2C7; stroke-width: 1; shape-rendering: crispEdges; }
+.axis { stroke: #1B1A18; stroke-width: 1; shape-rendering: crispEdges; }
+</style>
+<rect width="640" height="430" fill="#FFFFFF" />
+<text class="title" x="32" y="32">Figure 3. Task outcome matrix</text>
+<text class="subtitle" x="32" y="54">Green means pass and red means fail; task-level granularity fits an appendix figure.</text>
+<text class="label" x="321.0" y="86" text-anchor="middle">Current workflow</text>
+<text class="label" x="491.0" y="86" text-anchor="middle">0.3.9 baseline</text>
+<text class="label" x="42" y="130" >API cache TTL</text>
+<rect x="250" y="108" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="130" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<rect x="420" y="108" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="130" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">FAIL</text>
+<text class="label" x="42" y="173" >Fix median</text>
+<rect x="250" y="151" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="173" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<rect x="420" y="151" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="173" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">FAIL</text>
+<text class="label" x="42" y="216" >Full workflow</text>
+<rect x="250" y="194" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="216" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<rect x="420" y="194" width="142" height="34" rx="2" fill="#28745C" />
+<text x="491.0" y="216" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<text class="label" x="42" y="259" >Perf dedupe</text>
+<rect x="250" y="237" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="259" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<rect x="420" y="237" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="259" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">FAIL</text>
+<text class="label" x="42" y="302" >Refactor counter</text>
+<rect x="250" y="280" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="302" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<rect x="420" y="280" width="142" height="34" rx="2" fill="#28745C" />
+<text x="491.0" y="302" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">PASS</text>
+<text class="label" x="42" y="345" >Robust config</text>
+<rect x="250" y="323" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="321.0" y="345" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">FAIL</text>
+<rect x="420" y="323" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="345" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">FAIL</text>
+</svg>

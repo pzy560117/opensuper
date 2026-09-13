@@ -1,0 +1,24 @@
+[metadata]
+name = "opensuper-refactor-counter"
+description = "Refactor three duplicated counting functions into a single count(text, unit) dispatcher without changing behavior"
+difficulty = "medium"
+category = "opensuper"
+tags = ["opensuper", "workflow", "refactor", "dry"]
+default_treatments = [
+    "CONTROL",
+    "OPENSUPER_FULL_040_BETA",
+    "OPENSUPER_FULL_039",
+]
+
+[template]
+required = []
+
+[environment]
+description = "Python text processor with duplicated counting logic. Claude must refactor while preserving behavior."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_refactor_counter.py"
+target_artifacts = []
+timeout = 120

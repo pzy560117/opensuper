@@ -1,16 +1,11 @@
 ---
 name: opensuper-build
-description: "opensuper 阶段 3：计划与构建。用 /opensuper-build 调用。制定计划并选择执行方式（subagent 或直接执行）实施。"
+description: '制定计划、实施并验收 Classic 任务。在用户调用 /opensuper-build，或 Classic Runtime 进入 Build、返回 Build 修复时使用。'
 ---
 
-# opensuper 阶段 3：计划与构建（Build）
+# OpenSuper 阶段 3：计划与构建（Build）
 
-## 产出语言契约
-
-- 产出语言：中文。
-- 本 skill 的所有面向用户输出和生成文档默认使用中文，包括 `proposal.md`、`design.md`、`tasks.md`、delta spec、Design Doc、Plan、verification report 和归档说明。
-- 命令、路径、frontmatter key、代码标识符、包名和 API 名称保持原文。
-- 只有用户明确要求英文时才改用英文正文。
+收到入口返回的 layout 后，按 `opensuper-classic/reference/classic-layout.md` 确定各逻辑根对应的目录。当前上下文已有这份协议时，无需重复加载。本文件中的 OpenSpec CLI 调用均通过适配器执行，文件路径均基于已绑定的 `<classic-*>` 根目录，无需先额外运行 root show。
 
 ## 前置条件
 
@@ -21,311 +16,193 @@ description: "opensuper 阶段 3：计划与构建。用 /opensuper-build 调用
 
 ### 0. 入口状态验证（Entry Check）
 
-执行入口验证：
+按 `opensuper-classic/reference/scripts.md` 使用正式支持的 `opensuper` CLI，执行以下入口验证。从任意入口恢复任务时，先按 `opensuper-classic/reference/context-recovery.md` 检查恢复状态：
 
 ```bash
-opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
-if [ -z "$opensuper_ENV" ]; then
-  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
-  return 1
-fi
-. "$opensuper_ENV"
-"$opensuper_BASH" "$opensuper_STATE" check <name> build
+opensuper state select <change-name>
+opensuper state check <name> build --json
 ```
 
-验证通过后继续 Step 1。验证失败时脚本会输出具体失败原因。
+本轮 Design/Guard 已成功返回 Build 状态信息时，直接使用其中的 `data.configuration`、`configurationReadiness`、`artifactRefs` 和任务信息，并按 `agent.continuation` 继续，不重复 select/check。恢复任务、工作区变化或外部状态变化时，才执行上述入口验证。配置写入成功后，使用返回的结果，不逐字段重复调用 get；验证失败时处理 `data.issues`。
 
-**幂等性**：build 阶段所有操作可安全重复执行。读取 `.opensuper.yaml` 的 `phase` 字段确认仍在 build 阶段，读取 plan 文件头的 `base-ref`，再用 `grep -n '\- \[ \]' tasks.md | head -1` 找到第一个未勾选任务继续执行。已提交的任务不得重复提交。
+若上述 `select` / `check` 输出 `BLOCKED`，且原因是 `bound_branch` 与当前分支不一致，立即按 `opensuper-classic/reference/decision-point.md` 暂停，让用户单选：切回绑定分支后重新运行入口验证，或在用户明确确认当前分支应接管该 change 后运行 `opensuper state rebind <change-name>` 并重新入口验证。不得自行切换分支，不得自行换绑。
 
-### 1. 制定计划（Subagent Offload）
+**恢复**：根据入口返回的 phase、任务 ID 和 plan 的 `base-ref`，核对现有实现与审查记录，再从尚未完成的实施或审查步骤继续。任务未勾选不等于尚未实现。派发任务前先核对检查点，不重复已有提交，也不假定外部操作可以安全重试。
 
-通过 subagent 创建实施计划，避免 planning skill 占用主 session 上下文。计划文件和执行反馈必须使用触发本次工作流的用户请求语言。
+### 1. 先确认执行策略
 
-**Subagent 指令**：
+读取入口返回的 configuration、`configurationReadiness`、taskState 和 nextAction。`configurationReadiness.missingFields` 与 `invalidFields` 均为空时，沿用已确认配置，不重新列成待选择问题；只有缺失或无效字段才补问对应决定。已有计划和审查记录仍然有效时直接继续，不重新询问或生成。工作区必须已在 Open 阶段准备并绑定；缺少 isolation 或目录不匹配时停止，回到 workspace resolve 返回的 projectRoot 恢复任务，不能在 Build 新建或切换工作区。
 
-你是实施计划专家。基于以下输入创建实施计划：
+**写计划前必须确认执行策略**。`configurationReadiness` 只列出尚未确定或组合无效的字段；配置已经有效时不重复询问。配置缺失或用户明确要求更改时，按 `opensuper-classic/reference/decision-point.md` 在同一轮提问中收集执行方式、TDD 和审查模式，但只询问 `missingFields` 和 `invalidFields` 中列出的决定，不按模型名称自动选择：
 
-1. **立即执行：** 使用 Skill 工具加载 Superpowers `writing-plans` 技能。禁止跳过此步骤。技能加载后，ARGUMENTS 必须包含：`Language: 使用触发本次工作流的用户请求语言输出` 和 `产出语言：中文`。
-2. 读取 Design Doc（`docs/superpowers/specs/` 下的技术设计文档）
-3. 读取 `openspec/changes/<name>/tasks.md`（任务边界）
-4. 按技能指引创建计划
+| build_mode                    | 行为                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `autonomous`                  | 用户明确选择后，Agent 自行制定计划；可以串行实施，也可以将范围明确的一组任务委派给子代理，不强制加载外部规划或执行 Skill |
+| `subagent-driven-development` | 加载同名 Superpowers Skill；主会话负责协调，实现代理（implementer）负责实施，并遵守 OpenSuper 的任务派发与审查规则           |
+| `executing-plans`             | 加载同名 Superpowers Skill，由主会话按计划顺序实施                                                                       |
 
-计划要求：
-- 保存至 `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`
-- 引用设计文档，拆分为可执行任务
-- Plan 正文必须使用中文；frontmatter key、路径、命令和代码标识符保持原文
-- **Plan 文件头必须包含关联元数据**：
+Agent 具备较强的自主规划能力、任务较长且需要灵活安排时，可推荐 autonomous；希望遵循固定的委派方法时，推荐 subagent-driven-development；希望按固定顺序执行计划时，推荐 executing-plans。推荐不能代替用户确认，也不自动替换已有 change 的执行策略。
+
+| 配置          | 选项与约束                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tdd_mode`    | `tdd`：先确认测试因待实现的行为而失败（RED），再实施并使测试通过（GREEN）；`direct`：不强制逐任务 RED/GREEN，但仍需相关测试和缺陷回归结果                           |
+| `review_mode` | `off`：低风险任务不自动审查；`standard`：审查有风险的任务，并在 Verify 完成唯一一次最终集成审查；`thorough`：按已选执行方式逐任务或分段独立审查，并完成最终集成审查 |
+
+full 流程采用 autonomous 时，必须选择 standard 或 thorough，不能用实现者自评代替独立审查。已有执行策略仍遵循原有 review_mode 规则。TDD 默认推荐 tdd，审查默认推荐 standard；hotfix/tweak 的 direct 预设保持不变。
+
+用户完成所有选择后，在一次原子操作中写入配置。例如，用户明确选择自主执行、TDD 和 standard 审查时：
+
+```bash
+opensuper state set <name> build_mode autonomous subagent_dispatch null tdd_mode tdd review_mode standard --json
+```
+
+将示例替换为用户的实际选择。选择 subagent-driven-development 时，同时写入 `subagent_dispatch confirmed`；其他方式写入 null。保留 isolation、bound_branch 和已有暂停状态。写入失败时停止，不加载执行 Skill。用户尚未决定或要求暂停时停止，不写入不完整的配置。
+
+`direct` 不是 autonomous 的别名：full 只有用户明确要求且记录 `direct_override true` 才允许 direct；不能借自主策略跳过设计、计划、配置、验证或独立审查。
+
+### 2. 创建或恢复计划
+
+任务是否完成，以 `tasks.md` 为准。需要读取各项任务的正文或 ID 时，才运行 `opensuper state tasks <name> --json`；缺少 ID 时运行 `opensuper state tasks <name> --assign-ids --json`。保留已有 ID，并更新受影响的 handoff 和计划中的任务映射。
+
+恢复任务、同步旧计划中的勾选框或补记完成状态时，按 context-recovery.md 处理。任务未勾选不等于尚未实施：已经实现且检查、审查充分的任务可以补勾；其余任务只补未完成的工作。task-complete 会自动同步有 opensuper-task ID 映射的旧计划；需要单独同步时，使用 `opensuper state sync-plan <name>`。planSync 返回 mapping-required 时，只补任务映射，不重做实现。
+
+已有有效计划时沿用。否则使用 configuration.language，在 `<classic-superpowers-root>/plans/<YYYY-MM-DD>-<change-name>.md` 创建计划：
+
+- autonomous：由当前 Agent 直接编写和自检，不加载 writing-plans。
+- 其他计划执行策略：使用 `writing-plans` Skill，只采用其编写和自检方法；技能失败则停止。传入已确认的配置、design_doc、tasks.md、固定计划路径和当前 `git rev-parse HEAD`。完成后返回 OpenSuper Build，不再次选择执行策略，也不自动进入外部 Skill 的后续流程。
+
+计划深度按风险调整：范围明确、方法成熟且易回退的任务简要记录；存在真实技术取舍、组件依赖、权限、迁移、并发、兼容性或不可逆操作时，补充方案理由、依赖、回退和验证。每个任务仍对应一个可独立验收的结果，列明 task ID、范围、依赖、约束，以及验收命令或场景；不按预计分钟数、文件数量或 RED/GREEN 步骤拆分任务。计划引用已有设计和需求，不预先写出完整实现；只有必须提前审查的接口或高风险算法，才提供必要的代码片段。
+
+新计划不创建第二套 checkbox，写入 `<!-- opensuper-task-authority: <classic-task-authority-ref> -->`（取自 `data.artifactRefs.tasks` 的仓库相对引用），以 `<!-- opensuper-task-ref:<task-id> -->` 关联每个任务。计划新增实际任务必须先纳入 tasks.md 并分配 ID；范围变化按 Step 4 处理。
+
+计划文件头：
 
 ```yaml
 ---
-change: <openspec-change-name>
-design-doc: docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md
+change: <change-name>
+design-doc: <recorded-design-doc-path>
 base-ref: <git rev-parse HEAD before implementation>
 ---
 ```
 
-`base-ref` 用于验证阶段跨提交统计改动规模。创建计划时先记录当前提交：
+保留旧计划 base-ref，不在恢复时替换为当前 HEAD。`<plan-ref>` 沿用 `data.artifactRefs.plan`，新计划使用 `data.artifactRefs.plansRoot` 与已选文件名组成的仓库相对引用；绝对路径仅用于写文件。确认文件存在后记录：
 
 ```bash
-git rev-parse HEAD
+opensuper state set <name> plan "<plan-ref>" --json
 ```
 
-将计划写入文件后，返回文件路径。
+计划完成后，默认按已确认的策略继续，不再追加配置确认。用户明确要求切换模型，或要求写完计划后暂停时，写入 `opensuper state set <name> build_pause plan-ready` 并停止。恢复已有 plan-ready 暂停时，只有用户明确要求继续，才清除暂停状态。沿用仍然有效的计划和配置；旧 change 缺少配置时补做 Step 1，不重写计划。
 
-**执行 subagent**：使用当前平台的 subagent 调度机制派发上述任务。
+### 3. 执行与验收
 
-Subagent 完成后：
-- 若返回有效文件路径且文件存在，记录为 plan
-- 若 subagent 失败或返回路径无效，在主 session 内联加载 Superpowers `writing-plans` 技能创建计划（降级回退）
+执行前使用本轮入口配置和 continuation；配置、需求或工作区变化后刷新入口。按风险执行相关检查，不在每个小修改后重复全量验证；外部 Skill 只执行当前计划和确认配置，不新建 Worktree、重新选择隔离、追加最终审查或调用 finishing-a-development-branch；完成任务返回 OpenSuper Build。
 
-### 2. 更新计划状态并提供 plan-ready 暂停点
+- autonomous：Agent 在计划范围内自行组织实施。需要委派时，先读取 `opensuper-classic/reference/subagent-dispatch.md`，将范围明确的一组任务作为工作包交给子代理，通过 Runtime 保存协调记录，并安排独立审查者（reviewer）；不强制加载外部执行 Skill。
+- executing-plans：使用 Skill 工具加载 Superpowers `executing-plans`，传入入口 configuration.language，按计划顺序执行；加载失败则停止。
+- subagent-driven-development：加载同名 Superpowers Skill 和 `opensuper-classic/reference/subagent-dispatch.md`。主会话负责协调，不代替实现代理编写代码；派发失败时保存 BLOCKED 原因，不能擅自接管实现或更改策略。
 
-先记录 plan 路径：
+配置为 tdd 时，每个实现任务都必须记录 RED 和对应 GREEN 的命令及真实结果，并确认 RED 的失败原因就是待实现的行为。autonomous 无需加载外部 TDD Skill，但仍须完成 RED/GREEN；executing-plans 在首次实施前加载一次 test-driven-development，子代理策略则由实现代理加载。上下文完整时不重复加载；丢失上下文后恢复任务时，先核对已有结果，不重演已经验证的实现过程，也不回退代码伪造 RED。direct 模式仍需相关检查与缺陷回归结果。
 
-```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> plan docs/superpowers/plans/YYYY-MM-DD-feature.md
-```
+Build 只做任务或分段审查，Verify 负责唯一最终集成审查：
 
-无需手动更新 phase，阶段守卫（guard `--apply`）会在退出条件满足后推进 `phase` 字段。
+- autonomous 及子代理执行：按 subagent-dispatch.md 的风险分级和复查次数限制进行独立任务审查；autonomous 即使不委派实现，也必须由独立审查者完成所需审查。
+- executing-plans + off|standard：验收任务后进入 Verify，不追加 Build 最终审查。
+- executing-plans + thorough：每个任务都须纳入独立审查；依赖紧密、必须共同验收的任务可组成一段，按可独立验收的结果与风险边界审查 diff，不按固定任务数量切段。各段通过审查后才继续依赖它的后续实施，不将可独立验收的全部任务合成一段延后审查。没有后续实施的最后一段交由 Verify 的唯一最终集成审查。
 
-计划写入后，立即提供一个新的用户决策点：
+必须解决 CRITICAL/IMPORTANT 问题。无法进行独立审查时停止，不能用自评代替。对于已接受的非关键偏差，记录接受依据和影响范围。验收后，使用 task-complete 按任务 ID 逐项勾选 tasks.md；通过 `opensuper state checkpoint <name> --file <json-path>` 保存协作与恢复记录，字段与读写规则见 context-recovery.md。检查点不能代替任务勾选或实际检查、审查结果。
 
-| 选项 | 行为 | 说明 |
-|------|------|------|
-| A | 继续执行 | 保持在当前模型中，进入 Step 3 选择工作区隔离和执行方式 |
-| B | 暂停切换模型 | 记录 `build_pause: plan-ready`，本次 `/opensuper-build` 停止，用户稍后可从 `/opensuper` 或 `/opensuper-build` 恢复 |
+### 3b. 执行中异常调试（异常调试协议）
 
-这是用户决策点。**必须按 `opensuper/reference/decision-point.md` 的协议暂停并等待用户明确选择**，不得自动继续，也不得把暂停写入 `build_mode`。
+执行任务期间，出现非预期的崩溃、异常行为、测试失败或构建失败，必须先调查根因；autonomous 直接遵循异常调试协议，其他策略加载 Superpowers `systematic-debugging`。根因未明前不得实施源码修复。已核对因待实现行为而失败的 TDD RED 是正常证据；加载错误、环境错误、无关回归或原因不明的 RED 仍须调查。
 
-用户选择继续时：
-
-```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> build_pause null
-```
-
-用户选择暂停时：
-
-```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> build_pause plan-ready
-```
-
-设置 `build_pause: plan-ready` 后，当前调用停止。不要选择 `isolation` 或 `build_mode`，不要加载执行技能。
-
-### 3. 选择工作方式
-
-如果恢复时检测到 `build_pause: plan-ready` 且 `plan` 文件存在，不要重新运行 `writing-plans`。先告知用户当前停在 plan-ready 暂停点；用户确认继续后，设置：
-
-```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> build_pause null
-```
-
-然后继续本步骤选择工作区隔离和执行方式。
-
-计划已写入当前分支。在开始执行前，**一次性询问用户**选择工作区隔离方式和执行方式：
-
-**工作区隔离**：
-
-| 选项 | 方式 | 说明 |
-|------|------|------|
-| A | 创建分支 | 在当前仓库创建新分支，简单快速 |
-| B | 创建 Worktree | 隔离工作区，完全独立，适合并行开发 |
-
-**推荐规则**：
-- 变更涉及 ≤ 3 个文件 → 推荐 A
-- 需要并行开发、当前分支有未提交工作 → 推荐 B
-
-**执行方式**：
-
-| 选项 | 技能 | 适用场景 |
-|------|------|---------|
-| A | Superpowers `subagent-driven-development` | 任务独立、复杂度高、需要双阶段审查 |
-| B | Superpowers `executing-plans` | 任务简单、无子agent环境、轻量快速 |
-
-**执行方式推荐规则**：
-- 任务数 ≥ 3 → 推荐 A
-- 任务数 ≤ 2 且无跨模块依赖 → 推荐 B
-- 来自 hotfix 路径 → 推荐 B
-
-这是用户决策点。**必须按 `opensuper/reference/decision-point.md` 的协议暂停并等待用户明确选择隔离方式、执行方式和 TDD 模式**，不得根据推荐规则自行选择 `branch` 或 `worktree`，也不得根据推荐规则自行选择执行方式或 TDD 模式。推荐规则只能用于说明建议，不能替代用户确认。
-
-用户选择后，更新 `isolation`、执行方式和 TDD 模式相关字段：
-
-```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> isolation <branch|worktree>
-```
-
-- 若用户选择 `executing-plans`：运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> subagent_dispatch null`，再运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> build_mode executing-plans`
-- 若用户选择 `subagent-driven-development`：先确认当前平台存在可调用的真实后台 subagent / Task / multi-agent 调度能力；确认后先运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> subagent_dispatch confirmed`，再运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> build_mode subagent-driven-development`
-- 若无法确认真实后台调度能力，不得写入 `build_mode: subagent-driven-development`；必须暂停等待用户改选 `executing-plans`
-
-**TDD 模式**：
-
-| 选项 | 含义 | 适用场景 |
-|------|------|---------|
-| `tdd` | 每个任务先写失败测试再写实现 | 推荐。变更涉及业务逻辑、新功能、API |
-| `direct` | 直接实现，不强制 TDD 流程 | 变更不需要测试覆盖，或用户选择跳过测试直接写代码。hotfix/tweak preset 默认使用 `direct` |
-
-运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> tdd_mode <tdd|direct>`
-
-`isolation` 是脚本级硬约束。full workflow 初始化时可以为 `null`，但只允许存在到本步骤之前。若保持 `null`，`build → verify` 的 guard 和 `opensuper-state transition build-complete` 都会失败。
-
-`subagent_dispatch` 是脚本级硬约束。`build_mode: subagent-driven-development` 离开 build 阶段前必须同时满足 `subagent_dispatch: confirmed`，否则 `opensuper-guard.sh build --apply` 和 `opensuper-state transition build-complete` 都会失败。
-
-`tdd_mode` 是脚本级硬约束。full workflow 离开 build 阶段前 `tdd_mode` 必须已选择为 `tdd` 或 `direct`，否则 `opensuper-guard.sh build --apply` 和 `opensuper-state transition build-complete` 都会失败。
-
-`build_mode` 默认仅 hotfix/tweak preset 使用 `direct`。full workflow 不得默认使用 `direct`。只有用户明确要求跳过计划执行技能，且你已记录显式 override 时，才允许：
-
-```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> direct_override true
-"$opensuper_BASH" "$opensuper_STATE" set <name> build_mode direct
-```
-
-没有 `direct_override: true` 时，full workflow 的 `build_mode=direct` 会被 guard 和状态转换同时拦截。
-
-**执行隔离**：
-
-- **branch**：根据 workflow 类型和当前日期推荐分支名，然后让用户确认或输入自定义名称。这是用户决策点——**必须使用当前平台可用的用户输入/确认机制暂停并等待用户明确确认或覆盖分支名**，不得跳过此步骤直接创建分支。
-
-  分支命名规范：
-  - 读取 `.opensuper.yaml` 的 `workflow` 字段确定前缀
-  - `workflow: full` → 推荐 `feature/YYYYMMDD/<change-name>`
-  - `workflow: hotfix` → 推荐 `hotfix/YYYYMMDD/<change-name>`
-  - `workflow: tweak` → 推荐 `tweak/YYYYMMDD/<change-name>`
-  - 日期取运行时 `date +%Y%m%d` 的结果
-
-  示例：如果 change 名称为 `fix-login-bug`，今天是 2026-06-09，则推荐 `feature/20260609/fix-login-bug`
-
-  用户确认或提供自定义分支名后，执行 `git checkout -b <branch-name>`，后续工作在新分支上进行。
-
-- **worktree**：必须使用 Skill 工具加载 Superpowers `using-git-worktrees` 技能创建隔离工作区。禁止用普通 shell 命令或原生工具绕过该技能；如该技能不可用，停止流程并提示安装或启用 Superpowers 技能。
-
-创建隔离后，确认计划文件可访问（分支方式天然可访问；worktree 方式需确认计划已提交）。若 worktree 模式下计划文件尚未提交，先提交计划文件再创建 worktree：
-
-```bash
-git add docs/superpowers/plans/YYYY-MM-DD-feature.md
-git commit -m "chore: add implementation plan"
-```
-
-**执行计划**：必须按 `build_mode` 的真实运行位置处理。
-
-- `build_mode: executing-plans`：**立即执行：** 使用 Skill 工具加载 Superpowers `executing-plans` 技能。禁止跳过此步骤。若该技能不可用，停止流程并提示安装或启用对应技能，不要用普通对话替代该步骤。技能加载后，ARGUMENTS 必须包含与 Step 1 相同的 Language 约束：`Language: 使用触发本次工作流的用户请求语言输出` 和 `产出语言：中文`。按计划执行。
-- `build_mode: subagent-driven-development`：主会话只负责协调，禁止直接编写实现代码。**立即执行：** 使用 Skill 工具加载 Superpowers `subagent-driven-development` 技能。技能加载后，读取 `opensuper/reference/subagent-dispatch.md` 获取 opensuper 专属扩展（真实后台调度、任务隔离、勾选验证、TDD 约束、连续执行、上下文恢复），与技能工作流配合应用。若两者发生冲突，以更具体的 opensuper 扩展为准。
-- 如果当前平台没有真实后台 agent 调度能力，必须暂停并等待用户选择改用主窗口执行。用户选择改用主窗口执行后，必须先运行 `"$opensuper_BASH" "$opensuper_STATE" set <name> build_mode executing-plans`，再按 `build_mode: executing-plans` 分支加载 Superpowers `executing-plans` 技能。用户未明确选择前，不得继续执行任务。
-
-**TDD 模式执行约束**：
-
-若 `tdd_mode: tdd`：
-- `build_mode: executing-plans`：加载执行技能后、执行第一个任务前，**立即执行：** 使用 Skill 工具加载 Superpowers `test-driven-development` 技能一次。禁止跳过此步骤。技能加载后，从第一个未勾选任务开始，对每个任务遵循已加载的 TDD Red-Green-Refactor 循环执行。不得跳过失败测试验证阶段。后续任务不再重新加载该技能，直接遵循已加载流程。若上下文压缩后恢复，重新运行本步骤加载 TDD 技能一次，然后从第一个未勾选任务继续。
-- `build_mode: subagent-driven-development`：主会话不加载 TDD skill；TDD 约束和证据门槛已在 `opensuper/reference/subagent-dispatch.md` 中定义，每个后台 implementer 和修复 agent 必须自行使用 Skill 工具加载 Superpowers `test-driven-development` 技能，并遵循 opensuper 注入的 TDD 硬约束。
-
-若 `tdd_mode: direct`：按正常流程执行，不强制 TDD。
-
-**`executing-plans` review gate**：
-
-当 `build_mode` 为 `executing-plans` 时，在所有计划任务完成后、运行 build → verify 阶段守卫前，必须使用 Skill 工具加载 Superpowers `requesting-code-review` 技能并至少请求一次代码审查。
-
-要求：
-- `requesting-code-review` 技能必须在 `"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply` 之前加载
-- 若 `requesting-code-review` 技能不可用，跳过 review gate 但必须在 tasks.md 中记录 `<!-- review skipped: skill unavailable -->`，并继续 guard 流转
-- CRITICAL review 发现（安全漏洞、数据丢失风险、构建/测试失败）必须先修复，不得带入 verify
-- 非 CRITICAL review 发现如选择接受，必须在 tasks.md、commit body、验证报告草稿或其他持久产物中记录接受原因和影响范围
-
-### 3b. 执行中异常调试（Debug Gate）
-
-执行任务期间，只要运行程序、测试、构建或手动验证时出现崩溃、异常行为、测试失败或构建失败，必须使用 Skill 工具加载 Superpowers `systematic-debugging` 技能。在完成根因调查前，不得提出或实施源码修复。
-
-具体调查、最小失败测试、修复验证和保持当前 change 验证闭环的要求，按 `opensuper/reference/debug-gate.md` 执行。
+根因调查、最小失败测试、修复后的验证，以及如何在当前 change 中完成这些步骤，均按 `opensuper-classic/reference/debug-gate.md` 执行。
 
 ### 4. Spec 增量更新
 
 实施过程中发现初版 spec 不完整时，按变更规模分级处理：
 
-| 规模 | 触发条件 | 做法 |
-|------|---------|------|
-| 小 | 遗漏验收场景、边界条件 | 直接编辑 delta spec + design.md，追加 tasks.md 任务 |
-| 中 | 接口变更、新增组件、数据流变化 | **使用当前平台可用的用户输入/确认机制暂停并等待用户确认后**，必须使用 Skill 工具加载 Superpowers `brainstorming` 更新 Design Doc + delta spec |
-| 大 | 全新 capability 需求 | **必须使用当前平台可用的用户输入/确认机制暂停并等待用户确认拆分**；用户确认后，通过 `/opensuper-open` 创建独立 change |
+已确认范围内、不改变公开行为和验收约束的实现细节调整，只更新实施计划及理由，不重新开启 Open/Design。下面的分级规则仅用于真实规格或范围变化。
 
-**50% 阈值判定**：以 tasks.md 初始任务总数为基准，若新增任务数超过该总数的一半，视为超出原计划范围，**必须按 `opensuper/reference/decision-point.md` 的协议暂停并等待用户决定是否拆分为新 change**。
+| 规模 | 触发条件                       | 做法                                                                                                                     |
+| ---- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| 小   | 遗漏验收场景、边界条件         | 直接编辑 delta spec + design.md，追加 tasks.md 任务                                                                      |
+| 中   | 接口变更、新增组件、数据流变化 | **暂停、展示选择并等待用户明确确认后**，必须使用 Skill 工具加载 Superpowers `brainstorming` 更新 Design Doc + delta spec |
+| 大   | 全新的功能需求                 | **暂停、展示拆分选择并等待用户明确确认**；用户确认后，通过 `/opensuper-open` 创建独立 change                                 |
 
-创建独立 change 时必须调用 `/opensuper-open`，不得直接调用 `/opsx:new`。`/opensuper-open` 会同时创建 OpenSpec 产物和 `.opensuper.yaml`，避免新 change 脱离 opensuper 状态机。
+**范围复核**：新增任务前，先核对原目标、公开行为、验收要求，以及用户已接受的风险。补充原范围内遗漏的实现或验收、调整任务粒度时，直接更新任务并记录依据；任务数量或增长比例本身不触发暂停。只有实际扩大范围、需要重新设计或出现可独立交付的新功能时，才按 `opensuper-classic/reference/decision-point.md` 暂停，让用户确认继续、调整还是拆分。
+
+创建独立 change 时必须调用 `/opensuper-open`，不得直接调用 `/opsx:new`。`/opensuper-open` 会同时创建 OpenSpec 产物和 `.opensuper.yaml`，避免新 change 脱离 OpenSuper 状态机。
 
 **用户选择必须包含**：
+
 - 「拆分为新 change」— 通过 `/opensuper-open` 创建独立 change
 - 「继续在当前 change 内完成」— 记录范围扩展决策，更新 tasks.md 和 delta spec 后继续
 
 **原则**：
-- delta spec 是活文档，本阶段期间随时可修改
+
+- delta spec 随实现进展持续维护，在本阶段可按上述规则修改
 - 每次更新应提交，commit message 说明变更原因
 - 不提前同步到 main spec，归档时统一同步
 - 小规模增量直接改 delta spec 时，应在 commit message 中注明，便于归档时判断 design doc 漂移
 
-### 4b. 准备 OpenTest strict 证据（按状态启用）
-
-OpenTest 是独立的质量证据 producer，不替代本阶段的 TDD、构建、测试或 review gate。所有状态和证据都必须位于同时安装 OpenSuper 与 OpenTest 的目标项目中。
-
-- `opentest_gate: required`：`opentest_strict_result` 必须是非空的项目相对规范路径。完成最后一次实现提交并更新 OpenTest ledger、matrix、报告和证据后，先在目标项目生成 strict artifact：
+**handoff 同步**：delta spec 的增、改、删都会使设计交接包（`handoff_hash`）过期。Build 阶段可随时直接重新生成，无需回退当前 phase 或 step：
 
 ```bash
-OPENTEST_RESULT=$("$opensuper_BASH" "$opensuper_STATE" get <change-name> opentest_strict_result)
-opentest verify --strict --json --output "$OPENTEST_RESULT"
+opensuper handoff <change-name> design --write
 ```
 
-  producer 必须以退出码 0 完成。此时最多记录 `pass-local`；只有 verify 阶段由 OpenSuper 已分发的 adapter 调用 OpenTest provider consumer 完成语义重算后，才能记录 `pass-contract`。每次 required gate 校验只调用 provider 一次，固定 120 秒超时和 1 MiB 输出缓冲上限；调用前后会重新解析 strict result 与其 `state_file` 的规范路径身份，并比较 result 原文和 state 原始字节。strict JSON 绑定当前 Git `HEAD` 和证据哈希；其后如有提交或证据变化，必须重新生成，不得手改 JSON。若 producer 返回 `risk-accepted`，退出码 0 也不等于 gate 通过；verify 仍须取得人类批准，并为每项在 `strict_finding_id`/`strict_key` 中严格二选一写入唯一合法 `OPENTEST_GATE_JSON`。`accepted_by` 只是声明性真实人类身份，agent/AI/占位不得自批；`expires_at` 必须是未来且日历有效的 ISO-8601（允许 offset 和可变长度小数秒）。critical/security/data-integrity/money/payment/irreversible 风险禁止接受。
-- `opentest_gate: not-applicable`：不生成 strict artifact；只允许真正的纯文档变更，并在 verify 阶段由真实人类声明性批准带 `scope: "docs-only"` 的唯一合法 `OPENTEST_GATE_JSON` 机器块。资格从完整、不可变且为 `HEAD` 祖先的 `base_ref` 检查 committed、staged、unstaged、untracked 四类改动；`docs/` 仅允许 `.md/.txt/.rst/.adoc` 与 `.png/.jpg/.jpeg/.gif/.svg/.webp` 静态图，当前 active 或 dated-archive change 目录仅允许 `.md/.openspec.yaml/.opensuper.yaml`；除此之外，仅允许仓库根目录中名为 ARCHITECTURE/README/CHANGELOG/CONTRIBUTING/LICENSE 且无扩展名或扩展名为 `.md/.txt/.rst/.adoc` 的文档。JSON/YAML/MDX、scripts、嵌套 Markdown 及所有 runtime/config 路径阻塞。
-- 只有 `opentest_gate` 字段缺失或其值为字面量 `null` 才保持旧版兼容；空值、其他值或 malformed/duplicate 状态字段阻塞，且 legacy 不得称为 `pass-contract` 或 fusion-complete。
-
-`not-run` 和 `deferred` 只能记录尚未执行/延后的交接状态，不能满足 `required`；`not-run` 只有配合批准后的纯文档 `not-applicable` 才可完成消费者例外。
-
-verify 阶段的 provider consumer 发现顺序为 `OPENSUPER_OPENTEST_CONSUMER` → 同级已安装 `opentest` skill → 目标项目 `node_modules/@pzy560117/opentest`。OpenSuper 的 adapter/provider consumer 发现或验证失败不在 build 阶段降级；verify 会把 consumer、provider、结果缺失、超时/超限、调用期间 artifact 身份或字节变化以及任一非零退出码作为阻塞项。`OPENTEST_GATE_JSON` 必须恰好有一个匹配的开/闭分隔块和非空合法 JSON；重复、未闭合或 malformed 均阻塞。
+重新生成时，会根据当前 OpenSpec 产物重建 handoff 并更新 `handoff_hash`，不会改变 `phase` 字段或 Runtime `currentStep`；更新后可以继续 build 阶段。
 
 ### 5. 上下文管理
 
 Build 是最长阶段，可能跨越大量任务。为支持上下文压缩后断点恢复：
 
-- **每完成一个 task**：按当前执行分支完成验收后再勾选对应任务并提交。`subagent-driven-development` 必须等两个审查都通过，并按任务唯一文本完成定向检查。可用 `grep -c '\- \[ \]' tasks.md` 检查剩余未勾选数，无需重新读取整个文件
-- **上下文压缩后恢复**：按 `opensuper/reference/context-recovery.md` 执行，phase 参数为 `build`。
-- **用户手动修改恢复**：按 `opensuper/reference/dirty-worktree.md` 协议处理未提交改动。该协议定义了检查步骤、归因分类和禁令。build 阶段的特殊处理：
+- **每完成一个 task**：按配置核对实际实现、检查和审查后，用 `opensuper state task-complete <name> <task-id> --expect <revision> --json` 勾选 tasks.md。revision 来自已核对的任务列表，需求变化时先重新判断，不能盲目刷新重试。新计划和检查点不复制 checkbox；旧计划只同步有明确 ID 映射的完成项，按 context-recovery.md 处理。工作包逐 ID 验收，使用 checkpoint 命令持久化协调记录，按项目提交策略保存进度。
+- **上下文压缩后恢复**：按 `opensuper-classic/reference/context-recovery.md` 执行，phase 参数为 `build`。
+- **用户手动修改恢复**：按 `opensuper-classic/reference/dirty-worktree.md` 协议处理未提交改动。该协议定义了检查步骤、归因分类和禁令。build 阶段的特殊处理：
   1. 归因后，若 diff 暗示计划或 spec 已变化，按 Step 4「Spec 增量更新」分级处理
-- **长任务拆分**：单任务超过 200 行代码变更时，考虑拆分为多个子任务分别提交
+- **长任务拆分**：按可独立验收的结果和任务依赖关系拆分；代码行数只用于提示审查风险，不单独决定任务数量
 
 ## 退出条件
 
 - tasks.md 全部勾选
 - 代码已提交
 - 已显式运行项目对应的构建/测试命令并通过（不要只依赖 guard 自动猜测）
-- `isolation` 已写为 `branch` 或 `worktree`
-- `build_mode` 已写为 `subagent-driven-development`、`executing-plans` 或带显式 override 的 `direct`；若为 `subagent-driven-development`，`subagent_dispatch` 必须为 `confirmed`
+- `isolation` 已写为 `current`、`branch` 或 `worktree`
+- `build_mode` 已写为 `autonomous`、`subagent-driven-development`、`executing-plans` 或带显式 override 的 `direct`；若为 `subagent-driven-development`，`subagent_dispatch` 必须为 `confirmed`；full autonomous 必须保留有效设计、计划及 standard/thorough 独立审查
 - `tdd_mode` 已写为 `tdd` 或 `direct`
-- 若 `build_mode` 为 `executing-plans`，已使用 Skill 工具加载 Superpowers `requesting-code-review` 技能并至少请求一次代码审查，且 CRITICAL review 发现已修复或非 CRITICAL review 发现已记录接受理由
-- **阶段守卫**：运行 `"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply`，全部 PASS 后由守卫推进到 `phase: verify`（此步骤更新 `phase` 字段，与 `auto_transition` 无关）
+- `review_mode` 已写为 `off`、`standard` 或 `thorough`
+- 已完成 `review_mode` 要求的任务级或分段审查；不在 Build 重复 Verify 的最终集成审查
+- **阶段守卫**：运行 `opensuper guard <change-name> build --apply`，全部 PASS 后由守卫推进到 `phase: verify`（此步骤更新 `phase` 字段，与 `auto_transition` 无关）
 
-Guard 会优先读取项目配置中的命令：
+优先用 Runtime 执行并记录检查，避免手动运行后 Guard 再跑一次：
 
-```yaml
-build_command: <build command>
-verify_command: <verify command>
+仅对确定性本地检查使用 `--local`；外部服务或环境不确定的检查省略该参数，证据只使用一次。Windows 的普通 npm/pnpm shim 由平台适配器处理；包含 shell 元字符的 batch 参数会被拒绝，复杂检查应使用 `node <script>` 等明确入口，不把整段 shell 字符串当作程序名。
+
+```bash
+opensuper check run <change-name> build --local -- <program> [args...]
 ```
 
-配置位置可为 change 的 `.opensuper.yaml`，也可为仓库根目录的 `.opensuper.yaml` / `opensuper.yaml` / `.opensuper.yml` / `opensuper.yml`。
-未配置时才回退到 `npm run build`、Maven 或 Cargo 的默认探测。构建失败时 guard 会打印失败命令输出，作为排查证据。
+Guard 先检查配置、任务和产物，再复用输入与环境相同的 Runtime 检查结果；没有有效结果时，才运行自动识别出的构建命令。源文件、测试、相关配置、依赖或子模块变化后，必须重跑相关检查。丢失上下文后恢复任务时，重新校验可复用的本地结果，只重跑已失效或只能使用一次的检查。执行期间输入发生变化的结果不得复用。预检不会用掉一次性结果；只有阶段转换成功后，该结果才不能再次使用。失败日志保存在 `logRef`，按需读取。
+
+`state record-check --command` 仍只保存手工声明，OpenSuper **绝不会执行该文本**，也不能据此自动推进。build 与 verify 证据彼此独立：Verify 可引用已验证的同一构建结果，但构建通过不替代测试和验收场景。`OPENSUPER_SKIP_BUILD=1` 仅是旧流程的兼容绕过方式，不是可审计的构建证据。
 
 退出前运行阶段守卫推进 phase（此步骤与 `auto_transition` 无关）：
 
 ```bash
-"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply
+opensuper guard <change-name> build --apply
 ```
 
 状态文件自动更新为 `phase: verify`、`verify_result: pending`。
 
 ## 自动衔接下一阶段
 
-按 `opensuper/reference/auto-transition.md` 执行。关键命令：
+按 `opensuper-classic/reference/auto-transition.md` 和成功结果中的 `agent.continuation` 继续。已有仍然有效的状态信息时，不重复 next、select 或 check。只有丢失上下文后恢复任务、外部状态变化，或旧结果未提供这些信息时，才运行：
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" next <change-name>
+opensuper state next <change-name>
 ```
 
 - `NEXT: auto` → 调用 `SKILL` 指向的 skill 进入下一阶段
-- `NEXT: manual` → 不要调用下一 skill，按 `HINT` 提示用户手动运行 `/<SKILL>`
+- `NEXT: manual` → 不调用下一 skill，按 `HINT` 交还控制权并结束当前调用；不再创建确认点
 - `NEXT: done` → 流程已完成，无需继续

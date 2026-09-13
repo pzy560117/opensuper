@@ -1,14 +1,23 @@
-# opensuper 阶段感知（防漂移规则）
+# OpenSuper 阶段感知（防漂移规则）
 
-> 此规则每轮注入，防止长上下文时遗忘 opensuper 流程状态。
-> Hook 平台额外执行 `opensuper-hook-guard.sh` 进行硬性拦截；
-> 此 Rule 是所有平台通用的软性防线。
+> 内部 Classic 编写参考，不随当前 manifest 安装；用户环境使用 `opensuper-workflow-guard.md`。
+>
+> 此参考用于维护 Classic Skill、Runtime 和旧安装清理契约，不作为常驻 Rule 注入。
+> 当前平台统一安装 `opensuper-workflow-guard.md`，支持 Hook 的平台由 Hook Router 路由 Classic Guard。
 
 ## 全局规则
 
 ### 阶段感知（最高优先级）
 
-有活跃 opensuper change 时（`openspec/changes/<name>/.opensuper.yaml` 存在），**每次开始执行操作前**必须读取 `phase` 字段确认当前阶段。
+有活跃 opensuper change 时（Classic layout resolver 绑定的 `<classic-change-dir>/.opensuper.yaml` 存在），**每次开始执行操作前**必须读取 `phase` 字段确认当前阶段。
+
+当存在多个 active change 时，必须先明确当前 change，再运行：
+
+```bash
+opensuper state select <change-name>
+```
+
+普通源码写入只受已选择 change 的阶段约束。多个 active change 且没有有效选择时，Hook 必须阻塞并提示选择；不得按字母序猜测，也不得让无关 change 的 `open`、`design` 或 `archive` 阶段全局封锁合法 build。单 active change 无选择时可保持自动归属。
 
 **阶段与允许操作：**
 
@@ -17,8 +26,27 @@
 | `open` | 创建 proposal/design/tasks, 运行 guard | 写源代码 |
 | `design` | brainstorming, 创建 Design Doc, 运行 guard | 写源代码 |
 | `build` | 写源代码、测试、执行计划 | 跳过用户确认点 |
-| `verify` | 验证、branch handling | 跳过失败处理 |
-| `archive` | 确认归档、运行归档脚本 | 写源代码 |
+| `verify` | 验证、记录验证报告 | 跳过失败处理、提前处理分支 |
+| `archive` | 确认归档、运行归档脚本、提交归档改动、分支处理 | 写源代码 |
+
+Hook 硬拦截仅豁免 Classic layout resolver 返回的当前阶段合法产物，以及 OpenSuper 自有的 `.opensuper/*`、`.superpowers/*` 控制工作区和根目录 Markdown。配置目录及其中的 worktree/source 文件不属于通用豁免范围，必须服从当前 change 的阶段约束。
+
+### 阶段进入自洽性校验（写源代码前必查）
+
+仅看 `phase` 字段不够——还必须确认"是如何到达这个阶段的"。每次准备写源代码前，先用下表自检 `.opensuper.yaml` 是否处于**非法空跳**状态（绕过了前置阶段）。命中任一行，立即停止写源代码，按动作回到对应阶段补齐产物，不得信任 `phase` 字段直接续跑。
+
+| 检测到 | 判定 | 动作 |
+|--------|------|------|
+| `phase: build` + `workflow: full` + `design_doc` 为空/null | 绕过 design 空跳 | 停止写源代码，运行 `/opensuper-design` 补 Design Doc 并过 guard |
+| `phase: build` + `workflow: full` + `plan` 为空/null 或记录路径失效 | 绕过实施计划 | 停止写源代码，回 `/opensuper-build` Step 1 创建或恢复 plan，记录路径并用 `opensuper state check <name> build --recover` 验证 |
+| `phase: build` + proposal/design/tasks 任一缺失或为空 | 绕过 open 空跳 | 回 `/opensuper-open` 补齐三件套 |
+| `phase: archive` + `verify_result` ≠ `pass` | 绕过 verify 空跳 | 回 `/opensuper-verify` 完成验证 |
+
+> 说明：上表只覆盖 hook 硬性拦截实际检测的范围（build 阶段的 `design_doc` 与 `plan` 状态；proposal/design/tasks 三件套完整性在 open→build 的 guard 退出时校验）。Hook 提示中的 `RECOVERY`、`SUCCESS` 和 `RETRY` 共同定义恢复闭环；达到 `SUCCESS` 前不得重试被阻塞的源码写入。`verify` 阶段不在此写源码自洽检查内——若 verify 发现产物缺失，按下方「Verify 阶段专项」的 verify-fail 回退处理。
+
+预设例外：`workflow: hotfix/tweak` 本就跳过 design 和 Superpowers 实施计划，`design_doc` 与 `plan` 为空属正常，不算非法。
+
+升级态说明：预设（hotfix/tweak）命中升级信号并经用户确认升级后，通过 `opensuper state transition <name> preset-escalate` 合法地变为 `workflow: full` + `phase: design` + `design_doc: null`，同时清除预设专属 build 配置。此时 `phase: design` + `design_doc` 为空**属正常升级前置态**，不是非法空跳——agent 应进入 `/opensuper-design` 补 Design Doc，并在 build 重新完成联合工作方式选择。该终态不命中上表「绕过 design 空跳」行（该行仅检测 `phase: build`）。
 
 ### Skill 调用（不可用普通对话替代）
 
@@ -34,66 +62,75 @@
 
 ### 脚本执行（不可跳过）
 
-- **阶段退出**: `opensuper-guard <name> <phase> --apply`（必须看到 ALL CHECKS PASSED）
-- **压缩恢复**: `opensuper-state check <name> <phase> --recover`
-- **状态更新**: 关键操作后通过 `opensuper-state set` 更新字段，禁止手工编辑 .opensuper.yaml
-- **handoff 生成**: `opensuper-handoff <name> design --write`（禁止手写摘要）
+- **阶段退出**: `opensuper guard <name> <phase> --apply`（必须看到 ALL CHECKS PASSED）
+- **压缩恢复**: `opensuper state check <name> <phase> --recover`
+- **状态更新**: 关键操作后通过 `opensuper state set` 更新字段，禁止手工编辑 .opensuper.yaml
+- **阶段推进只能经 guard/transition**: 禁止用 `opensuper state set <name> phase <值>` 手动跳阶段；预设升级到 full 必须用 `opensuper state transition <name> preset-escalate`
+- **handoff 生成**: `opensuper handoff <name> design --write`（禁止手写摘要）
 
 ### 用户确认（不可自动跳过）
 
 以下决策点必须暂停等待用户明确选择，不得根据推荐规则自动填写：
 
-- **open**: 需求澄清完成确认、artifact 评审确认
+- **open**: artifact 最终审视（同时确认 change 名称与范围）；只有目标/范围仍有互斥选择或大型 PRD 拆分时增加前置决策
 - **design**: brainstorming 方案确认（确认前不得创建 Design Doc）
-- **build**: plan-ready 暂停、isolation/build_mode/tdd_mode 选择、spec 大规模变更确认
-- **verify**: 验证失败处理策略、branch handling 选择
-- **archive**: 归档前最终确认
+- **build**: plan 写入后只提供一个联合决策，一次确认是否继续、执行方式、TDD 模式和代码审查模式；工作区已由 Open 准备并绑定，缺失 isolation 返回 Open；范围扩张需重新设计/拆分，或预设升级时另行等待用户
+- **verify**: 接受 WARNING/SUGGESTION 偏差、Spec 漂移处理，或超过自动修复上限后的继续/停止策略
+- **archive**: 在归档前一个最终确认中同时选择是否归档及归档提交的交付方式
 
 ## Design 阶段专项
 
-1. 第一个脚本操作 = `opensuper-handoff <name> design --write`（未生成 handoff 禁止加载 brainstorming）
+1. 第一个脚本操作 = `opensuper handoff <name> design --write`（未生成 handoff 禁止加载 brainstorming）
 2. brainstorming in progress: incrementally update brainstorm-summary.md（每轮澄清或方案迭代后增量更新恢复检查点，未确认内容标注为待确认/候选）
 3. brainstorming 完成后下一步 = brainstorm-summary.md 定稿 → Design Doc → guard
-4. active compaction gate: brainstorm-summary.md 定稿后、创建 Design Doc 前，优先触发宿主平台原生上下文压缩；无法程序化触发时暂停提示用户手动压缩或确认继续
+4. 主动式上下文压缩只能在 Design Doc、状态和最新 handoff 落盘后按需执行；无法程序化触发时给出非阻塞建议并继续
 5. **绝对不能直接开始写实现代码** — 必须先创建 Design Doc 并通过 guard
 
 ## Build 阶段专项
 
-1. plan 创建后必须询问用户选择继续或暂停（`build_pause` 机制）
-2. 每个 task 验收后必须: tasks.md 打勾 → git commit（不得积攒）。`subagent-driven-development` 必须等 spec compliance 与 code quality 两个审查都通过，再由协调者按任务唯一文本定向勾选和验证；不得用未完成任务总表代替当前任务验证
+1. plan 创建后按 `opensuper-build` 的联合决策协议一次性展示暂停选项、执行方式、TDD 模式和代码审查模式；只有用户明确选择继续并给出完整配置后，才写入 `build_mode`、`tdd_mode` 和 `review_mode`；选择暂停时写入 `build_pause: plan-ready`
+2. 每个 task 验收后必须: tasks.md 打勾 → git commit（不得积攒）。`subagent-driven-development` 必须按当前 `review_mode` 完成验收，再由协调者按任务唯一文本定向勾选和验证；不得用未完成任务总表代替当前任务验证
 3. 遇到失败必须加载 **systematic-debugging** skill，根因未定位前不得提出源码修复
 4. spec 变更分级: 小改直接编辑 | 中改加载 brainstorming | 大改暂停等用户确认拆分
 
 ## Verify 阶段专项
 
-1. 第一步运行 `opensuper-state scale <name>` 确定验证级别
-2. 验证失败后列出失败项等用户选择，CRITICAL 必须修
-3. 连续 3 次失败后必须让用户选择接受偏差或继续修
+1. 第一步运行 `opensuper state scale <name>` 确定验证级别
+2. 前 3 次明确可修复失败自动运行 `opensuper state transition <name> verify-fail` 回到 build，并进入 `/opensuper-build`；CRITICAL/IMPORTANT 不得接受偏差
+3. `verify_failures` 由状态机维护。达到 `3` 后的下一次失败必须让用户选择继续修复或停止 workflow 寻求外部决策
+4. WARNING/SUGGESTION 只有在修复涉及行为、范围或风险取舍时才询问修复/接受；安全、局部、无取舍的修复自动闭环
 
 ## 上下文压缩恢复
 
 如果怀疑发生上下文压缩（之前对话被摘要、找不到之前讨论的内容），立即运行：
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" check <name> <phase> --recover
+opensuper state check <name> <phase> --recover
 ```
 
 按脚本输出的 **Recovery action** 决定下一步。
 
+恢复后必须先用「阶段进入自洽性校验」表复查一遍：若发现 `phase` 与产物不自洽（design_doc/plan/三件套/verify_result 任一不匹配），按非法空跳处理，严格执行脚本或 Hook 输出的恢复步骤，并在达到 `SUCCESS` 后才重试原操作；不得信任 `phase` 字段直接续跑。
+
 **特别注意 `build_mode`**：若恢复脚本输出 `build_mode: subagent-driven-development`，你是协调者，不是执行者。必须：
 1. 使用 Skill 工具重新加载 Superpowers `subagent-driven-development` 技能 (Use the Skill tool to reload the Superpowers `subagent-driven-development` skill)
-2. 读取 `opensuper/reference/subagent-dispatch.md` 获取 opensuper 专属扩展 (re-read `opensuper/reference/subagent-dispatch.md` for opensuper-specific extensions)
-3. 读取 `openspec/changes/<name>/.opensuper/subagent-progress.md` 恢复精确阶段、证据和审查-修复轮次 (Read `openspec/changes/<name>/.opensuper/subagent-progress.md` to recover the exact stage, evidence, and review-fix round)
+2. 读取 `opensuper-classic/reference/subagent-dispatch.md` 获取 OpenSuper 专属扩展 (re-read `opensuper-classic/reference/subagent-dispatch.md` for OpenSuper-specific extensions)
+3. 读取 `<classic-change-dir>/.opensuper/subagent-progress.md` 恢复精确阶段、证据和审查-修复轮次 (Read `<classic-change-dir>/.opensuper/subagent-progress.md` to recover the exact stage, evidence, and review-fix round)
 4. 禁止在主会话中直接执行 task (Do not execute the pending task directly in the main window)
 5. 按检查点恢复；缺失或不匹配时才从第一个未勾选 task 开始
-6. 已提交但未通过双审查的 task 保持未勾选，继续审查/修复循环
-7. task 通过双审查和定向勾选验证后立即继续下一个 task，不得总结或询问是否继续
+6. 已提交但未按 `review_mode` 完成验收的 task 保持未勾选，继续对应的验证/审查/修复循环
+7. task 按 `review_mode` 完成验收并通过定向勾选验证后立即继续下一个 task，不得总结或询问是否继续
 
 ## 阶段退出后自动过渡
 
-guard `--apply` 成功后，必须调用下一阶段的 skill：
+guard `--apply` 成功后，不得在本规则中硬编码下一阶段 skill。必须先运行：
 
-- open → `opensuper-design`（full）/ `opensuper-build`（hotfix/tweak）
-- design → `opensuper-build`
-- build → `opensuper-verify`
-- verify → `opensuper-archive`
+```bash
+opensuper state next <change-name>
+```
+
+按脚本输出决定下一步：
+
+- `NEXT: auto` → 使用 Skill 工具加载 `SKILL` 指向的 skill
+- `NEXT: manual` → 不加载下一 skill，按 `HINT` 交还控制权并结束当前调用；不再创建确认点
+- `NEXT: done` → 流程已完成，无需继续

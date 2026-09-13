@@ -1,0 +1,24 @@
+[metadata]
+name = "opensuper-dependency-confusion"
+description = "Repair stale module names and compatibility imports in a small settings loader"
+difficulty = "medium"
+category = "opensuper"
+tags = ["opensuper", "workflow", "dependencies", "compatibility"]
+default_treatments = [
+    "CONTROL",
+    "OPENSUPER_FULL_040_BETA",
+    "OPENSUPER_FULL_039",
+]
+
+[template]
+required = []
+
+[environment]
+description = "Python workspace with stale imports after a module rename. Claude must use the opensuper workflow to restore compatibility."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_dependency_confusion.py"
+target_artifacts = []
+timeout = 120

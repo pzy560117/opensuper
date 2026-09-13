@@ -1,0 +1,257 @@
+import { spawnSync } from 'child_process';
+import { readFileSync } from 'fs';
+import path from 'path';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { ensureCliBuilt } from '../helpers/ensure-cli-built.js';
+
+const repositoryRoot = path.resolve('.');
+const cli = path.join(repositoryRoot, 'bin', 'opensuper.js');
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, [cli, ...args], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  });
+}
+
+describe('CLI help text', () => {
+  it.each(['state', 'guard', 'handoff', 'archive'])(
+    'documents executable public %s syntax',
+    (command) => {
+      const help = runCli(command, '--help');
+      expect(help.status, help.stderr).toBe(0);
+      expect(help.stdout).toContain(`Usage: opensuper ${command}`);
+      expect(help.stdout).toContain('<change-name>');
+      expect(help.stdout).not.toContain('.mjs');
+    },
+  );
+
+  it('keeps unknown-option failures machine readable with --json', () => {
+    const result = runCli('status', '--bogus', '--json');
+    expect(result.status).not.toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('--bogus'),
+    });
+  });
+  beforeAll(async () => {
+    await ensureCliBuilt(repositoryRoot);
+  }, 120_000);
+
+  it('uses the evaluated-workflows tagline in CLI and package metadata', () => {
+    const help = runCli('--help');
+    const packageJson = JSON.parse(
+      readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'),
+    ) as { description: string; version: string };
+    const tagline = 'Agent Skill Harness For Turning Ideas Into Evaluated Workflows';
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain(tagline);
+    expect(packageJson.description).toBe(tagline);
+    expect(packageJson.version).toBe('0.4.0');
+  });
+
+  it('marks bundle as the advanced backend and skill Engine runs as advanced', () => {
+    const creatorHelp = runCli('creator', '--help');
+    const publishHelp = runCli('publish', '--help');
+    const bundleHelp = runCli('bundle', '--help');
+    const skillHelp = runCli('skill', '--help');
+
+    expect(creatorHelp.status, creatorHelp.stderr).toBe(0);
+    expect(publishHelp.status, publishHelp.stderr).toBe(0);
+    expect(bundleHelp.status, bundleHelp.stderr).toBe(0);
+    expect(skillHelp.status, skillHelp.stderr).toBe(0);
+    expect(creatorHelp.stdout).toContain('Skill Creator workspace');
+    expect(creatorHelp.stdout).toContain('next [options] <name>');
+    expect(creatorHelp.stdout).toContain('generate [options] <name>');
+    expect(publishHelp.stdout).toContain('Review, approve, publish, and distribute');
+    expect(bundleHelp.stdout).toContain('Advanced Bundle backend');
+    expect(bundleHelp.stdout).not.toContain('factory-');
+    expect(bundleHelp.stdout).not.toContain('authoring-plan');
+    expect(bundleHelp.stdout).not.toContain('authoring-record');
+    expect(bundleHelp.stdout).not.toContain('list [options]');
+    expect(bundleHelp.stdout).not.toContain('status [options] <name>');
+    expect(skillHelp.stdout).toContain('Install, inspect, and debug local Skill packages');
+    expect(skillHelp.stdout).toContain('add [options] <path>');
+    expect(skillHelp.stdout).toContain('show [options] <skill>');
+    expect(skillHelp.stdout).toContain('run [options] <skill>');
+    expect(skillHelp.stdout).toContain('continue [options]');
+    expect(skillHelp.stdout).toContain('Advanced: start a deterministic Engine Skill Run');
+    expect(skillHelp.stdout).toContain('Advanced: resume a deterministic Engine Skill Run');
+    expect(skillHelp.stdout).not.toContain('install [options] <path>');
+    expect(skillHelp.stdout).not.toContain('validate [options] <skill>');
+    expect(skillHelp.stdout).not.toContain('inspect [options] <skill>');
+    expect(skillHelp.stdout).not.toContain('resume [options]');
+  });
+
+  it('exposes only the four stable Classic facade commands at the root', () => {
+    const help = runCli('--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('Read and update Classic workflow state');
+    expect(help.stdout).toContain('Validate Classic phase requirements');
+    expect(help.stdout).toContain('Create and inspect Classic workflow handoffs');
+    expect(help.stdout).toContain('Archive completed Classic workflow changes');
+    expect(help.stdout).not.toMatch(/^\s+(validate|intent|hook-guard)\b/mu);
+    const facadeDescriptions = [
+      'Read and update Classic workflow state',
+      'Validate Classic phase requirements',
+      'Create and inspect Classic workflow handoffs',
+      'Archive completed Classic workflow changes',
+    ];
+    expect(
+      facadeDescriptions.filter((description) => help.stdout.includes(description)),
+    ).toHaveLength(4);
+    expect(help.stdout).toMatch(/^\s+resume-probe \[options\] \[path\]\s+Probe whether/mu);
+    expect(help.stdout).toMatch(
+      /^\s+classic \[args\.\.\.\]\s+Manage the OpenSuper Classic workflow/mu,
+    );
+    expect(help.stdout.replace(/\s+/gu, ' ')).toContain(
+      'Manage the self-contained OpenSuper Native workflow',
+    );
+  });
+
+  it('does not expose the unpublished project rules plugin command', () => {
+    const help = runCli('--help');
+    const rulesHelp = runCli('rules', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).not.toMatch(/^\s+rules\b/mu);
+    expect(rulesHelp.stdout).not.toMatch(/^\s+rules\b/mu);
+  });
+
+  it('documents the layout-aware Classic command group', () => {
+    const help = runCli('classic', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('Usage: opensuper classic <command> [args]');
+    expect(help.stdout).toContain('openspec -- <openspec-args...>');
+    expect(help.stdout).toContain('root show');
+    expect(help.stdout).toContain('root move docs --dry-run');
+    expect(help.stdout).toContain('root move docs --apply');
+    expect(help.stdout).not.toContain('--plan <id>');
+  });
+
+  it('keeps Native behind one isolated root command', () => {
+    const help = runCli('--help');
+    const nativeHelp = runCli('native', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(nativeHelp.status, nativeHelp.stderr).toBe(0);
+    expect(help.stdout).toMatch(/^\s+native \[args\.\.\.\]\s+Manage the self-contained/mu);
+    expect(nativeHelp.stdout).toContain('Usage: opensuper native <command> [options]');
+    expect(nativeHelp.stdout).toContain('root move <artifact-root>');
+    expect(nativeHelp.stdout).toContain('spec sync <change-name> <capability> --input <json-file>');
+    expect(nativeHelp.stdout).toContain('doctor [<change-name>]');
+    expect(nativeHelp.stdout).not.toContain('hook-guard');
+
+    const statusHelp = runCli('native', 'status', '--help');
+    expect(statusHelp.status).toBe(0);
+    expect(statusHelp.stdout).toContain('Usage: opensuper native status');
+    expect(statusHelp.stdout).toContain('--cursor <token>');
+    expect(statusHelp.stdout).toContain('--project-root <path>');
+  });
+
+  it('separates repository evals from Engine Run runtime checks', () => {
+    const evalHelp = runCli('eval', '--help');
+    const skillCheckHelp = runCli('skill', 'check', '--help');
+
+    expect(evalHelp.status, evalHelp.stderr).toBe(0);
+    expect(skillCheckHelp.status, skillCheckHelp.stderr).toBe(0);
+    expect(evalHelp.stdout).toContain('Evaluate a Skill or eval manifest with one command');
+    expect(evalHelp.stdout).toContain('Usage: opensuper eval [options] [target]');
+    expect(evalHelp.stdout).toContain('--suite <suite>');
+    expect(evalHelp.stdout).toContain('--model <model>');
+    expect(evalHelp.stdout).toContain('--base-url <url>');
+    expect(evalHelp.stdout).toContain('--judge-model <model>');
+    expect(evalHelp.stdout).toContain('--judge-base-url <url>');
+    expect(evalHelp.stdout).toContain('--collect');
+    expect(evalHelp.stdout).not.toContain('run [options]');
+    expect(evalHelp.stdout).not.toContain('collect [options]');
+    expect(skillCheckHelp.stdout).toContain('Check deterministic Engine Run runtime checks.');
+    expect(skillCheckHelp.stdout).toContain('Use opensuper eval');
+    expect(skillCheckHelp.stdout).toContain('reports');
+    expect(skillCheckHelp.stdout).toContain('Runtime check scope');
+    expect(skillCheckHelp.stdout).not.toContain('Runtime eval scope');
+    expect(skillCheckHelp.stdout).not.toContain('general Skill evals');
+  });
+
+  it('does not expose the old skill eval command', () => {
+    const help = runCli('skill', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('check [options]');
+    expect(help.stdout).not.toContain('eval [options]');
+  });
+
+  it('exposes explicit update target controls', () => {
+    const help = runCli('update', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('--self-update');
+    expect(help.stdout).toContain('--skip-self-update');
+    expect(help.stdout).toContain('--platform <platform>');
+    expect(help.stdout).not.toContain('--skip-npm');
+  });
+
+  it('exposes explicit init target controls', () => {
+    const help = runCli('init', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('--platform <platform>');
+  });
+
+  it('keeps Skill Creator resume commands out of the publish surface', () => {
+    const creatorHelp = runCli('creator', '--help');
+    const publishHelp = runCli('publish', '--help');
+
+    expect(creatorHelp.status, creatorHelp.stderr).toBe(0);
+    expect(publishHelp.status, publishHelp.stderr).toBe(0);
+    expect(creatorHelp.stdout).toContain('status [options] <name>');
+    expect(creatorHelp.stdout).toContain('next [options] <name>');
+    expect(publishHelp.stdout).not.toContain('list [options]');
+    expect(publishHelp.stdout).not.toContain('status [options] <name>');
+    expect(publishHelp.stdout).not.toContain('next [options] <name>');
+    expect(publishHelp.stdout).toContain('review [options] <name>');
+    expect(publishHelp.stdout).toContain('distribute [options] <name>');
+  });
+
+  it('uses eval wording for advanced Bundle evidence commands', () => {
+    const help = runCli('bundle', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('eval-plan');
+    expect(help.stdout).toContain('eval-record');
+    expect(help.stdout).not.toContain('benchmark-plan');
+    expect(help.stdout).not.toContain('benchmark-record');
+  });
+
+  it('exposes ambient resume probe help', () => {
+    const help = runCli('--help');
+    const commandHelp = runCli('resume-probe', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(commandHelp.status, commandHelp.stderr).toBe(0);
+    expect(help.stdout).toContain('resume-probe');
+    expect(commandHelp.stdout).toContain(
+      'Probe whether an active OpenSuper workflow should resume',
+    );
+    expect(commandHelp.stdout).toContain('--utterance');
+    expect(commandHelp.stdout).toContain('--stdin');
+    expect(commandHelp.stdout).toContain('--json');
+    expect(commandHelp.stdout).toContain('--no-workflow-work');
+    expect(commandHelp.stdout).not.toContain('--no-non-trivial-work');
+    expect(commandHelp.stdout).toContain('--already-in-opensuper-flow');
+  });
+
+  it('exposes explicit CodeGraph initialization and authorized doctor repair controls', () => {
+    const initHelp = runCli('init', '--help');
+    const doctorHelp = runCli('doctor', '--help');
+
+    expect(initHelp.status, initHelp.stderr).toBe(0);
+    expect(doctorHelp.status, doctorHelp.stderr).toBe(0);
+    expect(initHelp.stdout).toContain('--codegraph <action>');
+    expect(doctorHelp.stdout).toContain('--yes');
+    expect(doctorHelp.stdout).toContain('CodeGraph indexing');
+  });
+});

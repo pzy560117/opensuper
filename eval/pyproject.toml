@@ -1,0 +1,46 @@
+[project]
+name = "opensuper-skill-eval"
+version = "0.1.0"
+description = "Benchmark evaluation for OpenSuper skill (OpenSpec + Superpowers workflow)"
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema>=4.23",
+    "pytest>=8.0",
+    "pytest-timeout>=2.2",
+    "pytest-xdist>=3.5",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "requests>=2.31",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+# LangSmith tracing + pytest integration; install with: uv sync --extra langsmith
+# The LangSmith suite marks tests with @pytest.mark.langsmith and logs rubric
+# scores + treatment comparison via langsmith.testing (requires the pytest extra).
+langsmith = [
+    "langsmith[pytest]>=0.3.4",
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+]
+langfuse = [
+    "langfuse>=4.0,<5",
+]
+dev = [
+    "ruff>=0.4",
+    "pre-commit>=3.7",
+    "matplotlib>=3.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["local/tests"]
+pythonpath = ["."]
+markers = [
+    "langsmith: marks test as using LangSmith tracing",
+    "langfuse: marks test as using Langfuse tracing",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

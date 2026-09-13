@@ -1,0 +1,24 @@
+[metadata]
+name = "opensuper-api-cache-ttl"
+description = "Add optional TTL (time-to-live) expiration to an in-memory cache while keeping the API backward compatible"
+difficulty = "hard"
+category = "opensuper"
+tags = ["opensuper", "workflow", "api-design", "backward-compat"]
+default_treatments = [
+    "CONTROL",
+    "OPENSUPER_FULL_040_BETA",
+    "OPENSUPER_FULL_039",
+]
+
+[template]
+required = []
+
+[environment]
+description = "Python in-memory cache. Claude must add TTL support via the opensuper workflow."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_api_cache_ttl.py"
+target_artifacts = []
+timeout = 120

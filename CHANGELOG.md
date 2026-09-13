@@ -2,98 +2,760 @@
 
 All notable changes to @pzy560117/opensuper will be documented in this file.
 
-## What's Changed [0.3.9] - 2026-07-15
+## What's Changed [0.4.0] - 2026-09-13
 
-### Changed
-
-- **Traceable package provenance**: Added npm `repository`, `homepage`, and `bugs` metadata pointing to the OpenSuper repository, and synchronized the package and shipped skill manifest at version `0.3.9`.
-- **Validated dependency baseline**: Pinned the OpenSuper `0.3.9` installer to OpenSpec `1.6.0`, Skills CLI `1.5.9`, and Superpowers `v6.1.1`, documented the Node.js 20+ compatibility matrix, and kept future dependency updates behind the normal verification gates.
-
-### Fixed
-
-- **Fail-closed lifecycle transitions**: Direct `phase` writes now fail unless the explicit repair-only `OPENSUPER_FORCE_PHASE=1` override is present. Direct `open-complete` and `design-complete` transitions reuse the same phase-appropriate artifact and handoff guards as `guard --apply`, so missing Open artifacts or Design Doc evidence cannot skip workflow phases.
-- **Cross-change hook routing**: The write hook now routes `openspec/changes/<name>/...` paths to that active change, rejects inactive named targets, allows shared Superpowers artifacts only when an active workflow is in design/build/verify, and fails closed for ambiguous source writes when multiple active changes exist.
-- **Hook path and state fail-closed behavior**: The write hook now rejects unresolved `..` path segments, canonicalizes existing target parents before workspace whitelists, rejects targets outside the project plus final-file symbolic/hard links, and blocks source writes when an active state has a missing or unknown phase.
-- **Windows shell test stability**: Shell tests now prefer Git's direct `usr/bin/bash.exe` before wrapper and PATH fallbacks, serialize Vitest files on Windows, give nested script helpers 120 seconds on Windows while retaining 60 seconds elsewhere, allow 300 seconds for Windows multi-script integration cases, and allow 15 minutes per Bats file on Windows while retaining 10 minutes elsewhere. This removes concurrent nested-shell contention and prevents valid long-running tests from being truncated.
-- **Machine-enforced archive confirmation**: Added persisted `archive_confirmation: pending | confirmed` state and the `archive-confirm` transition. Direct field writes and mutating archive calls without confirmation are blocked; the terminal `archived` transition now also requires a post-move archive state, passing verification, and the OpenTest gate. `archive-reopen` resets confirmation, while `--dry-run` remains available before approval.
-- **Project-scope OpenSpec CLI availability**: OpenSpec CLI now installs globally for both project and global skill scopes because runtime commands resolve `openspec` from PATH, preventing project-local `node_modules` installs from passing installation but failing command discovery.
-- **Windows OpenSpec command injection**: Windows OpenSpec initialization now invokes the installed JavaScript entry through Node instead of passing project paths through a `.cmd` shell, so CMD metacharacters remain a single argument.
-- **Release dependency audit**: The release workflow now audits production dependencies through an isolated npm lock because npm retired the endpoint used by `pnpm audit`.
-
-### Tests
-
-- **P0 lifecycle and routing regressions**: Added coverage for direct phase/confirmation/archive bypass attempts, phase-appropriate guarded open/design transitions, archive confirmation/reopen/dry-run behavior, multi-change hook ownership/shared artifacts/ambiguity/internal and external symlink redirects, mutating archive preflight ordering, safe Windows OpenSpec invocation, and project-scope global OpenSpec CLI installation.
-
-## What's Changed [0.3.8] - 2026-07-12
+This OpenSuper release tracks the complete `rpamis/comet` `0.4.1` development tree at `6c3afff`, plus upstream fixes `c468ccd` and `1bb4750`. It distributes the product under the OpenSuper package, CLI, Skill, configuration, and runtime namespaces and removes the former OpenTest downstream integration.
 
 ### Added
 
-- **OpenTest strict quality gate integration**: Added additive `.opensuper.yaml` fields `opentest_gate: required | not-applicable | null` and project-relative `opentest_strict_result`, plus a dependency-free shipped adapter that discovers OpenTest's provider consumer through `OPENSUPER_OPENTEST_CONSUMER`, a sibling installed skill, or the target project's `@pzy560117/opentest` dependency. Required evidence is delegated to that provider for semantic recomputation against current change/Git/provenance/hashes, with one provider call per gate (120-second timeout, 1 MiB output cap) and pre/post canonical identity plus byte checks. Risk acceptance and docs-only exceptions require exactly one non-empty valid `OPENTEST_GATE_JSON`; risk entries use `strict_finding_id` XOR `strict_key`, declarative real-human approval, and calendar-valid future ISO-8601 expiry. The adapter/stub regression suite checks immutable-`base_ref` committed/staged/unstaged/untracked scope with an exact docs/static-image/current-change/well-known-document allowlist and blocks JSON/YAML/MDX/scripts/runtime/config paths; real provider and packed two-package interoperability remain the independent Task 6 fixture.
-- **Kimi Code CLI support**: Added Kimi Code as the 29th supported platform, including project/global skill installation under `.kimi-code/`, OpenSpec `kimi` tool integration, Superpowers `kimi-code-cli` mapping, detection, documentation, and cross-platform regression coverage ([#90](https://github.com/pzy560117/opensuper/pull/90)).
-- **Version info and update check**: `OpenSuper init` and `OpenSuper update` now display the current installed OpenSuper version at the start of command output and check the npm registry for newer versions. If an update is available, users see a prompt to upgrade; if already on the latest version, a confirmation message is shown; if the registry is unreachable, the check is skipped silently without error ([#99](https://github.com/pzy560117/opensuper/issues/99)).
-- **Official registry enforcement for update**: `OpenSuper update` now passes `--registry https://registry.npmjs.org` to npm when updating the `@pzy560117/opensuper` package, ensuring it always fetches from the official npm registry regardless of the user's local `.npmrc` or mirror configuration. Other packages continue using the user's normal registry settings. If the official registry is unreachable, a clear error message indicates the registry issue ([#100](https://github.com/pzy560117/opensuper/issues/100)).
-- **Subagent dispatch OpenSuper extensions**: Rewrote the inline subagent dispatch protocol from `OpenSuper-build/SKILL.md` into `OpenSuper/reference/subagent-dispatch.md` (Chinese and English) as OpenSuper-specific extensions layered on top of the Superpowers `subagent-driven-development` skill. The skill provides the core dispatch loop; the OpenSuper extensions add real background dispatch, durable per-task checkpoints (`subagent-progress.md`), coordinator-only source execution, TDD ownership by background agents, bounded review-fix rounds (3 max), continuous task execution without pauses, and precise context recovery from checkpoint stages.
-- **`task-checkoff` subcommand**: Added `OpenSuper-state task-checkoff <file> <task-text>` to verify a specific task is uniquely checked in a markdown file. Used by the subagent dispatch protocol for targeted completion verification after dual review passes. Includes path traversal prevention, CRLF handling, and exact-match validation.
-- **`OpenSuper uninstall` command**: Added `OpenSuper uninstall [path]` CLI command to safely remove OpenSuper-distributed skills, rules, and hooks across all 29 supported AI coding platforms. Supports `--scope` (project/global), `--force` (skip confirmation), and `--json` output. Auto-detects installed targets, removes only OpenSuper-managed artifacts while preserving user-defined hooks and non-OpenSuper configuration, cleans up empty directories and working directories (`.OpenSuper/`, `docs/superpowers/`), and handles all 7 hook formats (Claude Code, Qwen, Qoder, Gemini, Windsurf, GitHub Copilot, Kiro) and all 3 rule formats (md, mdc, copilot instructions) ([#95](https://github.com/pzy560117/opensuper/issues/95)).
-- **Progressive loading reference docs**: Extracted four reference documents from inline skill content to enable on-demand loading and reduce per-invocation token cost (both Chinese and English): `auto-transition.md` (auto-transition protocol, replacing 7 × ~10 lines of repeated content across sub-skills), `context-recovery.md` (context compression recovery, replacing 4 × ~8 lines), `OpenSuper-yaml-fields.md` (`.OpenSuper.yaml` field table, ~40 lines), and `file-structure.md` (directory structure, ~20 lines). Main `OpenSuper/SKILL.md` retains critical state machine hard constraints inline while pointing to reference docs for detailed field descriptions. Estimated per-invocation savings: 600–1,500 tokens depending on skill; cumulative ~4,100 tokens across a full workflow.
-- **Pre-commit formatting hook**: Added a `husky` + `lint-staged` pre-commit hook that automatically runs `prettier --write` on staged source files under `src/` at every `git commit` (scope aligned with CI `format:check`). Editor-agnostic — enforced for all contributors regardless of IDE or agent — preventing Prettier formatting issues from reaching CI. The `prepare` script installs the hook on `pnpm install`, and `.husky/` is excluded from the published package via the `files` whitelist.
+- **Capability evolution discovery**: Suggest existing capabilities from Project Knowledge when creating Native or Classic changes, keep the association revocable, and let Native merge stable requirement deltas into canonical Specs without replaying historical implementation.
+- **Classic autonomous execution**: Opt into an autonomous Build strategy with compact Agent-led implementation planning and execution, without mandatory external planning or execution Skills. Retain five-phase validation, explicit user decisions, and independent review for full workflows.
+- **Classic progress and delivery recovery**: Record structured work-package checkpoints and explicit local, push, or pull-request delivery choices. Inspect actual delivery results after interruption and resume only unfinished authorized actions.
 
 ### Changed
 
-- **Non-bypassable OpenTest terminal gate**: Verify/archive guard, direct `opensuper-state transition <change> verify-pass`, and the actual archive preflight now call the same OpenTest gate. Missing, malformed, stale, mismatched, tampered/call-time-changed, pending, timed-out, output-overflowing, or semantically failing required evidence blocks every route. Only an absent gate field or the unquoted YAML literal `null` remains legacy-compatible; quoted `"null"`/`'null'`, empty/other values, and malformed/duplicate state block. Dated archive locators retain the original change identity. Chinese and English build/router/verify/archive skills and READMEs document the same producer-first timing, strict machine-block, docs-only Git-scope, evidence-ledger, installation, and recovery contract.
-- **Skills progressive loading refactor**: All 7 sub-skills (`OpenSuper-open`, `OpenSuper-design`, `OpenSuper-build`, `OpenSuper-verify`, `OpenSuper-archive`, `OpenSuper-hotfix`, `OpenSuper-tweak`) in both Chinese and English now reference shared protocol documents for auto-transition and context recovery instead of embedding full content inline, while retaining critical inline commands (`next` command and output interpretation) for safe standalone loading.
-- **Phase guard recovery with durable checkpoints**: Updated recovery steps in `OpenSuper-phase-guard.md` (Chinese and English) to reload the Superpowers `subagent-driven-development` skill, read `subagent-progress.md` for exact stage recovery (implementation commit, RED/GREEN evidence, passed reviews, unresolved feedback, review-fix round), and resume from the checkpoint's precise phase instead of always starting from the first unchecked task. Both `.claude/rules/` and `assets/skills/OpenSuper/rules/` copies include consistent references with bilingual identifiers for cross-language test compatibility.
-- **Decision point protocol extraction**: Extracted inline user-decision-point text from all 7 sub-skills (`OpenSuper-open`, `OpenSuper-design`, `OpenSuper-build`, `OpenSuper-verify`, `OpenSuper-archive`, `OpenSuper-hotfix`, `OpenSuper-tweak`) and main `OpenSuper/SKILL.md` into shared `OpenSuper/reference/decision-point.md` (both Chinese and English). Sub-skills now reference the protocol by path instead of repeating the full blocking-point rules, reducing per-invocation token cost and ensuring consistency across skills.
-- **Debug gate protocol extraction**: Extracted the inline systematic-debugging four-stage flow from `OpenSuper-build`, `OpenSuper-hotfix`, and `OpenSuper-tweak` into shared `OpenSuper/reference/debug-gate.md` (both Chinese and English). Sub-skills now reference the debug gate protocol by path, centralizing the investigation, minimal failing test, fix verification, and verification-loop rules.
-- **Lightweight verification review**: Lightweight verification now requires a scoped Superpowers `requesting-code-review` review focused on correctness, security, and edge cases, adding review coverage without running full spec or design drift checks ([#86](https://github.com/pzy560117/opensuper/pull/86)).
+- **Node.js compatibility**: Require Node.js 22.16 or later within the 22.x line, or Node.js 24 or later, so supported installations include the APIs required by project knowledge and CLI dependencies.
+- **Workflow guidance**: Use clearer Chinese and English instructions, load detailed guidance for the current action, and present related questions with stable numbering, recommendations, and concrete option effects. Required confirmations and independent verification remain explicit.
+- **Workflow continuation inputs**: Expose unresolved Classic execution settings in structured entry results and make Native Verifier response templates directly parser-compatible, so Agents can retain confirmed decisions, fill only the remaining choices, and return results without reconstructing Runtime fields.
+- **Native Spec authoring limits**: Remove arbitrary Delta and canonical Spec file-size, per-operation text, and operation-count hard limits while retaining structural and integrity validation.
+- **Workflow CLI efficiency**: Reuse project identity and Native branch/workspace evidence within one task invocation, skip no-op learning writes for default read-only Classic state queries, and bound Native untracked-file fingerprint reads. Reuse unchanged work-package context and read verification logs on demand while preserving workspace, state, and evidence checks.
+- **Evaluation tool telemetry**: Correlate tool events with their invocation and execution IDs, retain observed timing and structured errors, and distinguish missing measurements and explicit retries from inferred results.
+- **Native Supervisor monitoring**: Pause unnecessary periodic monitoring while work awaits external input, explain blockers promptly, and resume when relevant input or dependencies become available while preserving independent work and completed results.
+- **Classic execution and recovery**: Keep one authoritative task checklist and technical design, reconcile existing implementation before completing unchecked tasks, and synchronize explicitly mapped legacy plan checkboxes. Use compact phase-entry summaries and load recovery details only when needed, without repeating accepted implementation or review. Preserve lightweight presets for suitable new tasks.
+- **Classic planning and review**: Confirm execution settings together before planning, plan around independently verifiable outcomes, and reuse implementers within bounded work packages. Apply risk-based task reviews with one final integrated review, and resolve required OpenSpec artifacts from their dependency graph instead of generating every optional document.
+- **Classic check reuse**: Reuse checks only after Runtime validates their evidence. Projects may explicitly bind a command's relevant inputs and environment to avoid invalidation by unrelated changes; commands without a matching policy retain conservative validation.
+- **Native verification efficiency**: Skip mandatory pre-review for ordinary and Supervisor parent candidates, reuse valid Runtime checks only for the same candidate and execution context, and distinguish wait timeouts from failed Verifier executions to avoid unnecessary redispatch. Preserve clearly labeled Builder evidence and limitations in verification handoffs and reports, retry repeatable interrupted checks explicitly, and verify repaired candidates with one complete independent pass.
+- **Native input and workspace safety**: Validate Runner inputs and check plans before recovery or durable execution so rejected inputs cannot reopen confirmed requirements, and preserve unrelated staged, working, and untracked files during current or keep Archive finishes.
+- **Dashboard browser verification**: Build the current Dashboard source before Playwright preview and reject an occupied preview port instead of testing an unknown or stale build.
+- **Single-project updates**: Update the OpenSuper npm package by default when refreshing one project, including interactive and JSON updates. Use `--skip-self-update` to refresh assets without upgrading the package; other projects' assets remain unchanged.
 
 ### Fixed
 
-- **Release-candidate integrity**: Release automation now requires the requested version to match `package.json`, runs the full local release gates, packs exactly one tgz, smoke-tests that exact file, and publishes the same file explicitly to the official npm registry. The prepublish secret scan now covers shipped `.sh`, `.mjs`, and `.cjs` runtime files.
-- **Fork package-scope detection**: `OpenSuper update` now recognizes project installs under `node_modules/@pzy560117/opensuper` instead of the obsolete upstream `@rpamis/opensuper` path.
-- **Release documentation and CI branch alignment**: CI now protects `main`; npm README assets and automation references use existing `main` URLs; broken community images and nonexistent documentation links were removed or replaced with shipped references. The OpenTest setup now requires the fusion-capable `@pzy560117/opentest@^0.1.19` provider.
-- **Windows integration-test timeout**: Vitest now gives Git Bash-backed integration tests a 60-second timeout on Windows, matching their observed process-startup cost while retaining the 5-second default elsewhere.
-- **Pi slash command discovery**: `OpenSuper init` and `OpenSuper update` now generate a Pi extension that registers all shipped `/OpenSuper*` workflows as native slash commands forwarding to `/skill:*`. Pi settings are merged non-destructively with skill commands enabled, global resources now use Pi's documented `~/.pi/agent/` directory, legacy `~/.pi/skills/` installs are detected for update and cleanup, and `OpenSuper uninstall` removes only OpenSuper-managed assets while preserving shared settings and unrelated extensions ([#89](https://github.com/pzy560117/opensuper/issues/89)).
-- **OpenCode plugin-installed Superpowers detection**: `OpenSuper init` now correctly detects Superpowers already installed via the OpenCode plugin system (configured in `opencode.json`), preventing duplicate re-installation. Previously, only skills placed directly under `~/.config/opencode/skills/` were detected, missing the plugin source directory at `~/.config/opencode/superpowers/skills/` and the `plugin` array in `opencode.json`. Added `hasOpenCodePluginSuperpowers()` fallback detection similar to the existing Claude Code plugin cache check ([#105](https://github.com/pzy560117/opensuper/issues/105)).
-- **Lightweight verification consistency**: Hotfix documentation now describes the 6-item lightweight verification path, and verification failure handling treats CRITICAL and IMPORTANT findings as blocking so review pass criteria and failure decisions remain consistent.
-- **Hook configuration merging during init and update**: Shared hook configuration files for Claude Code, Codex, Amazon Q, Qwen, Qoder, Gemini, and Windsurf now preserve user-defined hooks when OpenSuper installs or updates a hook for the same matcher or event. Existing OpenSuper commands are identified by their manifest script path and replaced in place, preventing stale install paths, duplicate matcher groups, and repeated hook accumulation while leaving unrelated settings untouched.
-- **Subagent-driven task isolation and continuity**: `OpenSuper-build` now loads the mature Superpowers `subagent-driven-development` loop and applies a stricter OpenSuper extension that requires one fresh background implementer per task, fresh background reviewers and fix agents, coordinator-only source execution, and automatic continuation between tasks without progress summaries or "continue?" prompts. TDD mode requires each implementer/fix agent to load the TDD skill and return auditable RED/GREEN evidence before review. A durable per-task checkpoint preserves implementation commits, review stages, feedback, and the three-round retry budget across context compression; task checkoff remains blocked until both reviews pass ([#94](https://github.com/pzy560117/opensuper/issues/94), [#96](https://github.com/pzy560117/opensuper/issues/96), [#97](https://github.com/pzy560117/opensuper/issues/97)).
-- **npm shebang line ending issue on macOS**: When npm packed the project on Windows, `bin/OpenSuper.js` shebang line got CRLF line endings, causing macOS to interpret `#!/usr/bin/env node\r` instead of `#!/usr/bin/env node`, resulting in "command not found" after `npm install -g @pzy560117/opensuper`. Added explicit `eol=lf` rules for all text file extensions (`.js`, `.mjs`, `.ts`, `.json`, `.md`, `.yaml`, `.yml`) and binary markers for image files in `.gitattributes` ([#82](https://github.com/pzy560117/opensuper/issues/82)).
-- **CodeGraph Codex CLI skip on project scope**: `OpenSuper init` with project scope passed `--target` and `--location=local` to `codegraph install`, which caused Codex CLI (no project-local config) to be skipped with a confusing message. Simplified to `codegraph install --yes` without `--target` or `--location` flags, letting CodeGraph auto-detect and configure all installed agents. Removed `filterSupportedPlatforms` and `CODEGRAPH_SUPPORTED_TARGETS` ([#98](https://github.com/pzy560117/opensuper/issues/98)).
-- **OpenSpec CLI upgrade and --profile fallback**: `ensureOpenSpecCli` now always installs/upgrades openspec to the latest version, even if an older version is already present, ensuring users get `--profile` support and other improvements. Added fallback logic: if `openspec init` fails with "unknown option --profile" in stderr, retries without the flag for edge cases where the upgrade fails but an older openspec remains ([#84](https://github.com/pzy560117/opensuper/issues/84)).
-- **Symlink resolution for skill file copies**: When skill directories are symlinks (e.g. `~/.claude/skills/OpenSuper -> ~/.agents/skills/OpenSuper`), `copyFile` and `ensureDir` wrote to the literal path instead of following the symlink target. Broken symlinks caused silent copy failures. Added `resolveSymlinkPath()` to `file-system.ts` that walks up the path tree and follows `readlink` targets for broken symlinks. Applied to `ensureDir`, `copyFile`, and `writeFile` ([#85](https://github.com/pzy560117/opensuper/issues/85)).
-- **OpenSuper-tweak missing debug handling**: `OpenSuper-tweak/SKILL.md` was missing the systematic-debugging requirement that `OpenSuper-hotfix` already had — when tests or builds fail during tweak execution, the skill now explicitly requires loading the `systematic-debugging` skill before proposing source fixes, matching hotfix behavior.
-- **OpenSpec per-artifact instructions compliance**: Chinese and English `OpenSuper-open` now apply OpenSpec per-artifact instructions (`openspec instructions proposal/design/tasks --change "<name>" --json`) for each standard artifact, loading `context`, `rules`, `template`, `instruction`, `resolvedOutputPath`, and `dependencies` from the JSON payload instead of hard-coded artifact prose. Stops artifact generation on instruction failure rather than silently bypassing project rules ([#66](https://github.com/pzy560117/opensuper/issues/66)).
-- **CI Windows path escaping in skill verification**: The `init-e2e` workflow's Pi settings verification step interpolated a Windows `$RUNNER_TEMP` path (containing backslashes) directly into a `node -e "require('...')"` JS string literal, where `\a`/`\_` were parsed as escape characters and mangled the path (`D:\a\_temp` → `D:a_temp`), failing the `init-e2e (windows-latest)` runners on Node 20 and 22. The path is now passed via an environment variable (`process.env`) so it never enters a JS string literal; Linux/macOS were unaffected.
-- **OpenSpec source formatting**: Re-formatted `src/core/openspec.ts` (long-line wrapping) to satisfy `prettier --check`, unblocking the `format:check` CI step.
-- **Symlink-safe removal during uninstall**: `removeFile`/`removeDir` no longer resolve symlinks before deleting. A symlinked skill, rules, or hooks directory previously had its *resolved target* recursively deleted by `OpenSuper uninstall`; symlinked directories are now unlinked directly. `isDirEmpty` also no longer reports unreadable directories as empty, so cleanup never deletes a directory it could not inspect.
-- **`OpenSuper update --json` output corruption**: npm's inherited stdio previously interleaved into the JSON document; npm stdout/stderr are now discarded in JSON mode so machine-readable output stays parseable.
-- **`OpenSuper update --json` no-targets shape**: the early-return JSON emitted when no installed targets exist now includes `codegraph: 'skipped'`, matching the normal output shape so consumers need not special-case the empty path.
-- **JSON-mode version-check latency**: `OpenSuper init` and `OpenSuper update` now skip the npm-registry version check in JSON mode, emitting output without a network round-trip.
-- **Malformed hook settings resilience**: hand-edited settings files storing a hook group as a non-array value no longer throw during init/update hook merging; malformed groups are coerced to empty.
-- **Markdown code-fence language tags**: added `text` language tags to fenced code blocks in `file-structure.md` and `subagent-dispatch.md` (Chinese and English) to satisfy MD040 linting, consistent with the existing OpenSpec formatting CI fix.
-- **Skills manifest version drift**: bumped `assets/manifest.json` version `0.3.3` → `0.3.8` to match `package.json`.
+- **Global initialization**: Preserve configured workflows, the default workflow, and memory and workflow policies when repeating initialization without explicitly replacing them.
+- **Native uninstall**: Clean up empty Native runtime directories, including sequential uninstall of a mixed Native and Classic installation, while preserving user content and active state.
+- **Memory command failures**: Report remote memory retrieval, management, and policy-update failures instead of empty results or false success, while keeping automatic context collection nonblocking.
+- **Context expansion guidance**: Include project and task placeholders, plus applicable path, phase, and operation arguments, so manifest entries can be expanded from the original calling directory with the same task context.
+- **Update language preservation**: Keep English installations in English during updates even when their Skills include Chinese examples, and retain support for Chinese and partially installed Skill sets.
+- **Installation JSON output**: Keep OpenSpec and Superpowers progress on stderr so external tool notices cannot corrupt structured CLI results.
+- **Knowledge discovery**: Preserve Markdown retrieval when a project's parent directory is accessed through a filesystem alias, including macOS temporary directories, while continuing to exclude project-external links.
+- **Plugin settings**: Preserve each project's enabled or disabled state when multiple Dashboard or CLI instances update shared plugin settings, and prevent concurrent enable or disable operations from undoing an uninstall.
+- **Personal Memory**: Allow users to forget global memories created in a project using another language while preserving validation of newly proposed content.
+- **Uninstall status**: Return a failing exit status when current-project or all-projects cleanup is incomplete, including project inspection failures, so automation can reliably detect failures.
+- **Native result confirmation**: Explicitly request the user's decision after a Skill-coordinated verification passes, with clear choices to accept the result, revise the implementation, or adjust requirements.
+- **CLI argument safety and help**: Reject unsupported Classic arguments before execution, document usable public command syntax, and preserve task-context options when resolving workflows.
+- **Workflow recovery guidance**: Report Classic status scan failures instead of empty change lists, stop repeating Native acceptance requests in the wrong workspace, and direct current Native changes away from legacy verification commands.
+- **CLI automation results**: Emit JSON workflow-resolution errors, return a failing exit status for unhealthy Doctor results, and expose Classic workspace results as structured data while retaining the existing output fields.
+- **Memory Git synchronization**: Support the first push to an empty remote and the first connection to an existing memory branch, preserve remote content, and distinguish actual merge conflicts from connection failures.
+- **LangSmith evaluation**: Install the selected suite's Python dependencies automatically and report missing SDKs before running an evaluation without its expected experiment records and scores.
+- **Knowledge command failures**: Show remote service diagnostics instead of presenting outages as empty search results, and return failing exit statuses for unsuccessful knowledge operations and memory synchronization.
+- **Dashboard Git snapshot**: Preserve non-ASCII and spaced dirty-file paths verbatim by reading NUL-terminated porcelain output.
+- **Memory content filter**: Accept ISO 8601 dates and identify the matched dangerous-content category when rejecting memory text.
+- **Windows worktree identity**: Canonicalize existing path ancestors before comparing Git worktrees, Hook targets, Dashboard sources, Native ownership, Classic isolation, and Project Knowledge storage so 8.3 short paths and long paths resolve to one physical workspace.
+- **Native Changes Explorer count**: Animate the change total on entry and when it changes, matching the Classic Dashboard count behavior.
+- **Dashboard fullscreen control**: Correct the default preview icon so its four corners render symmetrically when entering fullscreen mode.
+- **Agent CLI operation**: Return workspace-aware actions, independently usable Native input templates, and precise field diagnostics. Preserve Classic artifact references and interrupted Design progress, keep shortcut plugin checkpoints consistent, and pass Windows OpenSpec arguments literally. Native also accepts valid UTF-8 BOM input files and provides complete Supervisor return instructions.
+- **Dashboard project selection**: Default to the launch project instead of a remembered selection, and distinguish working directories of the same repository so project switching and dropdown labels stay consistent while preserving shared plugin state.
+- **Workflow evaluation**: Recognize explicit Classic entry points and configured artifact layouts without mistaking enabled Native settings for the workflow being evaluated; generate Native rubric results without a scoring exception.
+- **Platform-specific instructions**: Create or refresh `CLAUDE.md` only for selected Claude Code targets during initialization and updates, while preserving existing user files for other platforms.
+
+### Removed
+
+- **OpenTest downstream integration**: Remove the OpenTest adapter, state fields, verify/archive gate hooks, tests, archived fusion specs, and documentation so OpenSuper follows the upstream workflow contract without an OpenTest dependency.
+
+### Security
+
+- **Memory repository isolation**: Use a dedicated memory Git repository and isolate inherited repository and index settings, preventing memory operations from changing a parent remote, synchronizing unrelated history, or interfering with commits when invoked from Git hooks.
+- **Dashboard request validation**: Reject untrusted hosts and browser origins, and require JSON for state-changing requests to prevent cross-origin pages from changing local settings.
+
+## What's Changed [0.4.0-rc.6] - 2026-09-07
+
+### Added
+
+- **Native specification reference sync**: Correct local Markdown cross-references in confirmed target specs with an audited `opensuper native spec sync` operation that preserves unaffected acceptance results and schedules affected behavior for verification.
+
+### Changed
+
+- **Native Supervisor verification**: Child tasks carry explicit acceptance scopes and use the same coverage and verdict checks as ordinary verification. Runtime executes repeatable checks, serializes checks in the integration worktree, binds registered reports to the tested candidate and execution, and rejects stale or altered evidence. Interrupted checks distinguish process instances when recovering, and incomplete legacy contracts remain inspectable with recovery guidance. Child verifier results now use `pass`, `fail`, or `blocked` with per-criterion results; passing results require a Runtime receipt.
+
+### Fixed
+
+- **Classic worktree initialization**: New and recovered worktrees retain local OpenSuper and OpenSpec configuration so workflow commands remain usable before initialization files are committed. Existing workspace configuration is preserved, conflicting Classic or OpenSpec settings require resolution, interrupted configuration setup can be retried, and managed worktree directories no longer make the parent workspace appear dirty.
+- **Native Supervisor workspace delivery**: Keep, push, and pull-request finishes preserve the chosen delivery boundary by collecting implementation on the parent change branch first. Archive cleans child worktrees using their registered locations, including when the parent runs in a linked worktree.
+- **Native continuation and recovery**: Supervisor progression returns executable dispatch commands and recoverable task packages without redispatching active children, honors single-session scheduling, and tolerates unchanged configuration copies created by Runtime. Concurrent changes sharing a specification receive an executable Archive ordering choice before confirmation, and interrupted Archive preserves concurrent edits to already-applied specifications.
+- **Native archived status discovery**: Completed changes are no longer hidden by stale active copies in linked worktrees when creation identity and committed Git history prove the archive supersedes them; ambiguous records are reported as conflicts.
+- **Native revision recovery guidance**: Published-spec write rejections point to the current change's supported revision path, and recovery preserves actionable protocol diagnostics for incompatible state schemas.
+- **Native verification reports**: Failed and blocked verification results direct users to repair or resolve blockers before verification resumes, instead of asking them to confirm an unsuccessful result.
+
+## What's Changed [0.4.0-rc.5] - 2026-09-05
+
+### Added
+
+- **Host Agent knowledge review**: Agents can review queued project experience with `opensuper knowledge review` and submit reusable lessons without configuring another model or API key; new lessons remain trial records until successful use.
+- **Task knowledge adoption evidence**: Agents can attach the concrete decision and actual verification result to context feedback; the Dashboard shows this evidence separately from delivery, and feedback survives retries and restarts without counting repeated submissions twice.
+
+### Fixed
+
+- **Project registry recovery**: Automatically removes missing temporary projects leaked by older update tests when the upgraded CLI or Dashboard reads the registry, while preserving ordinary missing projects and inaccessible directories.
+- **Native Supervisor child status**: Dashboard child rows show localized verification, integration, archive, and re-verification states with consistent colors and no longer mistake a missing workflow phase for an uncreated child.
+- **Personal Memory lifecycle**: Independent observations retain their own candidate identities, repeated evidence no longer creates duplicate trial records, phase-specific memories remain manageable, and permanent removal clears retained observation text.
+- **Project Knowledge learning and discovery**: Tasks can discover relevant scoped references before their target file is known and expand their conclusions, applicability, sources, and verification commands. Chinese task queries preserve technical words and mixed-language identifiers. Explicit scope mismatches remain excluded. Source refresh no longer promotes untested lessons, and workflow checkpoints no longer create generic proven policies. Native learning excludes archive previews and preserves current verification evidence.
+- **Memory and knowledge Dashboard**: Failed saves preserve drafts, knowledge categories match the selected view, keyboard navigation works across knowledge tabs, and memory actions remain visible at desktop widths. Retrieval results can be scrolled and opened in readable detail previews, knowledge corrections use a wider centered editor, and personal memory uses clearer empty-state and file labels.
+
+- **Project Knowledge models and retrieval corpus**: Project models now describe each source module through stable, readable entry, dependency, caller, registration, and test evidence; the Dashboard lists only Markdown that actually participates in retrieval, keeps code evidence in record details, automatically compacts duplicate generated history, and restores missing or stale model records through one shared readiness flow.
+
+## What's Changed [0.4.0-rc.4] - 2026-09-04
+
+### Changed
+
+- **Dashboard theme text contrast**: Dashboard form placeholders, disabled text, workflow summary status badges, and Ant Design component states now use readable light- and dark-theme colors, with active and archived workflow states remaining visually distinct.
+- **Native Archive continuation**: Archive-ready changes now start with one complete `--dry-run`; isolated branches receive explicit finish choices and exact follow-up commands, so Agents do not guess flags or repeat status probes.
+- **Archive preflight guidance**: Dry-run now reports workspace and generated-file blockers together with the next confirmed command, preserving user-owned files and keeping dry-run and confirmed behavior aligned.
+- **Memory and Project Knowledge Dashboard**: Current records, history, tombstones, indexed sources, evidence, version chains, empty states, and real query statistics are now shown separately so users can tell what was learned, what is only searchable, and what is no longer active.
+
+### Fixed
+
+- **Native Shape confirmation**: Native now persists a separate user-confirmation step before Build, rejects early or stale `--confirmed` commands, and returns changed Shape artifacts for renewed review. Unresolved blocking questions recorded from vague requirements or supplied documents prevent confirmation preparation instead of being skipped.
+- **Dependency security updates**: Updated the transitive `fast-uri` dependency to `3.1.7` and synchronized npm and pnpm lockfiles to remove vulnerable `browserslist` and `fast-uri` resolutions, addressing the reported URL normalization, SSRF, and Browserslist stats-processing risks.
+- **Project Knowledge freshness**: Streamed content digests now validate sources of any size and detect changes even when file size and modification time are unchanged; Dashboard refreshes invalidate stale records before rebuilding models and reports project-wide totals independently of its display limit.
+- **Memory deletion and status**: Forgotten content is removed from Markdown projections during reconciliation, and forgotten or conflicted records are no longer reported as active personal memory when retained for history or audit purposes.
+- **Native legacy Supervisor recovery**: A stale, never-started v2 execution overlay no longer overrides completed `children.v1` portable history; Native detects the conflict, removes only the exact empty overlay, and accepts the portable parent handoff without manual file deletion.
+- **Native Supervisor cleanup**: Supervisor Change Archive now deletes integrated Child and integration branches against the delivered target branch, so cleanup completes from a separate change worktree without manual branch removal.
+- **Archive-owned state finalization**: Native Archive now includes the active change's state and verification artifacts in its authorized archive commit, avoiding manual commits and retry loops.
+- **Task completion handoff**: Native continuation guidance reuses the original task context instead of probing undeclared environment variables.
+
+## What's Changed [0.4.0-rc.3] - 2026-09-03
+
+### Fixed
+
+- **Devin Desktop OpenSpec compatibility**: `opensuper init`, `opensuper update`, and OpenSpec integration now use Devin Desktop's `.devin/` Skill root while keeping `windsurf` as the stable platform selector and recognizing legacy `.windsurf/` installations.
+- **Global configuration recovery**: `opensuper init` and a Home-directory `opensuper update` now recover known legacy or project-schema global configurations automatically, without asking users to edit or delete `.opensuper/config.yaml`.
+- **Windows atomic writes**: OpenSuper now refreshes temporary-file and Native lock metadata after a successful close, so NTFS close-time metadata finalization no longer makes OpenSuper treat its own files as externally changed. Identity and post-close mutation checks remain enforced before publish or release.
+- **Dashboard Project Knowledge consistency**: Dashboard now uses the same default Local Project Knowledge cache as `opensuper task` and `opensuper knowledge`, so rebuilt records and indexed Markdown sources appear in the plugin center and records created there are available to CLI retrieval. Records from the former `~/.opensuper/plugins/knowledge-cache` Dashboard location are imported into the canonical cache during upgrade.
+- **Native Supervisor final verification**: Supervisor Changes can now include committed parent-level fixes made after the last Child integration. Final verification records the exact forward integration commit it checked, and continuing a Change automatically repairs an interrupted record or reruns final Verify when needed, so affected users do not need to edit Runtime state or reset their branch while rewritten or divergent integration history remains blocked.
+- **Native Supervisor repair recovery**: When final parent verification fails Spec-derived acceptance after the original Children have integrated, repair Children can now carry those failed acceptance items through automatic Shape reconfirmation. Existing integrated Child history remains intact, so users who upgrade OpenSuper can continue the workflow without editing Runtime state or repeating completed Child work.
+- **Native Verifier retry**: When independent verification is unavailable, Native now offers an immediate retry alongside the explicit degraded-result choice, preserving the current candidate, completed checks, and repair scope so users can continue without restoring files, starting a separate service, or configuring a callback.
+
+## What's Changed [0.4.0-rc.2] - 2026-09-01
+
+### Added
+
+- **CLI output envelope**: Native and Classic CLI `--json` output now carries `summary`, `next`, and `user_message` fields alongside the unchanged machine data. `summary` states what happened in plain user language, `next` names the single follow-up action for the Agent, and `user_message` provides ready-to-relay bilingual text for user decisions, so Agents quote the Runtime's wording instead of paraphrasing internal fields.
+
+### Changed
+
+- **Human-first default CLI text**: Native commands no longer print the raw internal state JSON by default. Text output now leads with a plain-language summary line, a `NEXT:` step, and a `RELAY TO USER:` block for pauses that need a user decision; the full machine projection moved behind the new global `--verbose` flag, and stable error codes (conflicts, snapshot budget, workspace isolation) render as human sentences with the machine detail retained on a `DETAIL:` line. Classic commands (`state next/scale/recover/transition/entry-check`, handoff, archive, manual `guard` checks, and phase-guard write blocks) prepend bilingual summaries that follow the change's language while keeping their existing machine lines — blocked guard checks now say the failing items are the Agent's checklist, not user actions. `opensuper status` adds one plain-language line per Native and Classic change above its machine details.
+- **CLI envelope consistency**: Direct Classic command `--json` invocations and verbose Native errors now retain the structured envelope and machine detail, while user-decision relays take precedence over internal confirmation commands so an Agent asks the user before resuming a paused workflow.
+
+### Fixed
+
+- **Native verification loop-stop handoff**: When Native verification paused after repeated failures or repeated no-progress results, the Agent received no user-facing message at the pause point, so sessions could keep re-checking the same candidate instead of asking the user whether to continue repairing or adjust the requirements. The Runtime now returns an explicit user decision request with ready-to-relay bilingual messages for the loop stop, and the same applies when a Verifier blocker waits on information only the user can provide.
+- **Native status resilience for stale children indexes**: A stale `children.yaml` acceptance index (for example a partially synced Supervisor copy inside another Git worktree) no longer blocks the whole Native status view. `opensuper status` and `opensuper native status` now keep listing every other change, show the drifted copy as needing Shape re-confirmation, and the Dashboard keeps rendering parent-child progress, while strict index validation still guards state-advancing commands such as Shape confirmation and Build.
+
+- **Prerelease update detection**: `opensuper init` and `opensuper update` now compare complete SemVer values, so beta-to-RC, RC-to-stable, future patch, and future minor prerelease upgrades are detected correctly.
+
+## What's Changed [0.4.0-rc.1] - 2026-08-31
+
+### Added
+
+- **Dashboard workspace**: OpenSuper now provides a three-pane Dashboard for Native and Classic changes, Personal Memory, Project Knowledge, plugin settings, archived history, Git worktrees, and interactive website previews.
+- **Personal Memory**: OpenSuper now provides a first-party `opensuper-memory` Skill and `opensuper memory` commands for reusable user profiles, collaboration policies, task episodes, retrieval, correction, deletion, rollback, synchronization, and bounded context use.
+- **Agent Learning Loop**: Classic, Native, Hotfix, and Tweak now record structured workflow, verification, review, archive, and context outcomes so bounded reflection can promote stable preferences and collaboration experience.
+- **Project Knowledge and Project Policy**: `opensuper task` and `opensuper knowledge` now provide source-backed project topology, facts, dependencies, decisions, procedures, constraints, and failure resolutions through separate Local and optional Remote providers.
+- **Configurable project knowledge corpus**: Projects can index project-relative Markdown globs through `knowledge.local.include`; local indexes, records, provider diagnostics, and corrections are kept outside the project repository by default.
+- **Progressive Agent Context**: Personal Memory and Project Knowledge can now be selected by task, path, operation, and phase, with direct context for core facts and explainable manifests for longer records.
+- **Native Supervisor Change v2**: Large Native changes can be decomposed into dependency-aware children, assigned to independent Codex sessions or a Claude Code Agent Team, verified separately, integrated in order, and advanced automatically to final parent verification.
+- **Native Portable State and recovery**: Native changes now expose portable phase, acceptance, handoff, check, verification, workspace, and Supervisor summaries through `opensuper-state.yaml`, `opensuper status`, and rebuildable `verification.md`.
+- **Oh My Pi and DeepSeek Harness support**: `opensuper init`, `opensuper update`, `opensuper doctor`, and `opensuper uninstall` now manage OpenSuper Skills, Rules, OpenSpec integration, and Hook bridges in both platforms' project and user environments.
+- **Native CodeGraph setup**: `opensuper init` now offers optional CodeGraph setup when Native or Both is selected, with project indexing and Agent integration kept separate from Classic's OpenSpec and Superpowers dependencies.
+
+### Changed
+
+- **Native verification loop**: Native now reuses completed checks, avoids redundant project scans and Archive checks, streams command output to local logs, and exposes compact paginated status/details with acceptance, evidence, child, integration, and recovery information.
+- **Native Supervisor coordination recovery**: Supervisor Changes now remember the user's multi-session or single-session choice; when multi-session coordination cannot use an independent Codex session or Claude Code Agent Team, OpenSuper continues ready children through Subagents without reopening the coordination choice, while preserving Runtime worktree, task identity, verification, and integration rules.
+- **Native workspace and delivery flow**: Native branch/worktree discovery and reuse remain authoritative across commands; completed Supervisor parents continue directly into final Verify, successful merges clean up OpenSuper-created worktrees while preserving branches, and Archive presents concrete local-commit, merge, push, and PR effects.
+- **Native clarification and Classic context settings**: New Native projects now default to batch clarification, while rc1 project templates enable beta Classic context compression; artifact language, review mode, auto-transition, and memory/knowledge policies remain explicit project configuration.
+- **Classic Build and workflow dispatch**: Classic plan creation and self-review stay with `writing-plans`, the main session collects execution, TDD, and review choices together, and `/opensuper` can load the configured phase and preset Skills when continuing a workflow on a supported host.
+- **Classic Superpowers dependency installation**: `opensuper init` and `opensuper update` now install and refresh the functional Superpowers Skills without adding the user-level `using-superpowers` bootstrap Skill; existing user-owned copies are preserved.
+- **Workflow context integration**: Native, Classic, and workflow resolution can request the same bounded Personal Memory and Project Knowledge context, record lifecycle outcomes, and keep context injection best-effort without changing workflow state ownership.
+- **Dashboard memory and knowledge experience**: Dashboard records, source files, Markdown/JSON/YAML previews, provider settings, application history, diagnostics, and project controls now use compact toolbars, stable loading states, internal scrolling, fullscreen/restore dialogs, and aligned desktop geometry.
+- **CodeGraph diagnostics**: `opensuper init` and `opensuper doctor` now report CLI installation, project index freshness, MCP registration, and effective Agent capability as separate states.
+- **Native status and verification copy**: CLI, reports, and Dashboard explain independent verification, automatic checks, required confirmation, child progress, integration evidence, and next actions in user-facing terms while retaining stable machine status values.
+
+### Fixed
+
+- **Windows Hook launch**: Claude Code now runs the OpenSuper Hook Router and Classic branch-binding probes without transient command-window flashes on Windows, while preserving and migrating existing managed Hooks safely.
+- **Native Supervisor coordination choice**: OpenSuper now requires an explicit multi-session or single-session choice before confirming a Supervisor Change with multiple independent children, so a generic confirmation cannot silently skip the collaboration decision.
+- **Memory and Project Knowledge consistency**: Fixed stale Remote configuration, stale or deleted source injection, local index recovery, WAL handling, provider result merging, correction preservation, permanent-forget tombstones, duplicate management reads, and background Reflection timing.
+- **Native Supervisor recovery**: Fixed ambiguous parent discovery, stale continuation decisions, task-binding protection, integration identity checks, persistent recovery state, portable workspace projection, and final verification evidence handling.
+- **Native Portable compatibility**: `opensuper status` now reads valid Native v4 Portable State changes, including large documents, paginated details, Supervisor summaries, and explicit project-root routing.
+- **Native requirement and Archive recovery**: User-visible requirement changes now return Archive-ready changes to Shape and invalidate stale verification; interrupted workspace/archive operations retain actionable recovery state and do not silently reuse an unverifiable pass.
+- **Windows and cross-platform execution**: Common command shims and concurrent snapshot/workspace operations now behave reliably on Windows, while packaged Dashboard/runtime assets remain stable across platform path and formatting differences.
+- **Classic workflow recovery**: Fixed missing project context in workspace preparation/resolution, Build plan offload fallback, phase-aware Skill/Rule contract drift, and verification repairs that previously left implementation work in the wrong phase.
+- **Dashboard project and UI state**: Fixed monorepo subdirectory discovery, stale worktree/index sources, long project name visibility, project selector and header alignment, empty/loading transitions, repeated Project Knowledge source reads, sidebar brand title clipping, source preview state, collapsed-sidebar overflow, modal controls, and misleading Personal Memory notices.
+- **Issue triage fallback**: Issues without a recognized form area now infer a unique repository area from their title and body; ambiguous reports remain marked for manual triage.
+
+### Removed
+
+- **Legacy Native verification bookkeeping**: New Native changes no longer expose the old project-wide scan, checkpoint, check, evidence, and receipt command chain; legacy active changes migrate conservatively and archived legacy changes remain read-only.
+
+## What's Changed [0.4.0-beta.19] - 2026-08-21
+
+### Added
+
+- **Grok platform support**: `opensuper init`, `opensuper update`, `opensuper doctor`, and `opensuper uninstall` now treat Grok as a first-class host. Skills, rules, and the Hook Router live under `.grok/skills/`, `.grok/rules/`, and `.grok/hooks/opensuper.json`. The Router recognizes `--platform grok` and matches Grok's native `write` / `search_replace` tools.
+- **Repository-owned Native pull-request finish providers**: Projects can opt into a structured repository command for PR title, body, template, and policy validation while OpenSuper retains commit, push, remote base/head/SHA verification, existing-PR reuse, recoverable failure state, and safe worktree cleanup.
+- **CodeBuddy rules support**: OpenSuper now installs and refreshes Markdown workflow rules in CodeBuddy's `.codebuddy/rules/` directory.
+- **On-demand change review**: The new `/opensuper-review` Skill reviews the current Native or Classic change against its implementation diff and existing evidence, reports prioritized correctness, security, edge-case, and coverage findings, and remains read-only without advancing or replacing Verify.
+- **Fork pull request guidance**: First-time contributors opening pull requests from forks now receive the repository guidance comment through a trusted workflow.
+- **Pull request template validation**: Pull requests now receive an actionable comment and a failing check when required template sections or items are missing, or when checklist items are incomplete.
+- **Issue triage labels**: New issues are automatically marked for triage and assigned a repository area label from their structured issue form selection.
+
+### Changed
+
+- **Hook allow-path documentation**: The website now explains how to configure project-relative `hook.allow_paths` directories for guarded workflow phases.
+- **Native child plans**: New Supervisor Change child plans keep a readable parent acceptance index, while Runtime verification still retains the complete brief-and-Spec acceptance matrix; historical child-plan files remain compatible.
+- **Dashboard artifact previews**: Fullscreen previews now close with Escape, keep long tables horizontally scrollable, preserve readable table headers, and use a larger directory navigation scale.
+- **Native source requirements**: Files and links supplied as requirement sources now retain a complete coverage map in the Native brief, map every active executable requirement to both the target Spec and acceptance criteria, and keep incomplete or unavailable sources blocked for clarification.
+- **Native verification decisions**: Native await-user continuations now let users accept the current result, revise the implementation, or revise requirements and acceptance criteria while invalidating stale Archive authorization from older goal cycles.
+- **Pull request title scopes**: Conventional PR titles now support Native, Classic, Hook, Dashboard, Platform, Workflow, Eval, and other repository areas, including titles such as `feat(native): ...`.
+- **Ambient Resume non-OpenSuper skill exemption**: The managed Ambient Resume instructions in `AGENTS.md` and `CLAUDE.md` now exempt explicitly invoked non-OpenSuper skills and slash commands from the resume probe, so unrelated plugin or tooling setup tasks no longer begin with a `opensuper resume-probe` call. Existing projects pick up the revised block through `opensuper update`.
+
+### Fixed
+
+- **Windows init reliability**: `opensuper init` no longer aborts OpenSpec and Skills installation with "Contained atomic write temporary file changed before commit" on file systems without stable file identities, such as exFAT or FAT32 removable and network drives. The commit-time integrity check compared the temporary file against its pre-write snapshot, so opensuper's own write looked like tampering; it now compares against the post-write snapshot while symlink and directory-displacement detection are unchanged.
+- **Classic design handoff refresh after Spec Patch**: Running `opensuper handoff <change> design --write` after OpenSpec artifacts changed no longer fails with a stale-handoff error, so the design guard can pass and the Classic full workflow proceeds from Design to Build. Refreshing now rewrites stale context files even when a manually aligned hash would otherwise short-circuit success, regenerates the context pack when OpenSpec delta specs are added, changed, or removed, and remains available after the guard has advanced the phase to build.
+- **Classic Ambient Resume**: `opensuper init` and `opensuper update` now keep the managed Ambient Resume instructions for Classic-only projects when `ambient_resume` is enabled, so re-running the commands no longer removes the block from `AGENTS.md` or `CLAUDE.md`.
+- **Classic workspace command context**: `opensuper classic workspace prepare` and `opensuper classic workspace resolve` no longer fail with "Classic command project context is unavailable" for every isolation mode (`current`, `branch`, `worktree`), fixing the workspace preparation step of the Classic Open flow.
+- **Native Archive**: Archive now respects Git ignore rules when staging workspace artifacts and keeps valid portable verification reports from being treated as incomplete migrations.
+- **Windows Eval packaging**: Packaging no longer traverses ignored pytest and Eval runtime artifacts before applying the package boundary, so stale Windows test directories cannot make `pnpm pack` fail with `EPERM`.
+- **Windows Eval isolation**: Repeated `opensuper eval` runs no longer copy generated `.opensuper` caches, run artifacts, or the framework's own Runtime state into Skill workspaces, preventing nested-cache and deep-path `MAX_PATH` failures on Windows.
+- **Monorepo Dashboard workspaces**: Starting `opensuper dashboard` from a monorepo subdirectory that holds `.opensuper/config.yaml` now uses that subdirectory as the workspace root and maps sibling Git worktrees to the same subdirectory, so the change list is no longer empty when the OpenSuper project root is not the worktree root.
+- **Ambient Resume mid-flow replies**: Agents following the installed Ambient Resume instructions no longer stall a running OpenSuper change after the user answers an in-flow question with a short option pick. The managed block now exempts replies to questions asked inside a OpenSuper flow from the resume probe and clarifies that an `out_of_scope` result only blocks entering a workflow, never continuing one already in progress.
+- **Windows stdin and file JSON parsing**: Runtime commands now strip a leading UTF-8 BOM before parsing JSON, so `opensuper-intent.mjs route --stdin` no longer fails with "Invalid JSON" when the frame JSON comes from Windows PowerShell 5.1 redirection or `Out-File`, which emit BOM-prefixed UTF-8 by default. The same tolerance covers `opensuper-resume-probe.mjs --stdin`, Hook payload parsing in `opensuper-hook-guard.mjs` and the Hook Router, and Native `evidence format` entries read from stdin or `--entries` files.
+- **Classic record-check step sync**: `opensuper state record-check` no longer fails with "Classic Run step mismatch" after the agent checks off the final tasks.md entry during Build. Checking off tasks advances the evidence-derived Run step without running a state command, which legitimately left the recorded step behind; record-check now re-syncs the Run projection before recording the check (printing a `[RECONCILED] currentStep ... -> ...` line and appending a trajectory transition) instead of blocking Build evidence, while genuine corruption — skill identity, snapshot, or migration marker mismatch — still fails hard.
+- **Classic Build plan offload**: The Build Step 1 plan-writing subagent no longer routinely degrades to the main session (#345). The dispatch prompt now tells the subagent to skip interactive skill steps such as the `writing-plans` Execution Handoff question, the full plan path is fixed by the main session before dispatch, and the subagent must end its reply with a `PLAN_PATH:` line that the coordinator reads first. Subagents without the Skill tool fail fast with `SKILL_UNAVAILABLE` instead of grinding, plans are scoped to tasks.md, and after any dispatch failure later Step 1 entries in the same session go inline directly.
+
+## What's Changed [0.4.0-beta.18] - 2026-08-13
+
+### Added
+
+- **Standalone Skill evaluation**: `opensuper eval ./my-skill` now evaluates any local Skill without depending on `opensuper-any`, supports project-authored or automatically generated tasks, offline `--collect`, independent subject and LLM-as-judge model/API routing, and explicitly installed custom Agent adapters.
+- **Selectable evaluation agents**: `opensuper eval` can now run the subject, user simulator, and optional Judge with Claude Code, Codex, Qoder, or CodeBuddy, selected from the CLI or eval manifest while keeping Claude Code as the default.
+- **Project-authored evaluation tasks**: Skills can now declare inline deterministic tasks or reuse package-local task definitions from `evaluation.tasks` in `opensuper/eval.yaml`.
+- **Automatic evaluation tasks**: A taskless Skill evaluation now generates a bounded, hash-cached task set on the first normal run while keeping `--quick` and cache-only `--collect` available for smoke and discovery workflows.
+- **Langfuse evaluation suite**: `opensuper eval --suite langfuse` now reports task traces, rubric scores, pass metrics, and experiment summaries to Langfuse, automatically provisions pinned official Claude Code/Codex plugins in an isolated cache, and captures Qoder/CodeBuddy transcripts without changing local scoring.
+- **Native Supervisor Change mode**: The Native Skill now recognizes large requests that benefit from independent acceptance, proposes a named child graph during the Supervisor Change Shape confirmation, automatically dispatches ready children with a serial fallback, merges them into the Supervisor Change branch in order, and verifies the final integrated result against the Supervisor Change acceptance criteria.
+- **Worktree-aware Dashboard changes**: The Dashboard now discovers Classic and Native changes across every registered Git worktree, keeps independent changes as separate root entries, and groups explicit child changes under expandable Supervisor Changes while preserving the existing detail workspace.
+- **WorkBuddy platform support**: `opensuper init` and `opensuper update` now install and refresh OpenSuper Skills in project `.workbuddy/skills/` or user `~/.workbuddy/skills/`, and project installs merge the OpenSuper Hook into `.workbuddy/settings.json` while preserving existing settings.
+
+### Changed
+
+- **User-level Eval configuration**: Published `opensuper eval` users can now configure separate Bench and LLM-as-judge credentials, endpoints, model names, and other Eval environment settings in `~/.opensuper/eval/.env` (or the Windows user-equivalent path), without editing the installed package or repository. A missing file is created automatically as a complete commented template and is never overwritten. Agent keys remain container-local and are never written into published assets or reports.
+- **CodeBuddy custom model routing**: CodeBuddy Eval runs now use the CLI's native API key, endpoint, model, and model-role settings, while keeping the host `models.json` and login directory outside the container.
+- **Project-local Hook write allowlist**: Projects can now configure project-relative directories under `hook.allow_paths` in `.opensuper/config.yaml` for shared rules or notes that must remain writable during guarded Native Shape or Classic non-coding phases, while OpenSuper Runtime and workflow-owned artifacts remain protected. The Hook itself does not block writes outside the project, so external paths do not need to be listed.
+- **Classic workspace routing**: Classic changes now choose and prepare their current branch or Worktree during Open, reuse matching registered Worktrees, and route resume/select operations to the aligned workspace.
+- **Native workspace reuse**: Native parallel changes now reuse an existing linked Worktree for their change branch and recreate a missing Worktree when the branch remains available.
+
+### Fixed
+
+- **macOS packaged Hook Router**: Installed OpenSuper packages now execute the Hook Router correctly from macOS temporary paths, including paths that resolve through `/var` symlinks.
+- **Classic Guard project-root resolution**: Classic design guards now enumerate delta specs from the discovered project root even when invoked from a nested working directory.
+- **Classic OpenSpec version passthrough**: `opensuper classic openspec -- --version` now routes through the Classic facade before top-level CLI option parsing, so `/opensuper-open` compares the OpenSpec CLI version instead of OpenSuper's own version.
+- **Codex OpenSpec skills with OpenSpec 1.8**: `opensuper init` and `opensuper update` now read OpenSpec 1.8's `.agents` Codex skill output (keeping `.codex` as a legacy fallback for OpenSpec 1.7 and earlier), so project OpenSpec skills are refreshed to the installed CLI version instead of being reported as installed while staying stale. A missing or empty staged tool output now fails the OpenSpec update with a clear reason instead of silently reporting success.
+
+### Security
+
+- **Dependency security updates**: Updated DOMPurify, Mermaid, and Nanoid to patched releases to address reported XSS, denial-of-service, prototype-pollution, CSS-injection, and resource-exhaustion vulnerabilities.
+
+## What's Changed [0.4.0-beta.17] - 2026-08-10
+
+### Added
+
+- **Independent Native verification**: After a Builder submits a candidate, OpenSuper runs the declared local checks and coordinates a fresh read-only Verifier over every acceptance item. Failed items return to Build through a bounded loop; the packaged Skill-coordinated flow requires one explicit user confirmation before Archive.
+- **Trae Hook support**: `opensuper init`, `opensuper update`, `opensuper doctor`, and `opensuper uninstall` now support managed Hook Router entries for Trae and Trae CN, using Trae's official project and global `hooks.json` locations while preserving user-owned Hook configuration.
+
+### Changed
+
+- **Faster Native completion loop**: New Native changes no longer scan or fingerprint the project during Verify, create per-item receipts, or repeat checks during Archive. Each normal check runs once, stdout and stderr stream to local logs, and long Maven, Gradle, npm, or Python output no longer invalidates an otherwise valid result.
+- **Portable Native recovery**: `opensuper-state.yaml` now records the stable phase, loop, handoff, blockers, checks, and verification summary needed by a new Agent on another synchronized device. `verification.md` is a rebuildable user report, while in-flight execution and logs remain device-local.
+- **Native Dashboard workflow view**: Native details now show Build/Verify stage, iteration, attempt, acceptance outcomes, checks, blockers, and compact history directly from portable state; archived legacy changes remain available through a read-only adapter.
+- **Native artifact previews**: Native details now preview the portable `opensuper-state.yaml`, brief, complete target Specs, and generated verification report while keeping machine-only Runtime files out of the artifact list.
+- **Native clarification and workspace flow**: Batch clarification is now the default for new projects, dependent decisions are mapped before asking, and branch/worktree changes keep structured creation, discovery, recovery, and authorized finish actions.
+- **Native command guidance**: Public commands and bilingual Skills now keep normal progression on Runtime continuation, explain the bounded Build/Verify loop, and load workspace, command-exception, or recovery details only when needed without exposing machine-only state files.
+- **Codex Skill invocation policy**: User-facing phase and preset Skills now include display metadata and require explicit invocation, while permanent workflow entry Skills remain available for model routing.
+
+### Fixed
+
+- **Native worktree and recovery routing**: Commands keep linked worktrees authoritative, discover portable changes across registered worktrees, reject migration from the wrong checkout, and resume interrupted Archive steps without silently reusing an unverifiable pass.
+- **Cross-platform Native checks**: Windows projects can run common command shims such as npm and pnpm without shell-specific failures, while timed-out checks are stopped as a process tree instead of leaving child processes behind.
+- **Workflow isolation and references**: Legacy global Hooks remain neutral outside the active project, and Classic-only reference documents stay scoped to Classic installations.
+- **Doctor Superpowers detection**: `opensuper doctor` now recognizes Claude Code plugin-managed Superpowers installs, so users with Superpowers under the plugin cache no longer receive a misleading install warning.
+
+### Removed
+
+- **Native verification bookkeeping**: New Native changes no longer expose the old project-wide scan settings or public checkpoint/check/evidence/receipt command chain. Legacy active changes migrate conservatively, and archived legacy changes remain read-only.
+
+## What's Changed [0.4.0-beta.16] - 2026-08-05
+
+### Fixed
+
+- **Classic/OpenSpec coexistence**: Classic now uses only the configured artifact root, so a standalone OpenSpec project can keep the other root at the same time; explicit root migration still refuses to overwrite a non-empty destination.
+- **Codex Native Hook parsing**: Raw `apply_patch` input now attributes Add, Update, Delete, and standard `+++ b/...` file headers so Native phase protection is applied consistently.
+
+### Security
+
+- **Dependency security updates**: Updated PostCSS, Undici, and brace-expansion to patched releases to address reported dependency vulnerabilities.
+
+## What's Changed [0.4.0-beta.15] - 2026-08-05
+
+### Added
+
+- **Global project activation**: Global Native or Classic defaults can now activate an unconfigured project on its first explicit `/opensuper` invocation. Project artifacts stay local, existing workflow ownership is preserved, and project-scoped initialization remains available for local overrides.
+- **Native parallel changes**: Before Shape, Native detects active changes and can create an isolated Git worktree automatically. `current`, `branch`, and `worktree` choices remain available when safe, and isolated changes remember their starting target branch for finishing.
+
+### Changed
+
+- **Dashboard change explorer**: Dashboard now loads lightweight change rows, paginates active, archived, and all changes, and fetches full details only for the selected change. Native and Classic keep the selected detail surface stable while loading and offer a retry when detail loading fails, keeping large projects responsive.
+- **Hook lifecycle and routing**: Activated projects and isolated Native worktrees now receive one project-rooted Router automatically. Setup, Update, and Doctor migrate historical global and legacy OpenSuper Hooks while preserving user-owned Hook configuration and reporting incomplete cleanup instead of continuing silently.
+
+### Fixed
+
+- **Global Native Skill updates**: Global `opensuper update` now refreshes the workflows already installed, including Native, without adding workflows the user did not choose.
+- **Native Verify retries**: Invalid verification reports are rejected before the required check runs, and unchanged successful required-check receipts are reused on retry so expensive checks are not repeated unnecessarily.
+- **Native parallel resume**: Ambient Resume now performs full recovery checks only for the explicitly named, selected, or sole Native change, so unrelated active changes do not surface irrelevant Runtime errors.
+- **Subagent workflow dispatch**: Classic Build runs the selected authoring workflow directly, and OpenSuper Any keeps each authoring lane on its designated workflow instead of replacing it based on platform-specific Agent labels.
+- **Native scope consistency**: Native now detects files hidden from Git's modified-file view, preventing false Build-to-Verify scope mismatches from blocking verification and archive.
+- **Hook write handling**: Project Hooks allow ordinary writes when no active OpenSuper change owns the target and remain neutral for unknown or external targets, including paths redirected through symlinks or junctions, while still evaluating in-project writes.
+- **Hook configuration safety**: Hook installation no longer overwrites user-owned Kiro files or leaves invalid Copilot entries, and Doctor now detects stale legacy files and disabled or structurally mismatched handlers before reporting the Router healthy.
+- **Native receipt scope recovery**: Verification receipts now stop before execution when project files changed after Build, report the changed paths, and provide the command for returning to Build and refreshing the implementation scope.
+- **Classic build recovery**: Full Classic workflows return to plan creation after context recovery when no valid implementation plan is recorded, and block project source writes until the plan is restored and linked.
+- **Ambient Resume cleanup**: Disabling Ambient Resume now removes OpenSuper-managed instructions from `AGENTS.md` and `CLAUDE.md` while preserving user-authored content.
+- **Eval workspace Dockerfiles**: Eval image preparation now uses `environment/Dockerfile` when a workspace has no root Dockerfile, so those workspaces can build without moving the file.
+
+## What's Changed [0.4.0-beta.14] - 2026-08-02
+
+### Fixed
+
+- **Incomplete project configuration**: `opensuper update` and Classic root commands now fill missing Native defaults instead of rejecting otherwise usable project configurations.
+- **Indexed update safety**: `opensuper update` now keeps a selected current-project refresh within that project and reports when no indexed project is available instead of falling back to global installations. Use `--scope global` only when you explicitly intend to refresh global assets.
+- **Classic layout initialization**: Adding Classic to a Native project now preserves an existing root-level `openspec/` layout when no explicit Classic layout is configured, and initialization works on filesystems such as exFAT that do not support hard links.
+- **Codex OpenSpec Skills**: Project initialization now installs OpenSpec Skills generated for Codex into its canonical `.agents/skills/` directory.
+- **Uninstall scope and selection**: Current-project and all-indexed-project uninstall now use the same detected-platform batch selector as setup, retain unselected platforms, select Native/Classic once for the operation, remove selected Superpowers companion Skills even when the Skills CLI reports platform display names, loses source metadata, or stores them in a shared directory, and remove the managed project configuration when user content keeps a working directory in place.
+- **Safe uninstall completion**: When existing working-directory content is preserved, uninstall now completes normally, explains why it was kept and that it is unaffected, clears the project index, and reports actionable reasons for real cleanup failures in the configured Chinese or English language.
+
+## What's Changed [0.4.0-beta.13] - 2026-08-02
+
+Beta 13 makes everyday workflow operations faster and makes uninstalling and reading Dashboard status easier.
+
+### Added
+
+- **Native receipt refresh**: New `opensuper native receipt refresh <change> [--apply]` checks stale verification receipts and reissues eligible manual receipts. Automated checks that need a real rerun remain clearly identified instead of being marked as passed.
+
+### Changed
+
+- **Selective workflow removal**: Interactive `opensuper uninstall` now lets you remove Native, Classic, or both from each installed target. Removing one retains the other workflow and shared configuration; when removing Classic, OpenSpec and Superpowers Skills are optional and remain selected off by default.
+- **Everyday responsiveness**: CLI startup, Classic and Native workflow commands, write checks, and Native snapshot updates are faster. Native reuses results for unchanged files while continuing to inspect real changes.
+- **Fast public workflow commands**: High-frequency Native, Classic, and workflow-resolution commands keep the stable `opensuper` CLI interface while dispatching internally to package-owned runtime bundles, reducing cold-start overhead without relying on host-specific Skill paths.
+- **Dashboard workspace**: Dashboard offers clearer project switching, search, and change-detail views, discovers projects launched from nested directories, and presents Classic changes from legacy and docs layouts alongside the separate read-only Native workspace.
+
+### Fixed
+
+- **Native baseline scope**: Newly initialized Native projects no longer spend their bounded baseline budget on OpenSuper's replicated platform Skill directories, so `opensuper native new` remains usable after installing every supported platform while project source and `.github/workflows` stay in scope.
+- **Classic configuration compatibility**: Setup and update retain an existing Classic project’s directory choice and more reliably recognize a usable directory when an older project configuration is incomplete.
+- **Portable workflow execution**: Native and Classic Skills now call the public `opensuper` CLI instead of searching platform-specific Skill directories or invoking internal bundles. Missing CLI installations stop with a clear error, while workflow routing still immediately loads the selected Skill through the Skill tool.
+- **Classic execution choices**: Classic now presents every workflow-supported isolation and execution choice, then runs the user’s selection and reports any error instead of pre-screening options.
+- **Dashboard status feedback**: Classic change verification uses green, red, amber, and neutral status colors for pass, fail, pending, and unknown states; invalid Dashboard ports now fail with a clear error before startup.
+
+### Security
+
+- **Classic phase protection**: Host configuration directories and worktrees no longer bypass Classic phase restrictions, preventing source writes hidden under paths such as `.claude/` during non-Build phases.
+- **Dashboard build dependency**: Updated the Dashboard CSS build dependency to prevent untrusted source-map references from reading unintended reachable map files.
+
+## What's Changed [0.4.0-beta.12] - 2026-07-30
+
+### Changed
+
+- **Classic root migration**: `opensuper classic root move docs --dry-run` now reports the current state without exposing a plan ID, prints each conflict or blocker on its own line, and `--apply` migrates the complete `openspec/` tree—including active and incompletely archived changes—without requiring a plan ID. Migration output and errors follow `classic.language`, projects already using `docs/openspec/` receive a clear no-op result, and completed migrations keep the final result at the end of the detailed report.
+- **Native workflow guidance**: Native now identifies the current change and phase before loading a phase-specific reference, always performs Shape classification, silent-assumption checks, and shared-understanding confirmation before implementation, treats `blocked` as a recoverable branch instead of task completion, reconfirms new user decisions discovered during Build with the Runtime-provided `--confirmed` transition, and explains project and change commands as a task-oriented runbook instead of an undifferentiated command list.
+- **Native verification and repair**: Passing Verify now runs and binds the built-in required check automatically. Acceptance evidence can come from manual observations or Runtime-executed project commands, with Windows command-shim support and credential-like output redaction. Runtime derives repair gaps from failed evidence; a repeated gap with one remaining override stays Agent-owned and requires a concrete new hypothesis, while an exhausted override or verification budget returns one explicit user decision.
+
+### Fixed
+
+- **Classic Dashboard discovery**: Dashboard now discovers the repository root when launched from a nested directory, reads Classic changes from the configured legacy or docs layout through the built CLI, and shows collection errors instead of presenting them as an empty workspace.
+- **Explicit OpenSuper Skill routing**: The root Skill now triggers only for an explicit `/opensuper` invocation or a OpenSuper request that does not choose Native or Classic. Once loaded, it treats the entry as selected, immediately resolves the project-configured workflow, loads exactly the returned Native or Classic entry Skill, and passes the original request through instead of re-evaluating task relevance or selecting a workflow by task size.
+- **Stale current-change routing**: A selection whose target is missing or archived now reuses the same zero, one, or multiple active-change resolution as a missing selection: ordinary work continues with zero candidates, one candidate is inferred read-only, and multiple candidates still require an explicit selection.
+- **Native baseline recovery guidance**: Incomplete baseline diagnostics now include `native.snapshot.max_files` alongside the byte and duration budgets, so file-count truncation points users to the configuration that can resolve it.
+
+### Removed
+
+- **Native cryptographic review**: Removed controller trust, signing identities, implementation attestations, independent-review and waiver receipts, and their CLI and Eval handoff paths. Native verification now depends on complete, current acceptance evidence and the built-in required check, bound to the active revision, contract, scope, snapshot, and artifacts.
+- **Redundant Native CLI inputs**: Removed the `opensuper native list` alias; manual-receipt `--responsible` and `--confirmed` options; and caller-supplied `next --receipt`, `--evidence-receipt`, `--failure-category`, and `--failed-check` options. Use unnamed `status` for discovery, record acceptance receipt references in `verification.md`, and record fresh schema-v3 evidence for active changes that still hold v2 receipts.
+
+## What's Changed [0.4.0-beta.11] - 2026-07-29
+
+### Changed
+
+- **Project configuration defaults**: New Classic configurations default to `classic.artifact_layout: docs`. `opensuper update` now fills every missing managed Native and Classic setting, choosing `docs/openspec/` unless an existing root-level `openspec/` project must be preserved.
+- **Risk-based Native review**: Independent review is required by the actual implementation scope and risk instead of a change-creation signing mode, so ordinary changes can start immediately while high-risk verification remains fail-closed.
+
+### Removed
+
+- **Native creation authorization**: `opensuper native new` no longer requires `--creation-authorization`, and the `signed-v2` creation protocol plus `opensuper native trust authorize` have been removed.
+
+## What's Changed [0.4.0-beta.10] - 2026-07-28
+
+### Added
+
+- **Targeted platform setup**: `opensuper init` and `opensuper update` now accept `--platform <platform>` so you can install or refresh one supported platform, including a project-specific custom platform, without changing the existing automatic fallback.
+- **CodeGraph index lifecycle**: Non-interactive project setup can explicitly choose `opensuper init --codegraph init|skip`, while JSON output and `opensuper doctor` report whether the CLI or index is missing, incomplete, stale, or ready. Authorized `opensuper doctor --repair --yes` runs the matching initialization, rebuild, or sync action without making ordinary doctor checks mutate the project ([#245](https://github.com/rpamis/comet/issues/245)).
+- **Classic configurable catalogue**: Projects can select `classic.artifact_layout: legacy|docs` for `openspec/` or `docs/openspec/`. `opensuper classic root show` reveals the active layout, while `opensuper classic root move … --dry-run/--apply` plans and performs a safe move of existing artifacts and configuration ([#173](https://github.com/rpamis/comet/issues/173)).
+- **Native evidence-backed verification**: Every mandatory acceptance item must be supported by current evidence bound to the active snapshot and scope. Native provides receipt commands for automated checks, manual observations, implementation attestations, independent review, and approved waivers; failed, skipped, blocked, stale, or incomplete evidence cannot produce a passing result, and high-risk changes require independent review ([#240](https://github.com/rpamis/comet/issues/240)).
+
+### Changed
+
+- **Classic documentation layout**: New Classic and dual-workflow projects store OpenSpec work in `docs/openspec/` beside `docs/opensuper/` and `docs/superpowers/`. Existing projects stay on their current root-level `openspec/` layout unless you explicitly migrate, and all Classic commands use the selected location ([#173](https://github.com/rpamis/comet/issues/173)).
+- **Native Loop**: Failed or incomplete acceptance items return the change to Build as explicit repair input. Only fewer gaps, passing checks, or restored evidence count as progress; implementation churn alone does not reset stagnation or the failure budget. Native continues Build ↔ Verify until the contract is satisfied or a stop condition returns control to the user ([#209](https://github.com/rpamis/comet/issues/209), [#242](https://github.com/rpamis/comet/issues/242)).
+- **Native archive confirmation**: Set `native.archive_confirmation: required` to require one explicit decision after a successful Archive preview, or keep the existing automatic archive behavior. Intermediate repair iterations never request archive confirmation, and choosing not to archive preserves the active change ([#238](https://github.com/rpamis/comet/issues/238)).
+- **Native guidance**: Native Skill instructions now keep the active phase and next action prominent, loading detailed clarification, command, artifact, and recovery guidance only when needed.
+
+### Fixed
+
+- **Classic archive references**: Classic archive now updates change-local handoff and related artifact paths to their dated archive location, preserves the recorded handoff hash, and verifies archived references before reporting success, so archived changes pass Guard without manual state edits ([#244](https://github.com/rpamis/comet/issues/244)).
+- **Secondary worktree diagnostics**: `opensuper doctor` now distinguishes current-worktree project assets, primary-worktree-only assets, and an available global fallback. It reports the effective runtime source without treating intentionally uncopied ignored assets as corruption or executing files from another worktree, while still failing health checks when no usable runtime exists ([#246](https://github.com/rpamis/comet/issues/246)).
+
+### Security
+
+- **Native approval isolation**: Signed Native workflows keep approval credentials outside the project and implementation Agent, preventing a project change from granting itself approval authority ([#240](https://github.com/rpamis/comet/issues/240)).
+
+## What's Changed [0.4.0-beta.9] - 2026-07-25
+
+### Added
+
+- **Sequential clarification evaluation**: Adds a repeatable multi-turn Native evaluation that checks whether Sequential investigates repository facts, resolves dependent user-owned decisions one at a time, records each answer, confirms a complete shared understanding before Build, and finishes verified implementation. Task-defined reply sequences keep decision paths reproducible instead of allowing the simulated user to invent additional choices.
+- **`opensuper native evidence format`**: New command that serializes acceptance evidence entries into the exact canonical Markdown block `verification.md` requires, so evidence blocks no longer need to be hand-formatted to match byte-for-byte and no longer trigger spurious "canonical serialization" rejections during Verify.
+
+### Changed
+
+- **Native clarification modes**: Sequential mode now recalculates remaining user-visible decisions after each answer and asks exactly one most-upstream decision with a recommendation and impact per round. Batch maintains a prerequisite-aware decision tree, asks the entire ready frontier each round, and keeps environment-fact investigations from delaying other ready questions when parallel work is available. Both modes require every behavior in the final shared-understanding summary to be traceable, and Runtime enforces explicit confirmation before Build; older `implicit` changes must also confirm before leaving Build.
+
+### Fixed
+
+- **Local eval task images**: Installs Claude Code and runs every task image as a non-root agent so quick and full evaluations can collect the benchmark image identity and invoke the Claude runner ([#229](https://github.com/rpamis/comet/issues/229)).
+- **Local eval validators**: Makes the lightweight validator runtime importable from `validation/` scripts and accepts structured workflow artifact declarations in generic rubric scoring.
+- **Creator Bundle portability**: Generates portable authoring briefs instead of requiring a Claude-only runtime agent, so Codex distribution readiness is not blocked by a Claude-specific capability.
+- **Native baselines for large repositories**: Native content snapshots now support baseline-bound include/exclude policies and configurable file-count, total-byte, and duration budgets in `.opensuper/config.yaml`, with a 256 MiB default total budget and no separate 5 MiB per-file cap. Runtime continues to hash actual working-tree content with streaming SHA-256, records the effective policy and limits for audit, and reports actionable configuration fixes when a complete baseline cannot be captured ([#226](https://github.com/rpamis/comet/issues/226)).
+- **Global workflow selection**: `opensuper init` now offers Native, Classic, or both for global installs and accepts `--scope global --workflow native|classic|both`, so global Skill installation exposes the same workflow choices as project scope while preserving Classic as the non-interactive default when no workflow is specified ([#234](https://github.com/rpamis/comet/issues/234)).
+- **Explicit OpenSuper Skill invocation**: Ambient Resume project instructions now give host-recognized manual OpenSuper Skill invocations precedence over recovery probing, preventing `none` or `out_of_scope` results from skipping `/opensuper` when no active change exists ([#235](https://github.com/rpamis/comet/issues/235)).
+- **Classic archive final state**: Classic now confirms immediate remote delivery before irreversible archive, writes `branch_status: handled` before the single archive commit, and pushes that complete commit once. Successful archive no longer leaves an uncommitted `.opensuper.yaml` or a remote archive stuck at `pending` ([#237](https://github.com/rpamis/comet/issues/237)).
+- **Plugin marketplace superpowers detection**: `opensuper init` no longer crashes with an `ENOTDIR` error when `~/.claude/plugins/cache/` (or the Codex equivalent) contains a stray file where a marketplace directory was expected.
+
+### Security
+
+- **Race-safe file reads**: Reading `.opensuper/current-change.json` (used on every Hook Router call, `opensuper doctor`, and `opensuper resume-probe`), Native lock files, and `opensuper native evidence format --entries` input could previously be tricked mid-read: swapping the file for a symlink between the check and the read leaked the link target's content, and a FIFO at the lock path hung the process. These reads now reject non-regular files before opening and verify the file is still the same one after opening and after reading, so a swapped file fails the read instead of being silently accepted. Windows, which lacks `O_NOFOLLOW`, gets the same protection through the identity checks.
+
+## What's Changed [0.4.0-beta.8] - 2026-07-22
+
+### Fixed
+
+- **Windows Native file validation**: Native commands now accept stable files when Windows path and handle metadata expose different availability for device or inode identifiers, preventing `opensuper status`, `opensuper doctor`, and other Native reads from incorrectly failing with `changed while opening` while preserving replacement and mutation checks.
+
+### Security
+
+- **Development dependency hardening**: Pins `brace-expansion` to the patched 5.0.7 release across npm and pnpm resolution, preventing malicious brace patterns from causing exponential CPU consumption in the development toolchain.
+- **Classic handoff validation**: Validates recorded handoff source paths with exact line matching instead of project-controlled regular expressions, preventing malformed spec directory names from crashing or stalling the Classic design guard.
+
+## What's Changed [0.4.0-beta.7] - 2026-07-20
+
+### Added
+
+- **OpenSuper Native workflow**: Adds a self-contained Native workflow with a configurable, front-loaded clarification lock. The default `sequential` mode asks one upstream question with a recommendation per round, while `batch` mode asks every currently answerable independent question together and requires explicit shared-understanding confirmation before Build. Both keep unresolved user-visible outcomes user-owned. On Claude Code, Native prefers `AskUserQuestion` for structured choices when a complete round fits in one call; unavailable or oversized rounds fall back as one numbered text set instead of splitting the round across blocking calls. Native also provides one continuously advancing Skill, configurable OpenSuper-owned artifact roots and default change language, complete target specifications, checkpoints, bounded paginated status, and independent change/spec/archive management without requiring OpenSpec, Superpowers, or any external Skill.
+- **Evidence-bound autonomous execution**: Adds Git-owned project snapshots that include tracked and non-ignored untracked files while treating submodules atomically, plus bounded physical-tree snapshots with before/after enumeration fences for non-Git projects. It also adds content-addressed implementation scopes with bounded overflow evidence, contract-hash-bound approvals, Acceptance IDs, verification envelopes with immutable report snapshots, optional built-in read-only check receipts, stale-evidence fallback, partial-scope authorization, and repair episodes that stop repeated no-progress failures while allowing genuine implementation progress—not rewritten explanatory prose—to continue. Incomplete baselines now fail before change state is committed, and incomplete current snapshots never invent deletions.
+- **Recoverable Native safety boundary**: Adds recoverable state transitions, revision/CAS protection with serialized live mutation contention, protected Run and file I/O, stable process-free workspace path identities with explicit drift components, current-root conflict inspection, two-step archive preflight, exactly-once transaction recovery, safe artifact-root moves, explicit stale-lock takeover, and bounded evidence retention. Its read-only Dashboard view is backed by the same Runtime facts, switches independently from Classic, filters active and archived changes, previews bounded user-facing Native Markdown, and summarizes checkpoint progress, capability scope, Acceptance coverage, implementation attribution, Repair state, conflicts, and project Git without exposing Runtime evidence.
+- **Stable workflow entries**: Adds permanent `/opensuper-native` and `/opensuper-classic` entry points plus `opensuper workflow resolve`; `/opensuper` is now a configuration-only alias that selects exactly one workflow without converting or combining their changes, state, or artifacts, and remains available in Skill-only installs through a bundled self-contained resolver when the CLI is not on PATH.
+- **Native baseline evaluation**: Adds a repeatable Native treatment for the same 16 canonical OpenSuper tasks used by the 0.4.0 baseline, aligned `task_id + repetition` pairing and corrected multi-turn duration totals, plus Wave A–F workflow fixtures, explicit archived/active/blocked terminal contracts, and container-safe validators that keep mechanical contract coverage distinct from real-model performance claims.
+- **Native clarification-mode evaluation**: Adds paired Sequential and Batch treatments over the same independent product decisions, with interaction-round validation, persisted-decision checks, LangSmith feedback, and Chinese or English aligned HTML comparisons that exclude incomplete pairs from success and efficiency metrics.
+- **Selectable Eval suites**: Adds `opensuper eval --suite local|langsmith`, keeping Local as the default while routing LangSmith runs through the tracing-aware runner, report directory, and Claude Code plugin setup instead of requiring a direct pytest command.
+- **Unified workflow safeguards**: Adds one cross-platform Hook Router and one bilingual Rule for Native, Classic, and dual-workflow projects; a shared current-change selection routes each atomic multi-file write to exactly one workflow guard, prevents Native and Classic from double-blocking the same request, and safely migrates released Classic selections and legacy managed Hook/Rule installs.
+
+### Changed
+
+- **Supported Node.js runtime**: OpenSuper now requires Node.js 22 or newer so installs run on a maintained runtime baseline.
+- **Workflow-scoped Skill installation**: Native-only projects now install the shared `/opensuper` and `/opensuper-any` entries plus Native assets without unused Classic phase Skills, while Classic-only installs omit Native assets and dual-workflow projects keep both sets. Updates preserve existing out-of-scope Skill files instead of removing them.
+- **Aligned eval efficiency telemetry**: Native comparison reports now recompute paired model starts and resumes, turns, tool calls, cumulative duration, token usage, model cost, and context pressure from raw traces, using the strict-success intersection so incomplete tasks and missing telemetry do not overstate workflow efficiency.
+- **Selectable project workflows**: Project-scope `opensuper init` now explains and offers Native, Classic, or both independent workflows; new projects default `/opensuper` to Native and store Native artifacts under `docs/opensuper/`, while explicit and existing custom roots remain authoritative. `--workflow both` installs both sets of project assets without combining their state, and the completion summary reports only the workspaces actually initialized instead of showing Classic directories for Native-only projects.
+- **Explicit Native state files**: Active and archived Native changes now store their workflow state in `opensuper-state.yaml`, giving OpenSuper-owned changes a stable, recognizable state filename while keeping Native and Classic schemas and lifecycles independent.
+- **Partitioned status and recovery**: `opensuper status` now reports the configured entry and separate Native, Classic, and unmanaged OpenSpec changes, while `opensuper resume-probe` uses a workflow-aware v2 result to resume only through `/opensuper-native` or `/opensuper-classic`, fail closed on malformed configuration or workflow state, and preserve each workflow's own ambiguity and worktree rules.
+- **Configurable Ambient Resume**: Project `.opensuper/config.yaml` now exposes one `ambient_resume` switch for both Native and Classic. Generated configuration comments explain each managed setting and follow the language selected during init or update, while older configs keep Ambient Resume enabled by default.
+- **Workflow-scoped Classic configuration**: Classic-only defaults now live under the `classic:` block in `.opensuper/config.yaml`, parallel to Native settings. `opensuper init` and `opensuper update` migrate legacy top-level values, preserve explicit new-format values when both forms conflict, remove the old fields, and generate localized comments; Classic runtime reads only the nested settings and otherwise uses its established defaults.
+- **Explicit package self-update**: Current-project `opensuper update` refreshes managed assets without changing the npm installation unless `--self-update` is requested. Package updates compare full semantic versions including prereleases, refuse downgrades, validate the exact candidate CLI before installation, and attempt to restore the exact installed version when installation fails; `--skip-self-update` provides an explicit opt-out for broader updates.
+
+### Fixed
+
+- **Init and update failure reporting**: `opensuper init` and `opensuper update` now return non-zero exit codes for incomplete work, preserve npm diagnostics in JSON output, identify failed and unattempted projects during batch updates, avoid success banners after component failures, render unexpected CLI errors without Node.js stack traces, and surface corrupt registries or legacy Hook cleanup failures instead of silently continuing.
+- **OpenSpec setup diagnostics**: Setup now explains when an installed OpenSpec CLI is older than the required version and the optional upgrade was not selected, without incorrectly reporting that the CLI is unavailable.
+- **Windows interactive evals**: Interactive Docker evals now prefer Git Bash over WSL, preserve container prompt-file paths through MSYS argument conversion, count real driver turns for interaction limits, support deterministic task-supplied decision replies, distinguish user decisions from completion before ending a workflow, avoid false environment-failure flags from successful result text, and surface failed subject turns with their real exit status plus preserved stdout/stderr instead of treating them as natural completion.
+- **Parallel eval coordination**: Windows xdist workers now wait for shared Docker build locks instead of failing concurrent samples with a resource-deadlock error.
+- **npm publish cache pruning**: Package preflight now excludes nested and platform-specific pytest caches before filesystem inspection, so inaccessible local Eval byproducts cannot block publishing and cannot enter the npm package.
+
+## What's Changed [0.4.0-beta.6] - 2026-07-18
+
+### Added
+
+- **`opensuper state rebind`**: New command to explicitly re-bind an `isolation: current` change to the current branch after user confirmation, recording an audit event; refuses to run while HEAD is detached or before an initial binding exists.
+
+### Changed
+
+- **Current-isolation drift detection**: `isolation: current` now records the branch it was established on in the change state, so switching branches mid-change is reliably detected at every build/verify/archive entry check and by the write guard — including when only a single change is active — and is no longer silently reset by re-selecting the current change. Selecting a change whose bound branch has drifted is refused instead of reported as successful. Legacy changes without a recorded binding bind to the current Git branch on their next select or check, projects that are not Git worktrees are never blocked by branch binding, and establishing `isolation: current` on a detached HEAD is rejected.
+- **Branch/worktree drift detection**: `isolation: branch` and `isolation: worktree` now use the same bound-branch safety checks as current-branch isolation, so switching branches inside those workspace modes blocks entry checks and write guards until the user switches back or explicitly rebinds the change. Switching a change between workspace modes re-points the binding to the current branch, while repeating the same mode keeps the existing binding.
+- **`opensuper status`**: Now surfaces the selected isolation mode and bound branch for branch-bound workspace modes in both text and `--json` output.
+- **Archive branch handling for `current` isolation**: No longer offers feature-branch-oriented merge/PR/keep choices; instead asks whether to push the current branch or keep it local.
+- **Hotfix/tweak workspace isolation**: No longer defaults silently to the current branch; both presets now pause to ask the user to choose between working directly on the current branch, creating a new branch, or creating a worktree.
+- **Full workflow current-branch isolation**: Full workflows can now let users explicitly keep working on the current branch instead of forcing a new branch or worktree, while preserving the same bound-branch drift checks used by hotfix and tweak ([#190](https://github.com/rpamis/comet/issues/190)).
+
+### Fixed
+
+- **Skill discovery resilience**: Malformed YAML frontmatter in an unrelated local Skill no longer crashes bundle factory guidance or candidate discovery; OpenSuper now skips the broken description and continues scanning.
+
+## What's Changed [0.4.0-beta.5] - 2026-07-14
+
+### Changed
+
+- **Skill trigger and decision authoring**: Built-in phase Skills and Creator-generated internal Node Skills now declare explicit entry/runtime boundaries, while Creator templates classify automatic handling, stop conditions, and manual handoffs before emitting user pauses. This prevents ordinary tasks, guard failures, capability gaps, and single-option recovery paths from invoking internal phases or prompting unnecessarily.
+- **OpenSuper workflow checkpoints**: Clear requests now skip redundant pre-artifact naming confirmation, Build preflights executable capabilities and combines adjacent configuration choices into one decision, and manual handoffs return control without asking again. Full workflows also initialize recoverable state before artifact generation, persist large-PRD batch manifests, and keep resumability independent of unwritten conversation state.
+- **Verification repair loops and archive ownership**: Verification now automatically returns the first three actionable failures to Build, persists the consecutive failure count across resumes, pauses only for real tradeoffs or retry-limit decisions, and keeps CRITICAL and IMPORTANT findings non-waivable. Verification records evidence without finishing the branch, while archive commits only attributed paths before branch handling so the final branch or PR includes merged specs and archive metadata.
+- **Preset execution semantics**: Hotfix and tweak workflows now record truthful current-workspace isolation, retain regression testing in direct mode, avoid escalating on task count alone, and discard lightweight execution settings when upgraded to the full workflow.
+- **Dashboard artifact preview**: Artifact drawers now render full Markdown (tables, quotes, task lists) with syntax highlighting and Mermaid diagrams instead of the previous subset renderer. Side-panel preview stays distraction-free without a TOC; fullscreen mode adds an expand/collapse control and shows the table of contents when headings exist, with unique heading anchors for duplicate titles and properly rendered inline formatting in headings. Long artifact paths wrap in the drawer header and can be copied with a one-click control. `.opensuper.yaml` / YAML and handoff / checkpoint JSON artifacts render as structured tables (scalars as key-value rows; uniform object arrays such as `files` as dedicated data tables) instead of raw text.
+
+### Fixed
+
+- **OpenSpec workflow compatibility**: OpenSuper now requires OpenSpec 1.5 or newer, reports incompatible installations in setup and Doctor, drives `/opensuper-open` from `applyRequires` and the live schema, validates repository-local paths and concrete outputs, and resumes persisted split batches without recreating completed changes.
+- **Codex hook configuration**: Project and global Codex installs now write phase guard hooks to the supported `.codex/hooks.json` location and safely migrate OpenSuper-managed entries from the previously generated `settings.local.json` without changing user-defined hooks or settings ([#199](https://github.com/rpamis/comet/issues/199)).
+- **Standard Superpowers artifacts**: Classic write hooks now accept first-time design, plan, and verification artifacts in their standard workflow directories without requiring OpenSuper-specific filename suffixes, while selected-change, phase, and occupied-slot checks still prevent ambiguous or duplicate writes.
+- **Skill lifecycle integrity**: OpenSuper now preserves malformed user Hook configuration, reports Skill, Rule, and Hook failures consistently across init, update, Doctor, and uninstall, and avoids registering partial installations as complete.
+
+### Security
+
+- **Dashboard preview XSS hardening**: Markdown / YAML / JSON artifact HTML is sanitized with DOMPurify before DOM injection, dangerous URL schemes are blocked, Mermaid runs with `securityLevel: 'strict'`, and structured preview key/attribute escaping covers quotes so untrusted artifact content cannot execute scripts via raw HTML, event handlers, attribute breakout, or loose diagram rendering.
+
+## What's Changed [0.4.0-beta.4] - 2026-07-11
+
+### Added
+
+- **Ambient resume**: Adds a low-noise OpenSuper resume probe and managed project instruction block so agents can recover active workflows when the user resumes work without explicitly invoking `/opensuper`.
+- **Project installation registry**: Added a user-level registry for project-scope OpenSuper installs so interactive update and uninstall can operate across all indexed projects from one command while JSON and scripted calls remain current-project by default.
+- **Stable Classic commands**: Added top-level `opensuper state`, `opensuper guard`, `opensuper handoff`, and `opensuper archive` commands so agents no longer depend on internal installed script paths ([#186](https://github.com/rpamis/comet/issues/186)).
+- **Custom project build evidence**: Projects without an inferred npm, Maven, or Cargo command can now record auditable build and verification results instead of relying on an undocumented skip path ([#192](https://github.com/rpamis/comet/issues/192)).
+
+### Changed
+
+- **CLI brand experience**: `opensuper init` now keeps a fixed-grid cyan-blue OpenSuper logo centered over a gold tagline while the banner remains aligned with the rest of the CLI, and introduces it with a vivid 1.8-second opensuper approach, sweep, particle release, and tagline reveal in compatible interactive terminals. Automated, colorless, or narrow output receives a stable static banner. CLI and package metadata use the clearer "Agent Skill Harness For Turning Ideas Into Evaluated Workflows" tagline.
+- **Mixed change status**: `opensuper status` now distinguishes OpenSuper-managed and plain OpenSpec changes and recommends the correct archive command for ready changes ([#187](https://github.com/rpamis/comet/issues/187)).
+
+### Fixed
+
+- **npm publish preflight**: Release security scanning now prunes literal and wildcard-excluded package paths before accessing the filesystem, so ignored Eval caches and temporary pytest directories cannot block Windows publishing with local permission errors.
+- **Parallel active change guards**: Classic source-write hooks now bind branch and worktree execution to the explicitly selected change, allow legal build work despite unrelated open/design/archive changes, and fail with an actionable selection prompt when multiple active changes are ambiguous ([#196](https://github.com/rpamis/comet/issues/196)).
+- **Codex CLI Skill discovery**: Codex project and global installs now place OpenSuper Skills in the current `.agents/skills` discovery directory while keeping Codex-specific configuration under `.codex`; update and uninstall safely migrate managed legacy `.codex/skills` installs without removing unrelated Skills.
+- **Generated Eval manifests**: `opensuper eval` now resolves Factory `draftHash` placeholders into temporary version-bound manifests before collection, so `/opensuper-any` output can be evaluated immediately without modifying generated Bundle files ([#183](https://github.com/rpamis/comet/issues/183)).
+- **Eval Harness**: npm-installed `opensuper eval` now locates the version-matched bundled harness by default and reports a missing harness separately from a missing `uv` executable.
+- **Indexed project updates**: `opensuper update --all-projects` now reports npm package update failures as failed project results and fails explicitly on unreadable project registries instead of treating them as successful or empty updates.
+- **Dashboard responsive workflow view**: `opensuper dashboard` now keeps the change workspace inside the viewport with the left navigation rail, preserves scroll position when opening artifact previews, and shows archived changes as complete instead of suggesting another verify step ([#170](https://github.com/rpamis/comet/issues/170)).
+- **Symlink installs with existing Skills**: `opensuper init` and `opensuper update --install-mode symlink` now preserve existing platform `skills/` directories and link OpenSuper-managed Skills inside them, so local or third-party Skills no longer make OpenSuper installation fail ([#171](https://github.com/rpamis/comet/issues/171)).
+- **OpenSpec CLI install scope**: `opensuper init` now installs or upgrades the OpenSpec CLI as a global tool even during project-scope setup, so choosing OpenSpec no longer creates a project `node_modules/` directory ([#175](https://github.com/rpamis/comet/issues/175)).
+- **Archived dashboard artifacts**: `opensuper dashboard` now resolves archived changes back to the project root before reading `docs/superpowers/` path pointers, so archived Superpowers plans, design docs, and verify reports remain visible ([#176](https://github.com/rpamis/comet/issues/176)).
+- **Archive confirmation enforcement**: `/opensuper-archive` now records the user's final approval in machine-owned Classic state and refuses mutating archive runs until that transition succeeds, preventing direct script invocation from bypassing the required confirmation.
+- **Archive annotations**: Classic archive annotations now preserve clean Markdown EOF formatting and remain idempotent, preventing `git diff --check` failures ([#185](https://github.com/rpamis/comet/issues/185)).
+- **Global artifact language**: Global `opensuper init` and `opensuper update` now persist the selected artifact language in `~/.opensuper/config.yaml`, and Classic workflows resolve project configuration before falling back to that global default, so globally installed Chinese Skills create and validate OpenSpec and Superpowers artifacts in `zh-CN` while still allowing per-project overrides ([#174](https://github.com/rpamis/comet/issues/174)).
+
+## What's Changed [0.4.0-beta.3] - 2026-07-08
+
+### Fixed
+
+- **Doctor scope diagnostics**: `opensuper doctor` now reports auto-scope behavior, Node/platform environment details, and a non-alarming project-scope note when a global OpenSuper install is available but the current project has no local Skill copy, so users can distinguish an optional project install from a broken setup.
+- **PowerShell Classic initialization**: `opensuper-state.mjs init` now writes its successful initialization message to stdout instead of stderr, so Windows PowerShell no longer reports a successful `.opensuper.yaml` creation as a `NativeCommandError` ([#167](https://github.com/rpamis/comet/issues/167)).
+- **Version flag alias**: `opensuper -v` now works as a short alias for `opensuper --version`, matching common CLI expectations on Windows and other shells ([#167](https://github.com/rpamis/comet/issues/167)).
+- **Classic runtime fallback**: Classic phase scripts now keep an embedded runtime package fallback, so `opensuper-guard.mjs`, handoff, and archive flows continue to run even when a platform installation is missing the internal `runtime/classic` asset files ([#168](https://github.com/rpamis/comet/issues/168)).
+- **Project config lookup**: Classic guards now resolve project defaults only from `.opensuper/config.yaml`, while workflow state remains in each change's `.opensuper.yaml` ([#158](https://github.com/rpamis/comet/issues/158)).
+- **Legacy command field cleanup**: Classic guards now remove stale `build_command` and `verify_command` fields from older change `.opensuper.yaml` files before unknown-field checks, while project-level command overrides in `.opensuper/config.yaml` fail explicitly instead of being silently skipped.
+
+### Removed
+
+- **Custom guard command fields**: Classic workflow state no longer accepts custom build or verify command fields; guards use the built-in project build detection path instead.
+
+## What's Changed [0.4.0-beta.2] - 2026-07-07
+
+### Fixed
+
+- **Single-language rule install**: `opensuper init` and `opensuper update` now install only the OpenSuper phase-guard rule file matching the selected/detected Skill language (e.g. `.claude/rules/opensuper-phase-guard.md`), instead of always installing both the Chinese and English rule variants side by side regardless of language choice.
+- **Symlink install safety**: `opensuper init` and `opensuper update` now refuse to replace an existing platform `skills/` directory with a symlink when it contains files outside OpenSuper's managed manifest, preserving local or third-party Skills instead of deleting them during symlink-mode installs ([#159](https://github.com/rpamis/comet/issues/159)).
+- **Parallel change artifact writes**: Classic phase guards now route `docs/superpowers/` writes to the matching design/build/verify change instead of letting an unrelated earlier active change block shared Design Doc and planning artifacts ([#160](https://github.com/rpamis/comet/issues/160)).
+
+## What's Changed [0.4.0-beta.1] - 2026-07-06
+
+This is the first beta of the 0.4.0 line. Relative to 0.3.9, OpenSuper becomes a cross-platform Node runtime and expands from a `/opensuper` workflow bundle into a workflow, Skill creation, eval, and dashboard platform. The notes below describe the final user-visible release shape, not the branch work history.
+
+### Added
+
+- **Cross-platform Classic runtime**: Bundled `/opensuper` workflow scripts now run through Node `.mjs` launchers backed by the TypeScript Classic runtime, so the same workflow works on Windows, macOS, and Linux without requiring Git Bash, WSL, or shell-compatible scripts.
+- **`opensuper dashboard`**: Adds a local read-only browser dashboard for active and archived changes, including phase progress, artifact groups, task progress, verify status, next-action guidance, risk signals, Git context, artifact previews with metadata, and a light/dark UI. `--json`, `--port`, `--no-open`, and `GET /api/dashboard` expose the same snapshot for scripts and CI.
+- **`/opensuper-any` Skill Creator**: Adds the primary flow for creating or upgrading reusable Skills. The flow covers candidate discovery, confirmable proposals, generated Skill bundles, authored decision/guidance zones, authoring lanes, current-draft eval readiness, review approval, publish, distribution, and platform-native files such as Claude Code custom agents.
+- **Skill Creator CLI**: Adds `opensuper creator` for ordinary creation/resume guidance and `opensuper publish` for review, approval, publish, and distribution previews, keeping backend Bundle commands available only as advanced tooling.
+- **Local Skill tooling**: Adds `opensuper skill add|show|run|continue|check` for installing, inspecting, running, resuming, and deterministically checking local Skill packages with snapshots.
+- **`opensuper eval` harness**: Adds repository-local evaluation for OpenSuper workflows and arbitrary local Skills, with task profiles, generated manifests, HTML reports, token/cost attribution, pass@k/pass^k reliability metrics, workflow-specific scoring, Skill invocation evidence checks, configurable simulator prompts, Anthropic-compatible proxy auth, Windows/WSL-friendly execution, UTF-8 logs, and regression gates.
+- **OpenSuper workflow eval tasks**: Expands the bundled OpenSuper workflow benchmark to 20 tasks, adding dependency-confusion, layered streaming, persistence, approval, noise-resistance, cross-file refactor, observability config, graph execution review, agent memory routing, and framework selection scenarios for stronger CONTROL vs 0.3.9 vs 0.4.0 comparisons.
+- **Hotfix/tweak scope decisions**: Adds qualitative upgrade signals for hotfix and tweak workflows, while file-count thresholds now pause for user confirmation instead of forcing an automatic full-workflow escalation ([#121](https://github.com/rpamis/comet/issues/121)).
+- **Supported platforms**: Adds ZCode, MimoCode, Trae CN, and Antigravity 2.0 support. Antigravity 2.0 global installs use `~/.gemini/config/skills/`; ZCode and MimoCode use OpenCode-compatible layouts; Trae CN uses `.trae-cn/skills`.
+- **Symlink install mode**: `opensuper init` and `opensuper update` can now install skills by copy or by symlink/junction from a shared `.opensuper/skills/` store.
+- **Project Skill preferences**: Adds `.opensuper/skill-preferences.yaml` so projects can guide preferred Skills, ordering, and Skill Creator proposals without hand-editing bundle files.
+- **Configured artifact language**: `opensuper init` now records a project-wide artifact language (`en` or `zh-CN`) in `.opensuper/config.yaml`, and each new change snapshots that language into its `.opensuper.yaml`. OpenSpec and Superpowers artifacts follow this configured language instead of the language of whichever request happened to trigger the workflow, keeping output stable across resumed or mixed-language sessions. OpenSuper guard checks reject workflow artifacts that are clearly written in the wrong dominant language for the configured value, fail closed on an invalid `language`, and ignore fenced code blocks so pasted commands, paths, or hashes don't skew the check.
+
+### Changed
+
+- **OpenSuper product model**: README, CLI help, and Skill guidance now present OpenSuper as a workflow and Skill platform: run guided workflows, create Skills, evaluate them, publish them, and diagnose stuck changes.
+- **OpenSuper skill language instructions**: English and Chinese OpenSuper skills now read the configured artifact language (`en` or `zh-CN` only — no aliases) for OpenSpec prompts, Superpowers arguments, subagent dispatch, verification reports, and archive notes, instead of deriving it from the triggering user request.
+- **Eval judge provider**: LLM-as-judge now requires an explicit `BENCH_JUDGE_MODEL` and uses the independent `BENCH_JUDGE_*` provider settings, including direct Anthropic-compatible HTTP when a judge endpoint and credential are configured, so judge runs no longer silently share the subject model, endpoint, or credentials and report a skipped status when judge configuration is incomplete.
+- **LangSmith eval configuration**: LangSmith eval runs now derive Claude Code tracing plugin settings from the primary `LANGSMITH_*` configuration, keep Claude Code traces in the configured base project, preserve hook logs in saved artifacts, and auto-build the official Claude Code tracing plugin into the eval cache when needed, so users no longer need to configure both `LANGSMITH_TRACING` and the similar-looking `TRACE_TO_LANGSMITH`, hunt through per-experiment trace projects, or manually prepare plugin directories in normal setups.
+- **Eval comparison reporting**: Eval reports now separate raw, analysis-set, flagged, and excluded runs; treat CONTROL as a business-only baseline; split overall, business, and workflow pass@k/pass^k views; and render paper-style Markdown/HTML reports with metric explanations, rubric-dimension explanations, source evidence, failure attribution, centered tables, a Chinese/English toggle, Python-first charts, and inline SVG fallback.
+- **README eval evidence**: README now highlights paper-style baseline figures for pass@5/pass^5 and core rubric/judge metrics, making the no-OpenSuper, 0.3.9, and 0.4.0 comparison visible without opening the full eval report.
+- **Classic workflow state**: Machine-owned run checkpoints moved from `.opensuper.yaml` to `.opensuper/run-state.json`, while user-editable workflow fields remain YAML-readable. Classic phase transitions now also write `.opensuper/state-events.jsonl` for an auditable state history.
+- **Classic runtime packaging**: Classic control metadata now lives under `opensuper/runtime/classic`, and command scripts ship as thin Node launchers backed by a shared `opensuper-runtime.mjs` bundle while preserving the existing `/opensuper*` command behavior.
+- **Workflow diagnostics**: `opensuper status` and `opensuper doctor` now share the same runtime evidence path and report current step, runtime mode, malformed state, missing evidence, and recommended recovery action.
+- **Workflow routing**: `/opensuper` now uses an explicit intent-frame route model for full, hotfix, tweak, resume, and ambiguous requests. `/opensuper-tweak` is now a tweak-only OpenSpec action path, while full `/opensuper` remains on the Superpowers design/plan/build path.
+- **Review workflow**: `review_mode` now defaults to `standard` for full workflows. `off`, `standard`, and `thorough` form a clearer review gradient, and OpenSuper owns review dispatch policy so users do not pay for overlapping Superpowers and OpenSuper review loops.
+- **Interactive decision points**: OpenSuper decision points prefer Claude Code's structured question UI when available, with a text fallback for other platforms.
+- **Debug workflow**: The Debug Gate can investigate independent failure groups in parallel before fixes are applied serially through the configured review flow.
+- **Repository layout**: Source code moved into `app/`, `domains/`, `platform/`, and `scripts/`, with tests moved to matching `test/app/`, `test/domains/`, `test/platform/`, `test/scripts/`, and `test/repository/` roots for clearer contributor ownership.
+- **CI smoke test entry point**: Adds a dedicated `test:script-smoke` package script and routes GitHub Actions through it, so contributors and CI exercise the same Classic launcher smoke suite.
+- **README formatting policy**: Root README files are excluded from Prettier checks so user-facing prose and exact documentation phrases are not rewritten by formatter line wrapping.
+
+### Fixed
+
+- **Windows path handling**: Fixes OpenSpec init/update path quoting for directories with spaces on Windows, so `opensuper init` no longer fails when the project path contains spaces.
+- **Git submodule script lookup**: OpenSuper hook and runtime script resolution now uses the containing project root when an agent works inside a Git submodule, so submodule edits no longer fail because `.claude/skills/opensuper/scripts/*` is only present at the parent project level ([#136](https://github.com/rpamis/comet/issues/136)).
+- **Superpowers workspace writes**: OpenSuper phase write guards now allow Superpowers to write its `.superpowers/` workspace during protected workflow phases, so Superpowers progress files are no longer mistaken for blocked source edits ([#154](https://github.com/rpamis/comet/issues/154)).
+- **Doctor diagnostics**: `opensuper doctor` now gives clearer version, project/global scope, malformed state, missing evidence, and recovery guidance, so users can distinguish a real missing project install from a valid global install and understand current `.opensuper.yaml` state problems ([#135](https://github.com/rpamis/comet/issues/135)).
+- **Review mode consistency**: English, Chinese, shared rule, and recovery guidance now agree on `review_mode`, so installed Skills no longer describe an old dual-review flow that conflicts with the runtime guard/state checks ([#126](https://github.com/rpamis/comet/issues/126)).
+- **Project config merge on init/update**: `opensuper init` and `opensuper update` now perform field-level merge on `.opensuper/config.yaml` instead of skipping when the file exists. Existing user values are preserved, missing managed fields are filled with defaults, comments are refreshed, and extra user fields are kept. Damaged YAML files gracefully fall back to all defaults.
+- **Init result summaries**: `opensuper init` now keeps partially failed platforms out of the `Installed` list and names the failed component, so platforms such as OpenCode no longer appear installed and failed at the same time ([#128](https://github.com/rpamis/comet/issues/128)).
+- **Classic runtime install payload**: The shared `opensuper-runtime.mjs` bundle is now included in the shipped manifest, so `opensuper init` installs runnable Classic launchers instead of copying launchers without their runtime dependency.
+- **Trae CN initialization**: Trae CN installs continue to use `.trae-cn/skills`, but OpenSpec initialization now reuses the supported `trae` tool id so `opensuper init --platform trae-cn` no longer fails on an unsupported OpenSpec tool value.
+- **Skill Creator source selection**: `opensuper creator resolve` now matches selected source paths by their physical path when needed, so macOS temp-directory aliases such as `/var` and `/private/var` no longer make an existing Skill source look missing.
+- **`.husky/pre-commit` executable bit**: The pre-commit hook file was committed non-executable, so git silently skipped it on every clone/checkout regardless of platform, disabling the `format:check`/lint-staged automation described in this file for all contributors since it was first introduced (shipped broken since `0.3.8`). Now shipped with the executable bit set.
+
+### Removed
+
+- **Bash-first Classic scripts**: Removes the requirement that bundled Classic workflow scripts run through Bash-compatible shell scripts.
+
+### Security
+
+- **Dependabot dependency alerts**: Pins test tooling to patched Vite and esbuild versions across npm and pnpm lockfiles, clearing open Vite path traversal, launch-editor, and esbuild dev-server advisories without changing OpenSuper runtime dependencies.
+
+## What's Changed [0.3.9] - 2026-06-17
+
+### Added
+
+- **CLI i18n shared module**: Extracted the init-time translation table to `src/commands/i18n.ts` so init, update, and future commands can share English/Chinese strings consistently instead of duplicating tables per command.
+- **Optional npm dependency prompts in init/update**: `opensuper init` and `opensuper update` now present a multi-select for OpenSpec CLI, Superpowers (via `npx skills add`), and CodeGraph CLI instead of force-installing them. Items not yet detected on the system default to checked; already-installed items default to unchecked so users can opt into upgrades without being forced. The Superpowers entry also surfaces a recommendation to install v6.0.0+ (�?× faster, �?0% fewer tokens).
+- **`--language` option for `opensuper init`**: New CLI flag (`en`/`zh`) that selects skill language non-interactively, mirroring the existing `opensuper update --language` option ([#109](https://github.com/rpamis/comet/pull/109)).
+- **`review_mode` field for code review control**: Added `.opensuper.yaml` field `review_mode` (`off` / `standard` / `thorough`) controlling automatic code review during build and verify phases. `opensuper-build` requires user selection before execution; `opensuper-verify` and subagent dispatch adapt behavior per mode; `opensuper-hotfix` defaults to `off`. Validated by `opensuper-state.sh`, `opensuper-guard.sh`, and `opensuper-yaml-validate.sh`.
+- **Project-level review mode defaults**: `.opensuper/config.yaml` can now set `review_mode: off|standard|thorough`, which is snapshotted into new full workflow changes so teams can choose a project-wide automatic review default while preserving existing per-change state behavior. Newly generated config files include enum comments for `context_compression`, `review_mode`, and `auto_transition` so users can adjust supported values without searching the docs.
+- **Uninstall by platform selection**: `opensuper uninstall` now shows a checkbox prompt when multiple platforms are detected, allowing users to selectively uninstall specific platforms instead of removing all at once. Single-target scenarios use a simple yes/no confirmation. `--force` and `--json` flags retain the existing all-at-once behavior.
+- **Codex plugin-installed Superpowers detection**: `opensuper init` now detects Superpowers already installed via the Codex plugin cache (`~/.codex/plugins/cache/...`), preventing duplicate re-installation �?parallel to the existing Claude Code and OpenCode plugin detection ([#115](https://github.com/rpamis/comet/pull/115)).
+
+### Changed
+
+- **Release notes alignment**: Updated `NEWS.md` and the README highlight blocks so the visible documentation covers the 0.3.8 and 0.3.9 releases, including the new review mode behavior and the `off` / `standard` / `thorough` review-strength semantics, instead of leaving the front-page summary on 0.3.7.
+- **Tagline rebrand**: Changed the OpenSuper tagline in the `opensuper init` banner and the `package.json` / CLI `--description` from "OpenSpec + Superpowers dual-star development workflow" to "Agent Skill Harness Phase-Guarded Automation From Idea To Archive", positioning OpenSuper by its core value (a phase-guarded agent skill harness) rather than by its underlying OpenSpec + Superpowers dependencies.
+- **Change name confirmation as a blocking decision point**: `opensuper-open` SKILL.md (Chinese and English) now adds a dedicated Step 1c that pauses before `openspec new change` to confirm the change name. The agent must recommend 2-3 kebab-case English candidate names derived from the clarification summary, always offer a custom-input option, and warn that Chinese (or any non-kebab-case) input will be converted into a compliant kebab-case English name and shown back for confirmation �?preventing agents from auto-generating non-compliant Chinese change names.
+- **Non-ASCII change name prevention**: Added explicit ASCII validation rules to `opensuper-open` SKILL.md (both Chinese and English) to prevent agents from auto-generating non-compliant change names containing Chinese, Japanese, Korean characters, spaces, or special characters. The agent must now ask the user for an ASCII-compliant name.
+- **Chinese gate-term normalization**: Updated Chinese OpenSuper wording to avoid translating `gate` literally as "�?: Design Step 1e now uses "主动式上下文压缩", the shared debugging guidance now uses "异常调试协议", and `CLAUDE.md` / `AGENTS.md` now define this as the standard Chinese translation rule for future skill edits.
+- **Full i18n coverage for CLI prompts**: Extended translation coverage from `init`-only to also cover `update` (banner, npm update progress, skills copy progress, summary, codegraph prompt). All user-facing strings now have English and Chinese variants ([#109](https://github.com/rpamis/comet/pull/109)).
+
+### Fixed
+
+- **Phase-skip enforcement across all guard layers**: Fixed agents jumping from `open` to `build` (skipping `design`) undetected. `opensuper-state.sh` now enforces evidence on every forward transition; direct `set phase` is blocked (with `OPENSUPER_FORCE_PHASE=1` escape hatch); `opensuper-hook-guard.sh` blocks source writes when `design_doc` is null; `opensuper-phase-guard` rule adds a phase-entry self-consistency check requiring prerequisite artifacts before writing source.
+- **Hook guard cross-change false positives**: Fixed `opensuper-hook-guard.sh` letting one change's phase wrongly block writes to a different change. Writes targeting `openspec/changes/<name>/` are now governed by that change's own `.opensuper.yaml` phase instead of the first active change found in the directory. This covers two cases that previously blocked a brand-new change's artifact writes: (1) an old change marked `archived: true` but not yet physically moved to the `archive/` subdirectory, and (2) an old change stalled in the `archive` phase with `archived: false` (not yet run through the archive script). Additionally, a new change directory whose `.opensuper.yaml` does not exist yet (artifacts are written before the state file during `/opensuper-open`) is treated as `open`, so `proposal/design/tasks/specs` writes are allowed.
+- **CodeGraph setup detection**: Fixed `opensuper init` and `opensuper update` prompting for CodeGraph setup even when the project already has a `.codegraph/` index. Existing project indexes now skip the optional CodeGraph prompt and install step, and CodeGraph CLI resolution can use a pnpm global binary before falling back to npm global installation.
+- **Phase guard auto-transition handoff**: Fixed the injected OpenSuper phase guard rule hardcoding the next skill after `guard --apply`, which could bypass `auto_transition: false`. The rule now delegates post-guard handoff to `opensuper-state next <change-name>` and follows `NEXT: auto|manual|done` so manual phase boundaries are respected.
+- **Executable permission loss on macOS after update**: `bin/opensuper.js` and all shell scripts under `assets/skills/opensuper/scripts/` were committed with git mode `100644` (non-executable). After an npm update, macOS users lost execute permissions on the `opensuper` CLI entry point. Changed all 8 files to `100755` in git so npm installs always preserve the executable bit.
+- **Preset workflow open transition**: Fixed `opensuper-state.sh` requiring `design.md` before `hotfix`/`tweak` changes could leave `open`, aligning state transitions with the guard rules that only require `proposal.md` and `tasks.md` for preset workflows.
+- **Review mode build gating**: Fixed `opensuper-guard.sh` allowing full-workflow changes with a missing `review_mode` field to pass build checks before `opensuper-state.sh` rejected the transition, so both guard layers now report the same required review-mode decision.
+- **Hook guard blocked-message language**: Changed `opensuper-hook-guard.sh` blocked-write guidance to English so the English-distributed hook script no longer emits Chinese-only recovery instructions during phase enforcement.
 
 ### Tests
 
-- **Release hardening regressions**: Added coverage for the official package scope, `main` branch targeting, exact-tarball workflow semantics, valid README links, the OpenTest `0.1.19` minimum, and secret detection in shell/ESM/CommonJS runtime files.
-- **OpenTest gate package-local contract coverage**: Added state/schema/doctor validation, provider-discovery and semantic-recomputation fixtures, provider timeout/output limits, pre/post identity/byte mutation checks, exact machine-block parsing, typed XOR risk selectors, real-human declaration/ISO expiry cases, four-surface docs-only scope, dated archive identity, all three terminal bypass paths, and Chinese/English documentation parity assertions. Packed two-package/provider interoperability remains a separate target-fixture verification and is not claimed by these package-local tests.
+- **Phase-skip enforcement coverage**: Added shell-script tests covering the hardened guard layers �?`open-complete` blocked when an open artifact is missing, `design-complete` blocked/allowed by `design_doc` presence, `archived` blocked until `verify_result: pass`, direct `set phase` blocked while the `OPENSUPER_FORCE_PHASE` escape hatch is allowed, and hook-guard blocking full-workflow `build` source writes when `design_doc` is null while still allowing preset workflows and full workflows with a valid `design_doc`.
+- **Project review mode default coverage**: Added regression coverage for `.opensuper/config.yaml` `review_mode` snapshotting into full workflow changes, invalid project review mode rejection, and enum comments in generated project config files.
+- **CodeGraph setup coverage**: Added regression tests for existing `.codegraph/` index detection, skipping redundant CodeGraph installation, pnpm global CLI resolution, and suppressing the update-time CodeGraph prompt when a project index already exists.
+- **Phase guard handoff coverage**: Added skill-rule regression coverage ensuring the phase guard delegates to `opensuper-state next` and no longer embeds a fixed next-skill mapping that can ignore `auto_transition`.
+- **`review_mode` integration coverage**: Added regression tests verifying `review_mode` is wired through state, guard, and validation scripts, with correct mode-specific behavior in `opensuper-build`/`opensuper-verify`/`opensuper-hotfix`.
+- **Uninstall platform selection coverage**: Added tests for single-target auto-select, multi-target checkbox selection, user cancellation, `--force` skip, `--json` output, and no-targets-found handling.
+- **CI regression coverage**: Added state-machine regression coverage for preset workflows leaving `open` without `design.md`, missing full-workflow `review_mode` being blocked consistently, and repair-only phase resets using `OPENSUPER_FORCE_PHASE`.
+- **Hook guard message coverage**: Added regression coverage ensuring `opensuper-hook-guard.sh` blocked-write messages remain English and do not reintroduce Chinese-only guidance.
+- **CI fixture alignment**: Updated shell-script test fixtures to preserve executable permissions after copying scripts, include required `review_mode` decisions in full-workflow build states, and use the repair-only `OPENSUPER_FORCE_PHASE` escape hatch only when constructing phase states for guard checks.
+
+## What's Changed [0.3.8] - 2026-06-13
+
+### Added
+
+- **Kimi Code CLI support**: Added Kimi Code as the 29th supported platform, including project/global skill installation under `.kimi-code/`, OpenSpec `kimi` tool integration, Superpowers `kimi-code-cli` mapping, detection, documentation, and cross-platform regression coverage ([#90](https://github.com/rpamis/comet/pull/90)).
+- **Version info and update check**: `opensuper init` and `opensuper update` now display the current installed OpenSuper version at the start of command output and check the npm registry for newer versions. If an update is available, users see a prompt to upgrade; if already on the latest version, a confirmation message is shown; if the registry is unreachable, the check is skipped silently without error ([#99](https://github.com/rpamis/comet/issues/99)).
+- **Official registry enforcement for update**: `opensuper update` now passes `--registry https://registry.npmjs.org` to npm when updating the `@pzy560117/opensuper` package, ensuring it always fetches from the official npm registry regardless of the user's local `.npmrc` or mirror configuration. Other packages continue using the user's normal registry settings. If the official registry is unreachable, a clear error message indicates the registry issue ([#100](https://github.com/rpamis/comet/issues/100)).
+- **Subagent dispatch OpenSuper extensions**: Rewrote the inline subagent dispatch protocol from `opensuper-build/SKILL.md` into `opensuper/reference/subagent-dispatch.md` (Chinese and English) as OpenSuper-specific extensions layered on top of the Superpowers `subagent-driven-development` skill. The skill provides the core dispatch loop; the OpenSuper extensions add real background dispatch, durable per-task checkpoints (`subagent-progress.md`), coordinator-only source execution, TDD ownership by background agents, bounded review-fix rounds (3 max), continuous task execution without pauses, and precise context recovery from checkpoint stages.
+- **`task-checkoff` subcommand**: Added `opensuper-state task-checkoff <file> <task-text>` to verify a specific task is uniquely checked in a markdown file. Used by the subagent dispatch protocol for targeted completion verification after dual review passes. Includes path traversal prevention, CRLF handling, and exact-match validation.
+- **`opensuper uninstall` command**: Added `opensuper uninstall [path]` CLI command to safely remove OpenSuper-distributed skills, rules, and hooks across all 29 supported AI coding platforms. Supports `--scope` (project/global), `--force` (skip confirmation), and `--json` output. Auto-detects installed targets, removes only OpenSuper-managed artifacts while preserving user-defined hooks and non-OpenSuper configuration, cleans up empty directories and working directories (`.opensuper/`, `docs/superpowers/`), and handles all 7 hook formats (Claude Code, Qwen, Qoder, Gemini, Windsurf, GitHub Copilot, Kiro) and all 3 rule formats (md, mdc, copilot instructions) ([#95](https://github.com/rpamis/comet/issues/95)).
+- **Progressive loading reference docs**: Extracted four reference documents from inline skill content to enable on-demand loading and reduce per-invocation token cost (both Chinese and English): `auto-transition.md` (auto-transition protocol, replacing 7 × ~10 lines of repeated content across sub-skills), `context-recovery.md` (context compression recovery, replacing 4 × ~8 lines), `opensuper-yaml-fields.md` (`.opensuper.yaml` field table, ~40 lines), and `file-structure.md` (directory structure, ~20 lines). Main `opensuper/SKILL.md` retains critical state machine hard constraints inline while pointing to reference docs for detailed field descriptions. Estimated per-invocation savings: 600�?,500 tokens depending on skill; cumulative ~4,100 tokens across a full workflow.
+- **Pre-commit formatting hook**: Added a `husky` + `lint-staged` pre-commit hook that automatically runs `prettier --write` on staged source files under `src/` at every `git commit` (scope aligned with CI `format:check`). Editor-agnostic �?enforced for all contributors regardless of IDE or agent �?preventing Prettier formatting issues from reaching CI. The `prepare` script installs the hook on `pnpm install`, and `.husky/` is excluded from the published package via the `files` whitelist.
+
+### Changed
+
+- **Skills progressive loading refactor**: All 7 sub-skills (`opensuper-open`, `opensuper-design`, `opensuper-build`, `opensuper-verify`, `opensuper-archive`, `opensuper-hotfix`, `opensuper-tweak`) in both Chinese and English now reference shared protocol documents for auto-transition and context recovery instead of embedding full content inline, while retaining critical inline commands (`next` command and output interpretation) for safe standalone loading.
+- **Phase guard recovery with durable checkpoints**: Updated recovery steps in `opensuper-phase-guard.md` (Chinese and English) to reload the Superpowers `subagent-driven-development` skill, read `subagent-progress.md` for exact stage recovery (implementation commit, RED/GREEN evidence, passed reviews, unresolved feedback, review-fix round), and resume from the checkpoint's precise phase instead of always starting from the first unchecked task. Both `.claude/rules/` and `assets/skills/opensuper/rules/` copies include consistent references with bilingual identifiers for cross-language test compatibility.
+- **Decision point protocol extraction**: Extracted inline user-decision-point text from all 7 sub-skills (`opensuper-open`, `opensuper-design`, `opensuper-build`, `opensuper-verify`, `opensuper-archive`, `opensuper-hotfix`, `opensuper-tweak`) and main `opensuper/SKILL.md` into shared `opensuper/reference/decision-point.md` (both Chinese and English). Sub-skills now reference the protocol by path instead of repeating the full blocking-point rules, reducing per-invocation token cost and ensuring consistency across skills.
+- **Debug gate protocol extraction**: Extracted the inline systematic-debugging four-stage flow from `opensuper-build`, `opensuper-hotfix`, and `opensuper-tweak` into shared `opensuper/reference/debug-gate.md` (both Chinese and English). Sub-skills now reference the debug gate protocol by path, centralizing the investigation, minimal failing test, fix verification, and verification-loop rules.
+- **Lightweight verification review**: Lightweight verification now requires a scoped Superpowers `requesting-code-review` review focused on correctness, security, and edge cases, adding review coverage without running full spec or design drift checks ([#86](https://github.com/rpamis/comet/pull/86)).
+
+### Fixed
+
+- **Pi slash command discovery**: `opensuper init` and `opensuper update` now generate a Pi extension that registers all shipped `/opensuper*` workflows as native slash commands forwarding to `/skill:*`. Pi settings are merged non-destructively with skill commands enabled, global resources now use Pi's documented `~/.pi/agent/` directory, legacy `~/.pi/skills/` installs are detected for update and cleanup, and `opensuper uninstall` removes only OpenSuper-managed assets while preserving shared settings and unrelated extensions ([#89](https://github.com/rpamis/comet/issues/89)).
+- **OpenCode plugin-installed Superpowers detection**: `opensuper init` now correctly detects Superpowers already installed via the OpenCode plugin system (configured in `opencode.json`), preventing duplicate re-installation. Previously, only skills placed directly under `~/.config/opencode/skills/` were detected, missing the plugin source directory at `~/.config/opencode/superpowers/skills/` and the `plugin` array in `opencode.json`. Added `hasOpenCodePluginSuperpowers()` fallback detection similar to the existing Claude Code plugin cache check ([#105](https://github.com/rpamis/comet/issues/105)).
+- **Lightweight verification consistency**: Hotfix documentation now describes the 6-item lightweight verification path, and verification failure handling treats CRITICAL and IMPORTANT findings as blocking so review pass criteria and failure decisions remain consistent.
+- **Hook configuration merging during init and update**: Shared hook configuration files for Claude Code, Codex, Amazon Q, Qwen, Qoder, Gemini, and Windsurf now preserve user-defined hooks when OpenSuper installs or updates a hook for the same matcher or event. Existing OpenSuper commands are identified by their manifest script path and replaced in place, preventing stale install paths, duplicate matcher groups, and repeated hook accumulation while leaving unrelated settings untouched.
+- **Subagent-driven task isolation and continuity**: `opensuper-build` now loads the mature Superpowers `subagent-driven-development` loop and applies a stricter OpenSuper extension that requires one fresh background implementer per task, fresh background reviewers and fix agents, coordinator-only source execution, and automatic continuation between tasks without progress summaries or "continue?" prompts. TDD mode requires each implementer/fix agent to load the TDD skill and return auditable RED/GREEN evidence before review. A durable per-task checkpoint preserves implementation commits, review stages, feedback, and the three-round retry budget across context compression; task checkoff remains blocked until both reviews pass ([#94](https://github.com/rpamis/comet/issues/94), [#96](https://github.com/rpamis/comet/issues/96), [#97](https://github.com/rpamis/comet/issues/97)).
+- **npm shebang line ending issue on macOS**: When npm packed the project on Windows, `bin/opensuper.js` shebang line got CRLF line endings, causing macOS to interpret `#!/usr/bin/env node\r` instead of `#!/usr/bin/env node`, resulting in "command not found" after `npm install -g @pzy560117/opensuper`. Added explicit `eol=lf` rules for all text file extensions (`.js`, `.mjs`, `.ts`, `.json`, `.md`, `.yaml`, `.yml`) and binary markers for image files in `.gitattributes` ([#82](https://github.com/rpamis/comet/issues/82)).
+- **CodeGraph Codex CLI skip on project scope**: `opensuper init` with project scope passed `--target` and `--location=local` to `codegraph install`, which caused Codex CLI (no project-local config) to be skipped with a confusing message. Simplified to `codegraph install --yes` without `--target` or `--location` flags, letting CodeGraph auto-detect and configure all installed agents. Removed `filterSupportedPlatforms` and `CODEGRAPH_SUPPORTED_TARGETS` ([#98](https://github.com/rpamis/comet/issues/98)).
+- **OpenSpec CLI upgrade and --profile fallback**: `ensureOpenSpecCli` now always installs/upgrades openspec to the latest version, even if an older version is already present, ensuring users get `--profile` support and other improvements. Added fallback logic: if `openspec init` fails with "unknown option --profile" in stderr, retries without the flag for edge cases where the upgrade fails but an older openspec remains ([#84](https://github.com/rpamis/comet/issues/84)).
+- **Symlink resolution for skill file copies**: When skill directories are symlinks (e.g. `~/.claude/skills/opensuper -> ~/.agents/skills/opensuper`), `copyFile` and `ensureDir` wrote to the literal path instead of following the symlink target. Broken symlinks caused silent copy failures. Added `resolveSymlinkPath()` to `file-system.ts` that walks up the path tree and follows `readlink` targets for broken symlinks. Applied to `ensureDir`, `copyFile`, and `writeFile` ([#85](https://github.com/rpamis/comet/issues/85)).
+- **opensuper-tweak missing debug handling**: `opensuper-tweak/SKILL.md` was missing the systematic-debugging requirement that `opensuper-hotfix` already had �?when tests or builds fail during tweak execution, the skill now explicitly requires loading the `systematic-debugging` skill before proposing source fixes, matching hotfix behavior.
+- **OpenSpec per-artifact instructions compliance**: Chinese and English `opensuper-open` now apply OpenSpec per-artifact instructions (`openspec instructions proposal/design/tasks --change "<name>" --json`) for each standard artifact, loading `context`, `rules`, `template`, `instruction`, `resolvedOutputPath`, and `dependencies` from the JSON payload instead of hard-coded artifact prose. Stops artifact generation on instruction failure rather than silently bypassing project rules ([#66](https://github.com/rpamis/comet/issues/66)).
+- **CI Windows path escaping in skill verification**: The `init-e2e` workflow's Pi settings verification step interpolated a Windows `$RUNNER_TEMP` path (containing backslashes) directly into a `node -e "require('...')"` JS string literal, where `\a`/`\_` were parsed as escape characters and mangled the path (`D:\a\_temp` �?`D:a_temp`), failing the `init-e2e (windows-latest)` runners on Node 20 and 22. The path is now passed via an environment variable (`process.env`) so it never enters a JS string literal; Linux/macOS were unaffected.
+- **OpenSpec source formatting**: Re-formatted `src/core/openspec.ts` (long-line wrapping) to satisfy `prettier --check`, unblocking the `format:check` CI step.
+- **Symlink-safe removal during uninstall**: `removeFile`/`removeDir` no longer resolve symlinks before deleting. A symlinked skill, rules, or hooks directory previously had its _resolved target_ recursively deleted by `opensuper uninstall`; symlinked directories are now unlinked directly. `isDirEmpty` also no longer reports unreadable directories as empty, so cleanup never deletes a directory it could not inspect.
+- **`opensuper update --json` output corruption**: npm's inherited stdio previously interleaved into the JSON document; npm stdout/stderr are now discarded in JSON mode so machine-readable output stays parseable.
+- **`opensuper update --json` no-targets shape**: the early-return JSON emitted when no installed targets exist now includes `codegraph: 'skipped'`, matching the normal output shape so consumers need not special-case the empty path.
+- **JSON-mode version-check latency**: `opensuper init` and `opensuper update` now skip the npm-registry version check in JSON mode, emitting output without a network round-trip.
+- **Malformed hook settings resilience**: hand-edited settings files storing a hook group as a non-array value no longer throw during init/update hook merging; malformed groups are coerced to empty.
+- **Markdown code-fence language tags**: added `text` language tags to fenced code blocks in `file-structure.md` and `subagent-dispatch.md` (Chinese and English) to satisfy MD040 linting, consistent with the existing OpenSpec formatting CI fix.
+- **Skills manifest version drift**: bumped `assets/manifest.json` version `0.3.3` �?`0.3.8` to match `package.json`.
+
+### Tests
+
 - **Kimi Code platform coverage**: Added detection, project/global installation, OpenSpec tool mapping, Superpowers agent mapping, CI platform-count, and documentation regression coverage for Kimi Code.
 - **Lightweight verification review regression**: Added bilingual workflow safeguards for the lightweight code-review requirement, blocking severities, scoped review criteria, and hotfix documentation consistency.
 - **Pi command extension lifecycle coverage**: Added project/global init, manifest-driven command generation, argument forwarding, settings preservation, invalid-settings protection, deterministic overwrite, and selective uninstall regression coverage, plus CI assertions for Pi's project and global extension locations.
 - **Hook merge regression coverage**: Added real-file tests for Claude-style, Qwen/Qoder, Gemini, and Windsurf hook formats covering same-matcher user hook preservation, stale OpenSuper command replacement, unrelated configuration retention, and idempotent repeated installation.
 - **Subagent dispatch contract coverage**: Added Chinese and English skill-content regression coverage for Superpowers/OpenSuper composition, coordinator-only source execution with tracking-file exceptions, one fresh background agent per task and role, prompt/status/reviewer evidence contracts, durable recovery checkpoints, TDD ownership, dual-review checkoff, bounded stop conditions, continuous task execution, OpenSuper-specific final handoff, and the absence of a Stop hook.
 - **Reference doc assertions**: Added assertions verifying all skill files that reference `decision-point.md` and `debug-gate.md` include the correct protocol path, and that the shipped reference docs contain the expected core rules and fallback behavior.
-- **OpenSpec artifact contract coverage**: Added bilingual contract assertions verifying `OpenSuper-open` skills contain explicit JSON instruction commands for `proposal`, `design`, and `tasks`; require applying `context`, `rules`, `template`, `instruction`, `resolvedOutputPath`, and `dependencies`; prohibit copying context/rules into artifacts; refresh status between artifacts; and stop instead of falling back when OpenSpec instructions fail.
+- **OpenSpec artifact contract coverage**: Added bilingual contract assertions verifying `opensuper-open` skills contain explicit JSON instruction commands for `proposal`, `design`, and `tasks`; require applying `context`, `rules`, `template`, `instruction`, `resolvedOutputPath`, and `dependencies`; prohibit copying context/rules into artifacts; refresh status between artifacts; and stop instead of falling back when OpenSpec instructions fail.
 
 ## What's Changed [0.3.7] - 2026-06-07
 
 ### Added
 
-- **Auto-transition config**: Added `auto_transition` (`true`|`false`) to `.OpenSuper.yaml` and the `.OpenSuper/config.yaml` project default so teams can choose whether OpenSuper automatically advances to the next phase skill or pauses for a manual transition. When `auto_transition: false`, build/design/open/verify skills stop after meeting exit conditions and print the next manual step instead of invoking the next skill. Includes state-machine whitelist, enum validation, and schema (`OpenSuper-yaml-validate.sh`) coverage ([#74](https://github.com/pzy560117/opensuper/pull/74)).
-- **Deterministic next-step resolver**: Added `OpenSuper-state next <change-name>` to resolve post-guard routing from `.OpenSuper.yaml` (`phase`, `workflow`, `auto_transition`) with structured output: `NEXT: auto|manual|done`, `SKILL: <skill-name>`, and `HINT` (manual mode). This centralizes next-skill routing logic in scripts instead of duplicating it across skill prose.
-- **Workflow output language**: OpenSuper workflows now propagate the triggering user request language into OpenSpec and Superpowers steps via an explicit Output Language Rule, keeping generated proposals, designs, plans, verification reports, and archive notes readable in the user's language. Resuming an existing change preserves the dominant artifact language unless the user explicitly asks to switch ([#53](https://github.com/pzy560117/opensuper/pull/53), [#37](https://github.com/pzy560117/opensuper/issues/37)).
-- **Execution benchmark (Claude Code)**: Added `benchmark:execution`, a benchmark harness with three test phases: L1 (design doc generation from handoff context), L2 (build a note-board module from handoff context + run tests), and L3 (full workflow — implement a dictionary module from spec, run 10 vitest tests). Invokes Claude Code (`claude -p`) and measures actual test pass rate, token usage, retry count, duration, and cost. Compares `off` vs `beta` context compression modes across small/medium/large tiers. Supports `--phase l1|l2|l3|both|all` and `--dry-run` for deterministic verification. Extracted shared utilities (`spawnCapture`, `parseClaudeJson`, `buildClaudeArgs`, etc.) to `scripts/benchmark-utils.mjs`.
+- **Auto-transition config**: Added `auto_transition` (`true`|`false`) to `.opensuper.yaml` and the `.opensuper/config.yaml` project default so teams can choose whether OpenSuper automatically advances to the next phase skill or pauses for a manual transition. When `auto_transition: false`, build/design/open/verify skills stop after meeting exit conditions and print the next manual step instead of invoking the next skill. Includes state-machine whitelist, enum validation, and schema (`opensuper-yaml-validate.sh`) coverage ([#74](https://github.com/rpamis/comet/pull/74)).
+- **Deterministic next-step resolver**: Added `opensuper-state next <change-name>` to resolve post-guard routing from `.opensuper.yaml` (`phase`, `workflow`, `auto_transition`) with structured output: `NEXT: auto|manual|done`, `SKILL: <skill-name>`, and `HINT` (manual mode). This centralizes next-skill routing logic in scripts instead of duplicating it across skill prose.
+- **Workflow output language**: OpenSuper workflows now propagate the triggering user request language into OpenSpec and Superpowers steps via an explicit Output Language Rule, keeping generated proposals, designs, plans, verification reports, and archive notes readable in the user's language. Resuming an existing change preserves the dominant artifact language unless the user explicitly asks to switch ([#53](https://github.com/rpamis/comet/pull/53), [#37](https://github.com/rpamis/comet/issues/37)).
+- **Execution benchmark (Claude Code)**: Added `benchmark:execution`, a benchmark harness with three test phases: L1 (design doc generation from handoff context), L2 (build a note-board module from handoff context + run tests), and L3 (full workflow �?implement a dictionary module from spec, run 10 vitest tests). Invokes Claude Code (`claude -p`) and measures actual test pass rate, token usage, retry count, duration, and cost. Compares `off` vs `beta` context compression modes across small/medium/large tiers. Supports `--phase l1|l2|l3|both|all` and `--dry-run` for deterministic verification. Extracted shared utilities (`spawnCapture`, `parseClaudeJson`, `buildClaudeArgs`, etc.) to `scripts/benchmark-utils.mjs`.
 
 - **Token optimization: TDD skill single load**: Build skill now loads `test-driven-development` skill once before the first task (instead of per-task), reducing ~44K tokens per 10-task workflow. Includes compaction recovery guidance to reload once on resume.
 - **Token optimization: brainstorming checkpoint**: Design skill now writes `brainstorm-summary.md` after user confirms design approach, providing a compaction recovery point that preserves confirmed decisions across context window compression.
@@ -102,49 +764,53 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 - **Token optimization: plan creation subagent offload**: Build skill offloads `writing-plans` execution to a subagent, freeing main session context. Subagent reads Design Doc + tasks.md from files and returns the plan file path. Falls back to inline execution on subagent failure.
 - **Token optimization: verification skill dedup**: Verify skill loads `verification-before-completion` once before the light/full branch point instead of in each branch, eliminating redundant skill content.
 - **Token optimization: tasks.md incremental scan**: Build skill uses `grep` to find unchecked tasks instead of re-reading the entire `tasks.md` file after each task completion.
-- **Token optimization: hash on-demand read in verify**: Verify skill checks `handoff_hash` before re-reading OpenSpec artifacts. When hash matches, only `tasks.md` is skipped (proposal.md and design.md are still read for comparison checks). Uses new `OpenSuper-handoff.sh --hash-only` flag.
-- **`--hash-only` flag for OpenSuper-handoff.sh**: New backward-compatible flag outputs the context hash without generating handoff files, used by verify phase for hash comparison. Validates required files exist before computing hash.
-- **CodeGraph integration in OpenSuper init**: `OpenSuper init` now offers an optional step to install and configure CodeGraph (`@colbymchenry/codegraph`) for semantic code intelligence. It auto-detects supported platforms (Claude Code, Cursor, Codex, OpenCode, Gemini, Kiro, Antigravity), installs the CLI if missing, runs `codegraph install` for agent wiring, and initializes the project index. Skips gracefully under `--json` mode.
+- **Token optimization: hash on-demand read in verify**: Verify skill checks `handoff_hash` before re-reading OpenSpec artifacts. When hash matches, only `tasks.md` is skipped (proposal.md and design.md are still read for comparison checks). Uses new `opensuper-handoff.sh --hash-only` flag.
+- **`--hash-only` flag for opensuper-handoff.sh**: New backward-compatible flag outputs the context hash without generating handoff files, used by verify phase for hash comparison. Validates required files exist before computing hash.
+- **CodeGraph integration in opensuper init**: `opensuper init` now offers an optional step to install and configure CodeGraph (`@colbymchenry/codegraph`) for semantic code intelligence. It auto-detects supported platforms (Claude Code, Cursor, Codex, OpenCode, Gemini, Kiro, Antigravity), installs the CLI if missing, runs `codegraph install` for agent wiring, and initializes the project index. Skips gracefully under `--json` mode.
 - **Stale PR automation**: Added a scheduled and manually runnable GitHub Actions workflow that marks inactive pull requests stale after 90 days and closes them after another 30 days, helping keep long-idle review queues manageable.
-- **TDD mode field**: Added `tdd_mode` (`tdd`|`direct`) to `.OpenSuper.yaml` state machine so users choose whether to enforce TDD during build. When `tdd_mode: tdd`, subagent dispatches inject an explicit TDD hard constraint, bypassing implementer-prompt.md's conditional trigger. Addresses [#67](https://github.com/pzy560117/opensuper/issues/67).
-- **subagent_dispatch field**: Added `subagent_dispatch` (`null`|`confirmed`) to `.OpenSuper.yaml` state machine, ensuring `build_mode: subagent-driven-development` can only leave the build phase after the platform's real background dispatch capability is confirmed.
+- **TDD mode field**: Added `tdd_mode` (`tdd`|`direct`) to `.opensuper.yaml` state machine so users choose whether to enforce TDD during build. When `tdd_mode: tdd`, subagent dispatches inject an explicit TDD hard constraint, bypassing implementer-prompt.md's conditional trigger. Addresses [#67](https://github.com/rpamis/comet/issues/67).
+- **subagent_dispatch field**: Added `subagent_dispatch` (`null`|`confirmed`) to `.opensuper.yaml` state machine, ensuring `build_mode: subagent-driven-development` can only leave the build phase after the platform's real background dispatch capability is confirmed.
 - **Verify retry limit**: Verify skill now enforces a mandatory user decision after 3 consecutive verify-fail cycles, preventing indefinite automated retry loops.
-- **Manual verify_mode override**: Users can override automatic verification scale assessment via `OpenSuper-state set <name> verify_mode <light|full>` when the auto-detected mode doesn't fit.
+- **Manual verify_mode override**: Users can override automatic verification scale assessment via `opensuper-state set <name> verify_mode <light|full>` when the auto-detected mode doesn't fit.
 - **Local context compression benchmark**: Added `benchmark:context`, a local Codex benchmark harness that creates matched `context_compression: off` and `beta` OpenSuper fixtures, runs `codex exec` against each mode, and reports token savings, spec drift rate, task completion rate, parse success, and timing. Use `--dry-run` for deterministic non-Codex verification.
-- **Beta-gated context compression switch**: Project installs now create `.OpenSuper/config.yaml` with `context_compression: off`, allowing teams to opt new changes into beta spec projection by setting `context_compression: beta`. This switch controls only the OpenSpec handoff projection path (`spec-context.*`); the workflow token optimizations above are default-on and do not require beta mode.
-- **Beta spec projection handoff**: `/OpenSuper-design` can now use beta context compression to generate `spec-context.json` and `spec-context.md`, preserving OpenSpec requirement and scenario headings with source hashes so compact design handoffs reduce token load without weakening acceptance coverage.
+- **Beta-gated context compression switch**: Project installs now create `.opensuper/config.yaml` with `context_compression: off`, allowing teams to opt new changes into beta spec projection by setting `context_compression: beta`. This switch controls only the OpenSpec handoff projection path (`spec-context.*`); the workflow token optimizations above are default-on and do not require beta mode.
+- **Beta spec projection handoff**: `/opensuper-design` can now use beta context compression to generate `spec-context.json` and `spec-context.md`, preserving OpenSpec requirement and scenario headings with source hashes so compact design handoffs reduce token load without weakening acceptance coverage.
 
 ### Changed
 
-- **executing-plans review gate**: When `build_mode` is `executing-plans`, the build phase now requires loading the Superpowers `requesting-code-review` skill and requesting code review at least once before the build→verify phase guard. CRITICAL findings must be fixed before verify; accepted non-CRITICAL findings must record acceptance rationale in a durable artifact. The build-exit checklist enforces this gate ([#76](https://github.com/pzy560117/opensuper/pull/76), [#41](https://github.com/pzy560117/opensuper/issues/41)).
-- **Phase advancement vs handoff wording**: Chinese and English OpenSuper skills now consistently distinguish guard-driven phase advancement (`--apply`, always updates `phase`) from next-skill invocation control (`auto_transition`). Open/design/build/verify/hotfix/tweak guidance now routes through `OpenSuper-state next` for auto/manual handoff.
+- **executing-plans review gate**: When `build_mode` is `executing-plans`, the build phase now requires loading the Superpowers `requesting-code-review` skill and requesting code review at least once before the build→verify phase guard. CRITICAL findings must be fixed before verify; accepted non-CRITICAL findings must record acceptance rationale in a durable artifact. The build-exit checklist enforces this gate ([#76](https://github.com/rpamis/comet/pull/76), [#41](https://github.com/rpamis/comet/issues/41)).
+- **Phase advancement vs handoff wording**: Chinese and English OpenSuper skills now consistently distinguish guard-driven phase advancement (`--apply`, always updates `phase`) from next-skill invocation control (`auto_transition`). Open/design/build/verify/hotfix/tweak guidance now routes through `opensuper-state next` for auto/manual handoff.
 - **Preset continuity wording**: Hotfix and tweak guidance now explicitly documents the `auto_transition: false` exception in continuous execution mode, removing contradictory wording around "always continue" behavior.
 - **Verify hash-skip scoped to tasks.md only**: Full verification always reads `proposal.md` and `design.md` even when hash matches, ensuring goal-satisfaction and design-consistency checks have complete context.
 - **Design Doc creation stays in main session**: Design Doc is created inline (not offloaded to subagent) to preserve full brainstorming conversation context and prevent information loss for complex requirements.
-- **Subagent failure fallback**: Plan creation subagent offload includes explicit degraded fallback — if the subagent fails, the main session loads `writing-plans` inline.
+- **Subagent failure fallback**: Plan creation subagent offload includes explicit degraded fallback �?if the subagent fails, the main session loads `writing-plans` inline.
 - **Beta spec verbatim projection**: Beta context compression now projects entire spec files verbatim (`cat`) instead of filtering by English keywords (GIVEN/WHEN/THEN/AND/BUT). This eliminates language-dependent matching, ensures zero acceptance-criteria drift for Chinese or non-English specs, and removes the fragile AWK filter entirely.
-- **JSON structural validation**: `OpenSuper-guard.sh` now validates `spec-context.json` structure (required fields: `change`, `phase`, `mode`, `files`, `context_hash`) and source file reference coverage, replacing the previous English-heading-based markdown check. Guard catches corrupted or incomplete JSON before phase transition.
+- **JSON structural validation**: `opensuper-guard.sh` now validates `spec-context.json` structure (required fields: `change`, `phase`, `mode`, `files`, `context_hash`) and source file reference coverage, replacing the previous English-heading-based markdown check. Guard catches corrupted or incomplete JSON before phase transition.
 - **JSON file roles**: `spec-context.json` `files` array now includes a `role` field (`spec` for spec files, `supporting` for proposal/design/tasks), removing the language-dependent `projection` array entirely.
-- **--full warning in beta mode**: Running `OpenSuper-handoff.sh` with `--full` in beta mode now emits an explicit warning instead of silently ignoring the flag.
-- **CodeGraph step in OpenSuper update**: `OpenSuper update` now prompts to install/update CodeGraph alongside skill file updates, using the same platform detection and CLI installation flow.
-- **Rules and hooks distribution in OpenSuper update**: `OpenSuper update` now distributes anti-drift phase guard rules and hooks to all installed platforms alongside skill files, keeping rules and hooks in sync after a OpenSuper upgrade.
-- **Archive confirmation gate**: Chinese `/OpenSuper-archive` now pauses for explicit user confirmation before running the archive script, giving users a final chance to adjust or re-run verification before main spec merge and change archival.
-- **English archive confirmation parity**: English OpenSuper skills now match the confirmed Chinese archive-confirmation workflow, including `/OpenSuper-archive`, `/OpenSuper-verify`, `/OpenSuper`, hotfix, and tweak guidance.
-- **Archive reopen transition**: Added `OpenSuper-state transition <change-name> archive-reopen` so users who decline final archive confirmation can return from `phase: archive` to `phase: verify` for adjustment or re-verification without manually editing `.OpenSuper.yaml`.
-- **OpenSpec clarification gate**: Chinese and English `/OpenSuper-open` now require a confirmed requirements clarification summary before proposal, design, or tasks artifacts are created, preventing one Q&A turn from immediately generating a full OpenSpec change.
-- **PRD split preflight**: Chinese and English `/OpenSuper-open` now triage large PRDs before creating OpenSpec artifacts, allowing users to split independent capabilities into multiple OpenSuper changes while keeping each accepted split on the `/OpenSuper-open` state-machine path. Addresses [#62](https://github.com/pzy560117/opensuper/issues/62).
+- **--full warning in beta mode**: Running `opensuper-handoff.sh` with `--full` in beta mode now emits an explicit warning instead of silently ignoring the flag.
+- **CodeGraph step in opensuper update**: `opensuper update` now prompts to install/update CodeGraph alongside skill file updates, using the same platform detection and CLI installation flow.
+- **Rules and hooks distribution in opensuper update**: `opensuper update` now distributes anti-drift phase guard rules and hooks to all installed platforms alongside skill files, keeping rules and hooks in sync after a OpenSuper upgrade.
+- **Archive confirmation gate**: Chinese `/opensuper-archive` now pauses for explicit user confirmation before running the archive script, giving users a final chance to adjust or re-run verification before main spec merge and change archival.
+- **English archive confirmation parity**: English OpenSuper skills now match the confirmed Chinese archive-confirmation workflow, including `/opensuper-archive`, `/opensuper-verify`, `/opensuper`, hotfix, and tweak guidance.
+- **Archive reopen transition**: Added `opensuper-state transition <change-name> archive-reopen` so users who decline final archive confirmation can return from `phase: archive` to `phase: verify` for adjustment or re-verification without manually editing `.opensuper.yaml`.
+- **OpenSpec clarification gate**: Chinese and English `/opensuper-open` now require a confirmed requirements clarification summary before proposal, design, or tasks artifacts are created, preventing one Q&A turn from immediately generating a full OpenSpec change.
+- **PRD split preflight**: Chinese and English `/opensuper-open` now triage large PRDs before creating OpenSpec artifacts, allowing users to split independent capabilities into multiple OpenSuper changes while keeping each accepted split on the `/opensuper-open` state-machine path. Addresses [#62](https://github.com/rpamis/comet/issues/62).
 - **Skill invocation wording guidance**: Added repository guidance in `CLAUDE.md` requiring new skill-trigger descriptions to use the existing "use the Skill tool to load..." wording and place context details after the skill loads.
-- **Anti-drift phase guard rule**: Added `.claude/rules/OpenSuper-phase-guard.md` that re-injects OpenSuper phase awareness, skill invocation requirements, script execution requirements, user confirmation gates, and context compaction recovery instructions every conversation turn, preventing long-context attention drift from breaking the 5-phase workflow. Works on all platforms as a soft reminder.
-- **Anti-drift phase guard hook**: Added `OpenSuper-hook-guard.sh` PreToolUse hook (configured in `.claude/settings.local.json`) that hard-blocks file writes when the active OpenSuper change is in `open`, `design`, or `archive` phase, providing a platform-specific hard enforcement layer that the model cannot bypass. Whitelists `openspec/*`, `docs/superpowers/*`, `.claude/*`, and `.OpenSuper/*` paths.
-- **Platform rules/hooks distribution in OpenSuper init**: `OpenSuper init` now distributes the anti-drift phase guard rule and hook-guard script to all supported platforms during initialization. Platform definitions were corrected: Cline uses `.clinerules/` at project root (not `.cline/rules/`), GitHub Copilot uses `.github/instructions/*.instructions.md` with `applyTo` frontmatter, Kiro uses `.kiro/steering/`, and Gemini CLI has no rules directory (uses GEMINI.md files). Added `rulesDir`/`rulesFormat` to 8 platforms that were missing it, and `supportsHooks`/`hookFormat` to 7 platforms. Hook installation supports 7 format variants: Claude Code, Gemini, Windsurf, Copilot, Qwen, Kiro, and Qoder.
+- **Anti-drift phase guard rule**: Added `.claude/rules/opensuper-phase-guard.md` that re-injects OpenSuper phase awareness, skill invocation requirements, script execution requirements, user confirmation gates, and context compaction recovery instructions every conversation turn, preventing long-context attention drift from breaking the 5-phase workflow. Works on all platforms as a soft reminder.
+- **Anti-drift phase guard hook**: Added `opensuper-hook-guard.sh` PreToolUse hook (configured in `.claude/settings.local.json`) that hard-blocks file writes when the active OpenSuper change is in `open`, `design`, or `archive` phase, providing a platform-specific hard enforcement layer that the model cannot bypass. Whitelists `openspec/*`, `docs/superpowers/*`, `.claude/*`, and `.opensuper/*` paths.
+- **Platform rules/hooks distribution in opensuper init**: `opensuper init` now distributes the anti-drift phase guard rule and hook-guard script to all supported platforms during initialization. Platform definitions were corrected: Cline uses `.clinerules/` at project root (not `.cline/rules/`), GitHub Copilot uses `.github/instructions/*.instructions.md` with `applyTo` frontmatter, Kiro uses `.kiro/steering/`, and Gemini CLI has no rules directory (uses GEMINI.md files). Added `rulesDir`/`rulesFormat` to 8 platforms that were missing it, and `supportsHooks`/`hookFormat` to 7 platforms. Hook installation supports 7 format variants: Claude Code, Gemini, Windsurf, Copilot, Qwen, Kiro, and Qoder.
 - **Systematic debugging gate**: Chinese and English build and hotfix skills now require loading Superpowers `systematic-debugging` when implementation-time crashes, unexpected behavior, test failures, or build failures appear, ensuring root-cause investigation and in-change regression tests happen before source fixes.
-- **Verification-before-completion gate**: Chinese and English `/OpenSuper-verify` now require loading Superpowers `verification-before-completion` before executing lightweight or full verification checks, enforcing evidence-based confirmation before any completion claims.
+- **Verification-before-completion gate**: Chinese and English `/opensuper-verify` now require loading Superpowers `verification-before-completion` before executing lightweight or full verification checks, enforcing evidence-based confirmation before any completion claims.
 - **Platform-neutral confirmation gates**: Chinese and English OpenSuper skills and recovery messages now refer to the current platform's user input/confirmation mechanism instead of hard-coding `AskUserQuestion`, preventing Codex users from being directed to a tool that may not exist while preserving blocking user decisions.
-- **Preset upgrade path**: Hotfix and tweak skills now include `set <name> phase design` step when upgrading to full workflow, preventing OpenSuper-design entry check failure after workflow switch.
+- **Preset upgrade path**: Hotfix and tweak skills now include `set <name> phase design` step when upgrading to full workflow, preventing opensuper-design entry check failure after workflow switch.
 - **Build-complete conditional field reset**: `build-complete` transition preserves `verification_report` and `branch_status` when the previous verify_result was `fail`, enabling verify-fail→build→build-complete re-verify cycles without data loss.
 - **Open phase recovery granularity**: Open phase recovery now distinguishes three states (all artifacts done / none done / partial) with specific recovery actions per state.
 - **50% scope threshold option**: Build skill now offers "continue in current change" as a third option when changes exceed 50% scope, avoiding forced change splitting.
 - **Worktree plan commit**: Build skill now explicitly instructs committing plan files before creating a worktree when using worktree isolation.
+
+### Tests
+
+- **Skill bootstrap coverage**: Updated the Skill documentation tests to accept either inline OpenSuper bootstrap blocks or delegated opensuper/reference/scripts.md references, while still checking the safe opensuper-env.mjs lookup and HOME glob behavior when a Skill keeps the bootstrap inline.
 
 ### Removed
 
@@ -152,55 +818,55 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Fixed
 
-- **Subagent task persistence**: `/OpenSuper-build` now requires every subagent dispatch prompt to persist completed task checks in the Superpowers plan and, when mapped, the corresponding OpenSpec `tasks.md` item before committing. Build guard blocks unchecked Superpowers plan tasks, and build recovery reports both OpenSpec and plan progress before inspecting recent git history/diff or dispatching more work, preventing resume after interruption or context compression from re-running already completed subagent work ([#79](https://github.com/pzy560117/opensuper/issues/79)).
+- **Subagent task persistence**: `/opensuper-build` now requires every subagent dispatch prompt to persist completed task checks in the Superpowers plan and, when mapped, the corresponding OpenSpec `tasks.md` item before committing. Build guard blocks unchecked Superpowers plan tasks, and build recovery reports both OpenSpec and plan progress before inspecting recent git history/diff or dispatching more work, preventing resume after interruption or context compression from re-running already completed subagent work ([#79](https://github.com/rpamis/comet/issues/79)).
 
-- **skip-all skipping uninstalled components**: `OpenSuper init` no longer treats a previously skipped component as already installed. Choosing skip-all now only skips components that are actually present, so uninstalled OpenSpec, Superpowers, OpenSuper, or CodeGraph components are still offered for installation instead of being silently bypassed ([#73](https://github.com/pzy560117/opensuper/pull/73)).
+- **skip-all skipping uninstalled components**: `opensuper init` no longer treats a previously skipped component as already installed. Choosing skip-all now only skips components that are actually present, so uninstalled OpenSpec, Superpowers, OpenSuper, or CodeGraph components are still offered for installation instead of being silently bypassed ([#73](https://github.com/rpamis/comet/pull/73)).
 
-- **Update JSON output for rules/hooks**: `OpenSuper update --json` now includes rules and hooks distribution results alongside skill update results, with per-target error isolation so a single platform failure doesn't break the entire update output.
+- **Update JSON output for rules/hooks**: `opensuper update --json` now includes rules and hooks distribution results alongside skill update results, with per-target error isolation so a single platform failure doesn't break the entire update output.
 
-- **Duplicate YAML fields**: `replace_yaml_field` in `OpenSuper-state.sh` now deduplicates all fields after replacement, keeping only the last occurrence of each key. Previously, multiple `cmd_set` calls for the same field (e.g., during verify-fail → re-verify cycles) could leave duplicate lines in `.OpenSuper.yaml`, confusing downstream parsers. Fixes [#77](https://github.com/pzy560117/opensuper/issues/77).
+- **Duplicate YAML fields**: `replace_yaml_field` in `opensuper-state.sh` now deduplicates all fields after replacement, keeping only the last occurrence of each key. Previously, multiple `cmd_set` calls for the same field (e.g., during verify-fail �?re-verify cycles) could leave duplicate lines in `.opensuper.yaml`, confusing downstream parsers. Fixes [#77](https://github.com/rpamis/comet/issues/77).
 
 - **Hook config format**: `installClaudeCodeHooks` and `.claude/settings.local.json` now use the correct `matcher` + `hooks: [{ type, command }]` array format instead of the flat `{ matcher, command, description }` format, fixing the `/doctor` schema validation error.
 
-- **Archive delta merge**: `OpenSuper-archive.sh` now delegates archive spec updates to OpenSpec's delta merge semantics instead of copying change specs over main specs, preventing `ADDED/MODIFIED/REMOVED/RENAMED` section headings from leaking into stable specs. Addresses [#69](https://github.com/pzy560117/opensuper/issues/69).
-- **Brainstorming depth**: Chinese and English `/OpenSuper-design` no longer tell Superpowers `brainstorming` to skip context exploration, so unclear goals, scope, non-goals, acceptance scenarios, or constraints must be clarified before a Design Doc is created.
-- **Command injection prevention**: `run_command_string()` in `OpenSuper-guard.sh` now rejects build/verify commands containing shell metacharacters (`;`, `|`, `&`, `$`, backtick), preventing command injection through `.OpenSuper.yaml` command fields.
-- **Path traversal prevention**: `OpenSuper-state.sh cmd_set` now validates path fields (design_doc, plan, verification_report, handoff_context, handoff_hash) for `..` traversal sequences before writing.
+- **Archive delta merge**: `opensuper-archive.sh` now delegates archive spec updates to OpenSpec's delta merge semantics instead of copying change specs over main specs, preventing `ADDED/MODIFIED/REMOVED/RENAMED` section headings from leaking into stable specs. Addresses [#69](https://github.com/rpamis/comet/issues/69).
+- **Brainstorming depth**: Chinese and English `/opensuper-design` no longer tell Superpowers `brainstorming` to skip context exploration, so unclear goals, scope, non-goals, acceptance scenarios, or constraints must be clarified before a Design Doc is created.
+- **Command injection prevention**: `run_command_string()` in `opensuper-guard.sh` now rejects build/verify commands containing shell metacharacters (`;`, `|`, `&`, `$`, backtick), preventing command injection through `.opensuper.yaml` command fields.
+- **Path traversal prevention**: `opensuper-state.sh cmd_set` now validates path fields (design_doc, plan, verification_report, handoff_context, handoff_hash) for `..` traversal sequences before writing.
 - **Design guard enforcement**: Design guard now requires `design_doc` for full workflow (FAIL instead of WARN), preventing phase advance without a design document.
 - **branch_status preservation on verify-fail**: `verify-fail` transition no longer resets `branch_status`, keeping branch handling state across re-verify cycles.
 - **UTC date consistency**: All scripts now use `date -u +%Y-%m-%d` for `created_at`, `verified_at`, and archive naming, eliminating local/UTC date mismatches.
 - **macOS SCRIPT_DIR resolution**: All scripts use portable `$(cd "$(dirname "$0")" && pwd -P)` instead of `readlink -f` for cross-platform compatibility.
-- **Archive directory resolution fallback**: `OpenSuper-archive.sh resolve_archive_dir()` now searches by `*-$CHANGE` pattern when the exact UTC-based path doesn't match, fixing test reliability across timezone differences.
+- **Archive directory resolution fallback**: `opensuper-archive.sh resolve_archive_dir()` now searches by `*-$CHANGE` pattern when the exact UTC-based path doesn't match, fixing test reliability across timezone differences.
 - **Temp file permissions**: All `mktemp` calls now set `chmod 600` on temporary files before writing sensitive data.
-- **Pipe hash error propagation**: Hash computation in `OpenSuper-handoff.sh` and `OpenSuper-guard.sh` captures pipe output in variables before piping to hash stream, preventing silent failures under `pipefail`.
+- **Pipe hash error propagation**: Hash computation in `opensuper-handoff.sh` and `opensuper-guard.sh` captures pipe output in variables before piping to hash stream, preventing silent failures under `pipefail`.
 
 ### Tests
 
-- **Auto-transition regression**: Added state-machine and skill coverage for `auto_transition` init defaults, enum validation, `.OpenSuper/config.yaml` project default propagation, schema validation, and the manual-transition vs auto-advance branching in build/design/open/verify skills ([#74](https://github.com/pzy560117/opensuper/pull/74)).
-- **`OpenSuper-state next` regression**: Added shell-script coverage for next-step resolution across full/hotfix/tweak workflows, manual-handoff mode, archived completion (`NEXT: done`), and missing `.OpenSuper.yaml` failure behavior.
+- **Auto-transition regression**: Added state-machine and skill coverage for `auto_transition` init defaults, enum validation, `.opensuper/config.yaml` project default propagation, schema validation, and the manual-transition vs auto-advance branching in build/design/open/verify skills ([#74](https://github.com/rpamis/comet/pull/74)).
+- **`opensuper-state next` regression**: Added shell-script coverage for next-step resolution across full/hotfix/tweak workflows, manual-handoff mode, archived completion (`NEXT: done`), and missing `.opensuper.yaml` failure behavior.
 - **Skill handoff wording regression update**: Updated skill-content assertions to validate next-driven handoff wording (`NEXT: auto|manual|done`) and synchronized Chinese/English expectation checks.
-- **Output language regression**: Added skill coverage that OpenSuper propagates the triggering user request language into OpenSpec and Superpowers steps across the open, design, build, verify, hotfix, tweak, and archive skills ([#53](https://github.com/pzy560117/opensuper/pull/53)).
-- **Review gate regression**: Added skill coverage that `executing-plans` build mode requires the `requesting-code-review` gate before the build→verify transition, plus updated init-e2e expectations ([#76](https://github.com/pzy560117/opensuper/pull/76)).
-- **skip-all regression**: Added `OpenSuper init` coverage that skip-all only skips installed components and still offers uninstalled OpenSpec/Superpowers/OpenSuper/CodeGraph components ([#73](https://github.com/pzy560117/opensuper/pull/73)).
+- **Output language regression**: Added skill coverage that OpenSuper propagates the triggering user request language into OpenSpec and Superpowers steps across the open, design, build, verify, hotfix, tweak, and archive skills ([#53](https://github.com/rpamis/comet/pull/53)).
+- **Review gate regression**: Added skill coverage that `executing-plans` build mode requires the `requesting-code-review` gate before the build→verify transition, plus updated init-e2e expectations ([#76](https://github.com/rpamis/comet/pull/76)).
+- **skip-all regression**: Added `opensuper init` coverage that skip-all only skips installed components and still offers uninstalled OpenSpec/Superpowers/OpenSuper/CodeGraph components ([#73](https://github.com/rpamis/comet/pull/73)).
 - **`--hash-only` flag coverage**: New tests verify correct hash output, change-directory validation, required-file validation, and no handoff file regeneration.
 - **Context benchmark runner coverage**: New tests verify benchmark token-savings math, Codex JSONL usage/verdict parsing, and dry-run report generation without invoking Codex.
 - **Flaky test timeout fix**: Design guard test without design_doc now has explicit 20s timeout to prevent Windows bash startup flakiness.
 - **Chinese spec coverage**: Beta handoff test uses Chinese spec content to verify verbatim projection of all content (headings, descriptions, non-keyword steps) regardless of language.
 - **JSON corruption detection**: New test verifies guard blocks design exit when `spec-context.json` is structurally invalid.
 - **--full beta warning**: New test verifies the warning message and confirms beta files are still generated when `--full` is passed.
-- **Doctor CodeGraph check**: `OpenSuper doctor` now reports CodeGraph CLI availability and project initialization status (`.codegraph/` presence).
-- **Archive confirmation regression**: Added Chinese skill coverage that `/OpenSuper-archive` requires a final confirmation gate before executing the archive script.
+- **Doctor CodeGraph check**: `opensuper doctor` now reports CodeGraph CLI availability and project initialization status (`.codegraph/` presence).
+- **Archive confirmation regression**: Added Chinese skill coverage that `/opensuper-archive` requires a final confirmation gate before executing the archive script.
 - **English archive confirmation regression**: Added English skill coverage for final archive confirmation, archive reopen guidance, and hotfix/tweak preset blocking points.
-- **Phase write guard hook coverage**: 10 new tests for `OpenSuper-hook-guard.sh` covering phase-based write blocking (open/design/archive block, build/verify allow), whitelist paths (openspec, docs/superpowers, .claude), archived change bypass, and no-active-change passthrough.
+- **Phase write guard hook coverage**: 10 new tests for `opensuper-hook-guard.sh` covering phase-based write blocking (open/design/archive block, build/verify allow), whitelist paths (openspec, docs/superpowers, .claude), archived change bypass, and no-active-change passthrough.
 - **Archive reopen regression**: Added state-machine coverage for returning an unarchived change from archive confirmation back to verification and rejecting reopen attempts after `archived: true`.
 - **Archive spec merge regression**: Added shell-script coverage for archiving a delta spec without copying delta-only requirement section headings into the stable main spec.
 - **OpenSpec proposal regression**: Added Chinese and English skill coverage for the pre-artifact clarification gate, the default ban on one-shot `openspec-propose`, and preservation of the Superpowers brainstorming clarification flow.
 - **Skill authoring regression**: Added coverage that `CLAUDE.md` documents the required skill invocation wording pattern.
 - **Debug gate regression**: Added Chinese skill safeguard coverage for systematic-debugging invocation, minimal failing-test requirements, and keeping crash verification inside the current change.
 - **Confirmation mechanism regression**: Added coverage that Chinese workflow decision gates no longer hard-code `AskUserQuestion` and that recovery output points agents to a platform-neutral confirmation mechanism.
-- **PRD split workflow regression**: Added Chinese and English skill coverage for open-phase PRD split choices, `/OpenSuper-open` state initialization, repeated-triage prevention, split completion selection, and minimal resume guidance.
+- **PRD split workflow regression**: Added Chinese and English skill coverage for open-phase PRD split choices, `/opensuper-open` state initialization, repeated-triage prevention, split completion selection, and minimal resume guidance.
 - **tdd_mode state machine regression**: Added coverage for tdd_mode init defaults (null for full, direct for hotfix), enum validation, build-exit guard, hotfix bypass, and schema validation rejection of invalid values.
-- **Review fix regression**: Added coverage for conditional verification_report preservation on re-verify, branch_status preservation across verify-fail, path traversal rejection on design_doc, command injection rejection on build_command, and design guard enforcement for full workflow without design_doc.
+- **Review fix regression**: Added coverage for conditional verification_report preservation on re-verify, branch_status preservation across verify-fail, path traversal rejection on design_doc, command injection rejection for custom guard commands, and design guard enforcement for full workflow without design_doc.
 - **Context compression regression**: Added coverage for project config defaults, change-level `context_compression` snapshots, environment override during change initialization, beta spec projection generation, and guard rejection when beta projection misses requirement or scenario headings.
 
 ## What's Changed [0.3.6] - 2026-06-02
@@ -212,15 +878,15 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Changed
 
-- **Build recovery routing**: `/OpenSuper` and `/OpenSuper-build` now recognize `build_pause: plan-ready`, reuse the existing plan, and resume at workspace isolation and execution-method selection instead of regenerating the plan.
+- **Build recovery routing**: `/opensuper` and `/opensuper-build` now recognize `build_pause: plan-ready`, reuse the existing plan, and resume at workspace isolation and execution-method selection instead of regenerating the plan.
 - **Bilingual workflow documentation**: Chinese and English OpenSuper skills now describe the plan-ready pause point, clarify that `build_pause` is not `build_mode`, and document the same state field in both README files.
 
 ### Fixed
 
 - **GitHub Copilot Superpowers skill names**: OpenSuper skills now invoke the bare Superpowers skill names installed by the GitHub Copilot skills path, avoiding blocked workflows caused by unresolved `superpowers:*` aliases.
-- **Windows bash resolution**: OpenSuper now resolves a usable bash executable through `OpenSuper_BASH`, rejects the Windows WSL launcher path, and uses the resolved executable for nested script calls so guard, handoff, and archive flows do not fall back to a broken PATH `bash`.
-- **Shell test runner bash resolution**: `run-bats.js` now resolves a usable bash through `OpenSuper_TEST_BASH`, `OpenSuper_BASH`, PATH, or Git Bash defaults, avoiding the broken Windows WSL launcher when running shell tests from Node.
-- **Schema validation fatal output**: Guard validation now preserves the final fatal schema-validation message after printing validator diagnostics, making invalid `.OpenSuper.yaml` failures easier to recognize.
+- **Windows bash resolution**: OpenSuper now resolves a usable bash executable through `OPENSUPER_BASH`, rejects the Windows WSL launcher path, and uses the resolved executable for nested script calls so guard, handoff, and archive flows do not fall back to a broken PATH `bash`.
+- **Shell test runner bash resolution**: `run-bats.js` now resolves a usable bash through `OPENSUPER_TEST_BASH`, `OPENSUPER_BASH`, PATH, or Git Bash defaults, avoiding the broken Windows WSL launcher when running shell tests from Node.
+- **Schema validation fatal output**: Guard validation now preserves the final fatal schema-validation message after printing validator diagnostics, making invalid `.opensuper.yaml` failures easier to recognize.
 
 ### Tests
 
@@ -233,7 +899,7 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Added
 
-- **Context compaction recovery (`--recover`)**: `OpenSuper-state check <name> <phase> --recover` outputs a structured recovery context, including phase status, field progress, task count, and recovery actions, used for agent context compression to quickly locate breakpoints and resume operations.
+- **Context compaction recovery (`--recover`)**: `opensuper-state check <name> <phase> --recover` outputs a structured recovery context, including phase status, field progress, task count, and recovery actions, used for agent context compression to quickly locate breakpoints and resume operations.
 - **Red Flags Anti-Rationalization List**: Added 5 red flag warnings to the main scheduling skill (making decisions for the user, skipping confirmation, replacing historical preferences, agreeing without objection, and passing without verification), helping the agent identify its own overreach tendencies.
 - **Uncertainty Degradation Principles**: Added SUGGESTION > WARNING > CRITICAL degradation rules to the verify skill. Only build failures, test failures, and security issues are marked CRITICAL; ambiguous issues must be downgraded.
 - **Anti-Automatic Selection Guardian**: Added naming and scope anti-automatic selection rules to the open skill. Name changes must be specified by the user or AskUserQuestion. Confirmation: The scope cannot be expanded or narrowed arbitrarily.
@@ -249,7 +915,7 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Fixed
 
-- **Crash due to unbound variables in `set -u`**: When `OpenSuper-state check --recover` is missing `tasks.md` during the build phase, the `pending` variable is not declared, causing the script to exit directly; this is fixed by moving the `local` declaration forward and adding an explicit branch `tasks.md MISSING` to the recovery action chain.
+- **Crash due to unbound variables in `set -u`**: When `opensuper-state check --recover` is missing `tasks.md` during the build phase, the `pending` variable is not declared, causing the script to exit directly; this is fixed by moving the `local` declaration forward and adding an explicit branch `tasks.md MISSING` to the recovery action chain.
 - **Path truncation risk**: `field_status` using `${var%% *}` on `design_doc` may truncate paths containing spaces; changed to `${var% }` to only remove trailing spaces.
 - **Inconsistent reading style for optional fields**: `direct_override` uses `|| echo ""` while other optional fields use `|| true`; unified to `|| true` to be consistent with `cmd_scale`.
 
@@ -266,9 +932,9 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Fixed
 
-- **OpenSpec global install path for OpenCode**: `OpenSuper init --scope global` now migrates OpenSpec skills from the hardcoded `~/.opencode/` directory to `~/.config/opencode/` where OpenCode actually reads them, with a self-deletion guard when source and destination paths coincide (#46, @gleami)
+- **OpenSpec global install path for OpenCode**: `opensuper init --scope global` now migrates OpenSpec skills from the hardcoded `~/.opencode/` directory to `~/.config/opencode/` where OpenCode actually reads them, with a self-deletion guard when source and destination paths coincide (#46, @gleami)
 - **Windows command execution**: Added `shell` option to `execFileSync` calls on Windows so command shims (.cmd) resolve correctly
-- **Doctor `.OpenSuper.yaml` validation**: `OpenSuper doctor` now validates top-level keys instead of silently accepting unknown keys, and `readDir` errors other than ENOENT are no longer swallowed (@felamin)
+- **Doctor `.opensuper.yaml` validation**: `opensuper doctor` now validates top-level keys instead of silently accepting unknown keys, and `readDir` errors other than ENOENT are no longer swallowed (@felamin)
 - **CI JSON parsing**: CI workflow parses command output by finding the first `{` character, preventing non-JSON prefix lines from breaking JSON extraction (@yicochen)
 - **CI warning output**: CI now only counts and prints warnings when a step actually fails, reducing noise in successful runs (@yicochen)
 - **Spawn stdio noise**: Changed `inherit` to `ignore` for non-interactive spawn stdio so OpenSpec/Superpowers installers don't print unrelated progress to the console (@yicochen)
@@ -276,7 +942,7 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 ### Tests
 
 - Added coverage for OpenCode global OpenSpec path migration, self-deletion guard, and homedir mocking
-- Added doctor tests for `.OpenSuper.yaml` top-level key validation and non-ENOENT `readDir` error propagation
+- Added doctor tests for `.opensuper.yaml` top-level key validation and non-ENOENT `readDir` error propagation
 - Fixed timeout for git-based test "uses plan base-ref to scale verification"
 
 ### Docs
@@ -286,23 +952,23 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### New Contributors
 
-* @felanny made their first contribution in #38
-* @Joechan11 made their first contribution in #44
-* @bevishe made their first contribution in #47
-* @kathy32 made their first contribution in #39
-* @gleami made their first contribution in #46
+- @felanny made their first contribution in #38
+- @Joechan11 made their first contribution in #44
+- @bevishe made their first contribution in #47
+- @kathy32 made their first contribution in #39
+- @gleami made their first contribution in #46
 
 ## What's Changed [0.3.3] - 2026-05-27
 
 ### Fixed
 
-- **OpenSpec all-workflows installation**: `OpenSuper init` now writes the all-workflows config directly to the platform-specific default config path (`%APPDATA%\openspec\` on Windows, `$XDG_CONFIG_HOME/openspec/` on macOS/Linux when set, otherwise `~/.config/openspec/`) in addition to the isolated `XDG_CONFIG_HOME` env override, ensuring all 11 OpenSpec workflows are always installed regardless of the user's previous OpenSpec config state.
+- **OpenSpec all-workflows installation**: `opensuper init` now writes the all-workflows config directly to the platform-specific default config path (`%APPDATA%\openspec\` on Windows, `$XDG_CONFIG_HOME/openspec/` on macOS/Linux when set, otherwise `~/.config/openspec/`) in addition to the isolated `XDG_CONFIG_HOME` env override, ensuring all 11 OpenSpec workflows are always installed regardless of the user's previous OpenSpec config state.
 
 ## What's Changed [0.3.2] - 2026-05-27
 
 ### Added
 
-- **Script discovery helper**: New `OpenSuper-env.sh` centralizes script path resolution by sourcing sibling scripts from its own directory, replacing the scattered `OpenSuper_SEARCH_ROOTS` find logic across all English and Chinese skills.
+- **Script discovery helper**: New `opensuper-env.sh` centralizes script path resolution by sourcing sibling scripts from its own directory, replacing the scattered `OPENSUPER_SEARCH_ROOTS` find logic across all English and Chinese skills.
 - **OpenCode global config directory**: OpenCode platform now supports a separate `globalSkillsDir` (`.config/opencode`) for global installs, keeping project and user-level skills distinct.
 - **Command error diagnostics**: New `command-error.ts` module extracts and cleans stderr/stdout from failed shell commands, used by both OpenSpec and Superpowers install paths to surface actionable failure details.
 
@@ -310,20 +976,20 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 - **Build decision-point wording**: Strengthened the build skill's workspace-isolation and execution-method selection wording so agents cannot choose on behalf of the user based on recommendation rules.
 - **Hotfix/Tweak upgrade wording**: Reworded upgrade-condition and verification-failure pause requirements in hotfix and tweak skills for clearer blocking semantics.
-- **OpenSuper user decision numbering**: Fixed out-of-sequence numbering in the Chinese OpenSuper skill's user decision point list.
+- **OpenSuper user decision numbering**: Fixed out-of-sequence numbering in the Chinese opensuper skill's user decision point list.
 
 ### Fixed
 
-- **OpenSpec workflow installation**: `OpenSuper init` now runs OpenSpec with `--profile custom` and a temporary config that enables all workflows (`propose`, `explore`, `new`, `continue`, `apply`, `ff`, `sync`, `archive`, `bulk-archive`, `verify`, `onboard`), ensuring OpenSuper installs more than the default core workflow set.
-- **OpenCode slash commands**: `OpenSuper init` now generates OpenCode command files (`commands/*.md`) that keep the `/OpenSuper*` command names while embedding the corresponding OpenSuper workflow content, so OpenCode users can invoke `/OpenSuper`, `/OpenSuper-open`, etc. directly.
-- **Lingma Superpowers path**: `OpenSuper init` now keeps Lingma out of the unsupported `skills --agent lingma` path and copies staged Superpowers skills into `.lingma/skills`, preventing the whole external installer batch from failing while preserving Lingma's expected directory layout.
+- **OpenSpec workflow installation**: `opensuper init` now runs OpenSpec with `--profile custom` and a temporary config that enables all workflows (`propose`, `explore`, `new`, `continue`, `apply`, `ff`, `sync`, `archive`, `bulk-archive`, `verify`, `onboard`), ensuring OpenSuper installs more than the default core workflow set.
+- **OpenCode slash commands**: `opensuper init` now generates OpenCode command files (`commands/*.md`) that keep the `/opensuper*` command names while embedding the corresponding OpenSuper workflow content, so OpenCode users can invoke `/opensuper`, `/opensuper-open`, etc. directly.
+- **Lingma Superpowers path**: `opensuper init` now keeps Lingma out of the unsupported `skills --agent lingma` path and copies staged Superpowers skills into `.lingma/skills`, preventing the whole external installer batch from failing while preserving Lingma's expected directory layout.
 - **Lingma global directory**: Lingma's global skills directory is explicitly `.lingma`, matching `~/.lingma/skills/{skill-name}/SKILL.md` for user-level installs and `.lingma/skills/{skill-name}/SKILL.md` for project installs.
-- **Script discovery safety**: `OpenSuper-env.sh` no longer changes caller shell options when sourced, returns failure when bundled scripts are missing, and avoids ShellCheck unreachable-command diagnostics.
-- **OpenSuper-state.sh field whitelist**: Added `created_at` and `base_ref` to the `cmd_set` allowed fields list, aligning validation with fields already written during `.OpenSuper.yaml` initialization.
+- **Script discovery safety**: `opensuper-env.sh` no longer changes caller shell options when sourced, returns failure when bundled scripts are missing, and avoids ShellCheck unreachable-command diagnostics.
+- **opensuper-state.sh field whitelist**: Added `created_at` and `base_ref` to the `cmd_set` allowed fields list, aligning validation with fields already written during `.opensuper.yaml` initialization.
 
 ### Tests
 
-- **Script discovery coverage**: Added tests verifying `OpenSuper-env.sh` exports all bundled script paths and that no skill file inlines `OpenSuper_SEARCH_ROOTS`.
+- **Script discovery coverage**: Added tests verifying `opensuper-env.sh` exports all bundled script paths and that no skill file inlines `OPENSUPER_SEARCH_ROOTS`.
 - **Script discovery safety**: Added regression coverage for sourced shell option preservation and expandable `$HOME` skill-directory globs.
 - **OpenCode OpenSuper detection**: Added tests for OpenCode requiring both skill directories and matching command files before reporting OpenSuper as installed.
 - **OpenCode E2E init**: Added end-to-end tests for OpenCode project and global scope installs, including command file generation.
@@ -331,25 +997,25 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 - **English workflow safeguards**: Added parity tests matching the existing Chinese workflow decision-point requirements.
 - **OpenSpec profile and diagnostics**: Added tests for custom profile creation, `--profile custom` flag, and stderr/stdout detail printing on install failures.
 - **Lingma Superpowers fallback**: Added regression coverage that Lingma is excluded from the unsupported skills CLI agent list and uses a staging install before copying skills to `.lingma`.
-- **Lingma global install path**: Added regression coverage for `OpenSuper init --scope global` installing Lingma OpenSuper skills under the user `.lingma/skills` directory.
+- **Lingma global install path**: Added regression coverage for `opensuper init --scope global` installing Lingma OpenSuper skills under the user `.lingma/skills` directory.
 
 ## What's Changed [0.3.1] - 2026-05-26
 
 ### Added
 
-- **Workflow state metadata**: `.OpenSuper.yaml` initialization now records `base_ref` and `created_at` so scale assessment and validation can reason from a stable change baseline.
+- **Workflow state metadata**: `.opensuper.yaml` initialization now records `base_ref` and `created_at` so scale assessment and validation can reason from a stable change baseline.
 
 ### Changed
 
 - **OpenSuper decision points**: Clarified Chinese and English workflow skills so design confirmation, build configuration, verification failures, spec drift, branch handling, and preset upgrades pause for explicit user choice instead of relying on defaults or recommendations.
 - **Build workflow selection**: Combined workspace isolation and execution-method selection into one build configuration step, reducing repeated pauses while still requiring `isolation` and `build_mode` before implementation can continue.
 - **Hotfix verification flow**: Moved root-cause elimination before the build guard and requires preset upgrades to switch `workflow` to `full`, keeping failed hotfix checks in the build phase and full-flow upgrades in a consistent state.
-- **Verification scale assessment**: Scale checks now fall back to `.OpenSuper.yaml` `base_ref` and use a four-file threshold for full verification, making committed build changes less likely to be undercounted.
+- **Verification scale assessment**: Scale checks now fall back to `.opensuper.yaml` `base_ref` and use a four-file threshold for full verification, making committed build changes less likely to be undercounted.
 - **English skill parity**: Synced English OpenSuper skills with the Chinese workflow rules, including handoff generation, dirty-worktree handling, spec drift decisions, and verification failure blocking.
 
 ### Fixed
 
-- **Windows npm update**: `OpenSuper update` now spawns npm through the shell so the package update path works reliably with Windows command shims.
+- **Windows npm update**: `opensuper update` now spawns npm through the shell so the package update path works reliably with Windows command shims.
 - **Superpowers install diagnostics**: Failed Superpowers installs now print cleaned stderr details, making network or GitHub access failures visible instead of hiding the actionable cause.
 
 ### Tests
@@ -360,28 +1026,28 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Added
 
-- **Dirty worktree recovery protocol**: Added shared English and Chinese `OpenSuper/reference/dirty-worktree.md` references so agents consistently protect, inspect, and attribute user or mixed-source working tree changes during resume
+- **Dirty worktree recovery protocol**: Added shared English and Chinese `opensuper/reference/dirty-worktree.md` references so agents consistently protect, inspect, and attribute user or mixed-source working tree changes during resume
 
 ### Changed
 
-- **OpenSuper resume behavior**: Updated `/OpenSuper`, build, verify, hotfix, and tweak skills so manual code edits made during interruptions are treated as code evidence, not automatic state transitions; agents must attribute dirty worktree changes before continuing or advancing guards
+- **OpenSuper resume behavior**: Updated `/opensuper`, build, verify, hotfix, and tweak skills so manual code edits made during interruptions are treated as code evidence, not automatic state transitions; agents must attribute dirty worktree changes before continuing or advancing guards
 
 ### Fixed
 
-- **Reference skill installation**: Added the dirty worktree reference file to the OpenSuper manifest so installed English and Chinese skill sets can resolve `OpenSuper/reference/dirty-worktree.md`
+- **Reference skill installation**: Added the dirty worktree reference file to the OpenSuper manifest so installed English and Chinese skill sets can resolve `opensuper/reference/dirty-worktree.md`
 
 ## What's Changed [0.2.9] - 2026-05-24
 
 ### Changed
 
 - **Antigravity skill paths**: Updated platform handling so project-scope installs use `.agents/skills` while global installs use Antigravity's `.gemini/antigravity/skills` location, keeping `init`, `doctor`, and `update` aligned with Antigravity's directory model
-- **README information architecture**: Reworked English and Chinese README sections so command details, platform lists, skill tables, script tables, `.OpenSuper.yaml` fields, and reliability notes are available in collapsible reference panels
+- **README information architecture**: Reworked English and Chinese README sections so command details, platform lists, skill tables, script tables, `.opensuper.yaml` fields, and reliability notes are available in collapsible reference panels
 - **Spec lifecycle documentation**: Expanded the README explanation of OpenSuper's Spec lifecycle management, including OpenSpec/Superpowers artifact linking, automated handoff, state updates, validation, and archive sync
 - **Security guidance location**: Moved repository maintenance security notes from README into `CONTRIBUTING.md`, keeping the README focused on user-facing OpenSuper concepts and setup
 
 ### Fixed
 
-- **Antigravity global installs**: Fixed `OpenSuper init --scope global` and related health checks so Antigravity no longer installs or searches global skills under the project-style `.agents` directory
+- **Antigravity global installs**: Fixed `opensuper init --scope global` and related health checks so Antigravity no longer installs or searches global skills under the project-style `.agents` directory
 - **Missing skills directories**: Added explicit existence checks before scanning project and global skills directories, keeping detection and update logic robust when platform directories exist without `skills/`
 
 ### Tests
@@ -393,46 +1059,32 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Added
 
-- **Design handoff script**: New `OpenSuper-handoff.sh` generates deterministic, source-traceable context packages (compact or full mode) from OpenSpec artifacts into `.OpenSuper/handoff/`, recording `handoff_context` and `handoff_hash` in `.OpenSuper.yaml`
-- **Handoff guard checks**: Design phase guard now validates handoff context existence, hash freshness (detects post-handoff OpenSpec mutations), markdown traceability markers, and design doc frontmatter fields (`OpenSuper_change`, `role: technical-design`, `canonical_spec: openspec`)
-- **`handoff_context` and `handoff_hash` fields**: New `.OpenSuper.yaml` fields for tracking script-generated handoff packages, with schema validation (path existence, sha256 hex digest format)
-- **`OpenSuper init --scope`**: New `--scope <global|project>` CLI flag for non-interactive scope selection
-- **CI init E2E job**: GitHub Actions now runs real `OpenSuper init` on Ubuntu, macOS, and Windows, verifying OpenSuper skills, Superpowers, OpenSpec, and working directories land in correct filesystem locations for both project and global scope
-
-## What's Changed [0.2.8] - 2026-06-09
+- **Design handoff script**: New `opensuper-handoff.sh` generates deterministic, source-traceable context packages (compact or full mode) from OpenSpec artifacts into `.opensuper/handoff/`, recording `handoff_context` and `handoff_hash` in `.opensuper.yaml`
+- **Handoff guard checks**: Design phase guard now validates handoff context existence, hash freshness (detects post-handoff OpenSpec mutations), markdown traceability markers, and design doc frontmatter fields (`opensuper_change`, `role: technical-design`, `canonical_spec: openspec`)
+- **`handoff_context` and `handoff_hash` fields**: New `.opensuper.yaml` fields for tracking script-generated handoff packages, with schema validation (path existence, sha256 hex digest format)
+- **`opensuper init --scope`**: New `--scope <global|project>` CLI flag for non-interactive scope selection
+- **CI init E2E job**: GitHub Actions now runs real `opensuper init` on Ubuntu, macOS, and Windows, verifying OpenSuper skills, Superpowers, OpenSpec, and working directories land in correct filesystem locations for both project and global scope
 
 ### Changed
 
-- **Output language contract**: Chinese OpenSuper skills now require Chinese prose for generated workflow documents, including proposal/design/tasks, delta specs, Design Docs, Plans, verification reports, and archive notes; English skills declare the corresponding English default
-- **External skill handoff**: OpenSuper now passes explicit output-language requirements when invoking OpenSpec and Superpowers skills so the selected OpenSuper language controls generated document prose
-- **README CLI docs**: English and Chinese READMEs now document that `init` / `update --language` controls the default prose language for OpenSuper-generated documents
-
-### Tests
-
-- Added static coverage to ensure all OpenSuper skills declare an output-language contract and external skill handoffs include language requirements
-
-## What's Changed [0.2.7] - 2026-06-09
-
-### Changed
-
-- **Chinese skill docs updated**: `OpenSuper-design/SKILL.md` and `OpenSuper/SKILL.md` now document the handoff flow, replacing agent-authored summaries with script-generated context packs
-- **JSON generation uses process substitution**: `write_json_context` in `OpenSuper-handoff.sh` uses `< <(source_files)` instead of pipe subshell, fixing variable scoping
-- **Error message formatting**: `OpenSuper-state.sh` unknown-field error message split from a single 270+ character line into multiple lines for readability
-- **CLAUDE.md and AGENTS.md**: Added project-level instructions covering test commands, shell script conventions, script dependency graph, `.OpenSuper.yaml` state machine sync rules, and changelog format
+- **Chinese skill docs updated**: `opensuper-design/SKILL.md` and `opensuper/SKILL.md` now document the handoff flow, replacing agent-authored summaries with script-generated context packs
+- **JSON generation uses process substitution**: `write_json_context` in `opensuper-handoff.sh` uses `< <(source_files)` instead of pipe subshell, fixing variable scoping
+- **Error message formatting**: `opensuper-state.sh` unknown-field error message split from a single 270+ character line into multiple lines for readability
+- **CLAUDE.md and AGENTS.md**: Added project-level instructions covering test commands, shell script conventions, script dependency graph, `.opensuper.yaml` state machine sync rules, and changelog format
 
 ### Fixed
 
-- **YAML and frontmatter parsing**: OpenSuper scripts now ignore unquoted trailing comments in `.OpenSuper.yaml` field values and accept Design Doc frontmatter after a UTF-8 BOM or leading blank lines, preventing false guard and handoff failures
-- **Init E2E install checks**: CI now verifies OpenSuper-owned skill artifacts in every supported platform directory and checks OpenSpec/Superpowers installer status from `OpenSuper init --json` for both project and global installs, avoiding false failures from external CLI-specific directory layouts
+- **YAML and frontmatter parsing**: OpenSuper scripts now ignore unquoted trailing comments in `.opensuper.yaml` field values and accept Design Doc frontmatter after a UTF-8 BOM or leading blank lines, preventing false guard and handoff failures
+- **Init E2E install checks**: CI now verifies OpenSuper-owned skill artifacts in every supported platform directory and checks OpenSpec/Superpowers installer status from `opensuper init --json` for both project and global installs, avoiding false failures from external CLI-specific directory layouts
 - **Windows global init E2E home directory**: CI now sets `USERPROFILE` alongside `HOME` for global-scope init checks on Windows, matching Node's `os.homedir()` resolution and preventing false missing-skill failures
-- **README state documentation**: README examples now show accurate `.OpenSuper.yaml` build-state defaults, verification evidence timing, handoff fields, and project-only working directory creation
+- **README state documentation**: README examples now show accurate `.opensuper.yaml` build-state defaults, verification evidence timing, handoff fields, and project-only working directory creation
 - **Windows Superpowers init timeout**: Superpowers external installer timeout increased to tolerate slower Windows `npx skills add` runs, reducing flaky init E2E failures
 
 ### Tests
 
 - Added coverage for `--full` handoff mode, missing OpenSpec artifacts rejection, post-handoff hash mismatch detection, and design doc frontmatter validation
-- Added `OpenSuper init` E2E tests covering project scope install, global scope install, skip-existing with `--yes`, overwrite with `--overwrite`, and multi-platform detection
-- Added regression coverage for `.OpenSuper.yaml` trailing comments and Design Doc frontmatter with a UTF-8 BOM or leading blank lines
+- Added `opensuper init` E2E tests covering project scope install, global scope install, skip-existing with `--yes`, overwrite with `--overwrite`, and multi-platform detection
+- Added regression coverage for `.opensuper.yaml` trailing comments and Design Doc frontmatter with a UTF-8 BOM or leading blank lines
 - Added CI workflow regression coverage for project and global installation checks across OpenSuper-owned files and external OpenSpec/Superpowers installer statuses
 - Added CI workflow regression coverage for Windows global init using the temporary `USERPROFILE` home directory
 - Added regression coverage for the longer Superpowers installer timeout used by init
@@ -441,7 +1093,7 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Fixed
 
-- **OpenSpec global init**: `OpenSuper init` global scope now passes the home directory as OpenSpec's init target instead of using the unsupported `openspec init --global` flag
+- **OpenSpec global init**: `opensuper init` global scope now passes the home directory as OpenSpec's init target instead of using the unsupported `openspec init --global` flag
 - **Cross-platform path quoting**: OpenSpec init targets are shell-quoted for Windows, macOS, and Linux paths, including home directories with spaces
 - **Installer argument quoting**: OpenSpec `--tools` values and Superpowers `--agent` values are now shell-quoted, and Windows OpenSpec paths preserve trailing backslashes before the closing quote
 - **Superpowers multi-platform install**: Superpowers installation now passes repeated `--agent` flags instead of a comma-separated agent list, matching the `skills` CLI behavior
@@ -458,9 +1110,9 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Added
 
-- **Build decision enforcement**: Build guard and `OpenSuper-state.sh transition build-complete` now require `isolation` and `build_mode` before moving from build to verify
+- **Build decision enforcement**: Build guard and `opensuper-state.sh transition build-complete` now require `isolation` and `build_mode` before moving from build to verify
 - **Direct mode override**: Full workflows must set `direct_override: true` before using `build_mode: direct`; hotfix/tweak remain allowed by default
-- **Configurable guard commands**: Guard scripts now read `build_command` and `verify_command` from the change `.OpenSuper.yaml` or repo-root OpenSuper config before falling back to auto-detected build commands
+- **Configurable guard commands**: Guard scripts now read optional custom guard commands before falling back to auto-detected build commands
 - **Archive diff preview**: Archive sync prints a unified diff before overwriting an existing main spec when it differs from the delta spec
 - **Cross-platform script smoke CI**: Added Ubuntu, macOS, and Windows smoke coverage for OpenSuper shell scripts and portable shell tests
 - **Shell line-ending policy**: Added `.gitattributes` rules to keep shell and Bats scripts on LF endings
@@ -474,11 +1126,11 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 
 ### Fixed
 
-- **macOS shell script state updates**: Replaced GNU-only `sed -i` writes in `OpenSuper-state.sh` with portable temp-file updates, fixing macOS CI failures during `scale`, `transition`, and YAML field updates
+- **macOS shell script state updates**: Replaced GNU-only `sed -i` writes in `opensuper-state.sh` with portable temp-file updates, fixing macOS CI failures during `scale`, `transition`, and YAML field updates
 - **Optional field reads under pipefail**: Guard and state scripts now tolerate missing optional YAML fields without exiting early under `set -euo pipefail`
 - **Bash detection fallback**: Shell test helpers now handle failed `bash` probes without crashing on empty `spawnSync` output
-- **Configured command persistence**: `OpenSuper-state.sh set` now escapes sed replacement metacharacters so command values containing `&`, `|`, or backslashes are preserved
-- **Optional schema fields**: YAML validation now recognizes `direct_override`, `build_command`, and `verify_command`
+- **Configured command persistence**: `opensuper-state.sh set` now escapes sed replacement metacharacters so command values containing `&`, `|`, or backslashes are preserved
+- **Optional schema fields**: YAML validation now recognizes direct-mode override and optional custom guard command fields
 - **Quoted YAML values**: State, guard, and validator scripts now strip only wrapping quotes instead of deleting all quote characters from values
 
 ### Tests
@@ -490,24 +1142,24 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 ### Added
 
 - **PR title lint workflow**: Added GitHub Actions validation for semantic PR titles with OpenSuper-specific scopes (`cli`, `commands`, `core`, `skills`, `assets`, `scripts`, `docs`, `ci`, `deps`, `release`)
-- **Structured JSON output**: `OpenSuper init --json` and `OpenSuper update --json` now emit machine-readable results instead of mixed human logs
-- **`doctor --scope`**: `OpenSuper doctor` can diagnose `auto`, `project`, or `global` scope, with `auto` checking both project and global installs
-- **Next-step status hint**: `OpenSuper status` now reports the next workflow command (`/OpenSuper-open`, `/OpenSuper-design`, `/OpenSuper-build`, `/OpenSuper-verify`, `/OpenSuper-archive`) in text and JSON output
+- **Structured JSON output**: `opensuper init --json` and `opensuper update --json` now emit machine-readable results instead of mixed human logs
+- **`doctor --scope`**: `opensuper doctor` can diagnose `auto`, `project`, or `global` scope, with `auto` checking both project and global installs
+- **Next-step status hint**: `opensuper status` now reports the next workflow command (`/opensuper-open`, `/opensuper-design`, `/opensuper-build`, `/opensuper-verify`, `/opensuper-archive`) in text and JSON output
 - **README asset guard**: Added tests and prepublish validation to keep README images on npm-friendly absolute URLs
 
 ### Changed
 
-- **`OpenSuper update` preserves installed context**: Update now detects existing OpenSuper skill targets across project/global scopes, preserves installed scope, detects Chinese vs English skills, and updates only platforms where OpenSuper skills are already installed
-- **`OpenSuper update` self-updates npm package**: Update now prints and runs the matching npm update command for the detected package scope before refreshing installed skills
+- **`opensuper update` preserves installed context**: Update now detects existing OpenSuper skill targets across project/global scopes, preserves installed scope, detects Chinese vs English skills, and updates only platforms where OpenSuper skills are already installed
+- **`opensuper update` self-updates npm package**: Update now prints and runs the matching npm update command for the detected package scope before refreshing installed skills
 - **Friendlier update output**: Update logs the npm command, per-target skill copy command, final npm status, updated target count, scope, and language summary
-- **Init overwrite flow**: Interactive `OpenSuper init` now offers a bulk overwrite/skip choice when multiple existing components are detected on the same platform
+- **Init overwrite flow**: Interactive `opensuper init` now offers a bulk overwrite/skip choice when multiple existing components are detected on the same platform
 - **CLI option validation**: `update --language`, `update --scope`, and `doctor --scope` now validate accepted values through Commander choices
 - **README CLI docs**: Updated English and Chinese README command sections to document JSON output, doctor scope, update behavior, status next-step hints, and init overwrite behavior
 - **CONTRIBUTING link**: Added contribution guide references to both English and Chinese README development sections
 
 ### Fixed
 
-- **Doctor false positives**: `OpenSuper doctor` now recognizes current `.OpenSuper.yaml` fields including `verification_report` and `branch_status`
+- **Doctor false positives**: `opensuper doctor` now recognizes current `.opensuper.yaml` fields including `verification_report` and `branch_status`
 - **npm README images**: README images now use absolute GitHub URLs so package pages can render them
 
 ### Tests
@@ -519,60 +1171,60 @@ All notable changes to @pzy560117/opensuper will be documented in this file.
 ### Added
 
 - **Verification evidence enforcement**: `verify-pass` transition now requires `verification_report` (file must exist) and `branch_status: handled` before allowing phase advance. Guard checks these as hard prerequisites
-- **`verification_report` and `branch_status` fields** in `.OpenSuper.yaml`: New state fields track verification report path and branch handling status
-- **Verification evidence step** in OpenSuper-verify (zh): New Step 4 requiring report file creation and branch status recording before guard apply
-- **`branch_status` enum validation**: `OpenSuper-state.sh set` validates `branch_status` as `pending` or `handled`
-- **Guard verify checks**: `OpenSuper-guard.sh` now checks `verification_report exists` and `branch_status=handled` during verify phase
+- **`verification_report` and `branch_status` fields** in `.opensuper.yaml`: New state fields track verification report path and branch handling status
+- **Verification evidence step** in opensuper-verify (zh): New Step 4 requiring report file creation and branch status recording before guard apply
+- **`branch_status` enum validation**: `opensuper-state.sh set` validates `branch_status` as `pending` or `handled`
+- **Guard verify checks**: `opensuper-guard.sh` now checks `verification_report exists` and `branch_status=handled` during verify phase
 - **Bats test CRLF fix**: Shell tests strip `\r` from scripts before execution, fixing Windows compatibility
 - **`test:shell` runner**: Replaced direct `bats` call with `node scripts/run-bats.js` for cross-platform support
 
 ### Changed
 
-- **Hotfix root cause check reordered**: Moved root cause elimination check **before** OpenSuper-verify loading (Step 3a → 3b split), preventing it from being skipped during verify flow
+- **Hotfix root cause check reordered**: Moved root cause elimination check **before** opensuper-verify loading (Step 3a �?3b split), preventing it from being skipped during verify flow
 - **Hotfix header description simplified**: Replaced ambiguous "not a separate parallel process" with direct "Quick bug fix workflow" for standalone invocation clarity
-- **Removed non-action steps from OpenSuper-design**: Deleted Step 3 (Dual Spec Division table) and Step 4 (Document Hierarchy) — pure reference material with no agent actions
-- **Removed duplicate script location blocks**: OpenSuper-open (Step 3) and OpenSuper-archive (Step 1) no longer repeat the full `OpenSuper_SEARCH_ROOTS` find block when variables already cached
-- **Removed duplicate 50% threshold in OpenSuper-build**: Single mention in threshold determination table instead of table + bullet repetition
-- **Generic error handling**: Error table in OpenSuper main skill changed "Maven compile/test" → "Build/test" for language-agnostic wording
-- **OpenSuper-state.sh usage help**: Fixed `check` parameter order in help text (`check <change-name> <phase>`)
+- **Removed non-action steps from opensuper-design**: Deleted Step 3 (Dual Spec Division table) and Step 4 (Document Hierarchy) �?pure reference material with no agent actions
+- **Removed duplicate script location blocks**: opensuper-open (Step 3) and opensuper-archive (Step 1) no longer repeat the full `OPENSUPER_SEARCH_ROOTS` find block when variables already cached
+- **Removed duplicate 50% threshold in opensuper-build**: Single mention in threshold determination table instead of table + bullet repetition
+- **Generic error handling**: Error table in opensuper main skill changed "Maven compile/test" �?"Build/test" for language-agnostic wording
+- **opensuper-state.sh usage help**: Fixed `check` parameter order in help text (`check <change-name> <phase>`)
 
 ### Fixed
 
-- **OpenSuper-state.sh `init` change directory resolution**: `cmd_init` now resolves `change_dir` before checking if `.OpenSuper.yaml` already exists, fixing path resolution for nested directories
+- **opensuper-state.sh `init` change directory resolution**: `cmd_init` now resolves `change_dir` before checking if `.opensuper.yaml` already exists, fixing path resolution for nested directories
 - **Guard deadlock on verify**: `verify-pass` transition now resets `verification_report` and `branch_status` when rolling back via `verify-fail`, preventing stale evidence from allowing false transitions
 
 ### Tests
 
-- **+66 lines** in `OpenSuper-scripts.test.ts`: New tests for verification evidence blocking, branch status validation, and guard verify with evidence
-- **+12 lines** in `OpenSuper-state.bats`: New tests for `branch_status` enum validation, CRLF stripping, and new field presence in init output
+- **+66 lines** in `opensuper-scripts.test.ts`: New tests for verification evidence blocking, branch status validation, and guard verify with evidence
+- **+12 lines** in `opensuper-state.bats`: New tests for `branch_status` enum validation, CRLF stripping, and new field presence in init output
 
 ## What's Changed [0.2.3] - 2026-05-19
 
 ### Added
 
-- **"Why OpenSuper" section**: README now explains the rationale behind OpenSuper — how it combines OpenSpec's WHAT management with Superpowers' HOW execution into a unified 5-phase pipeline
+- **"Why OpenSuper" section**: README now explains the rationale behind OpenSuper �?how it combines OpenSpec's WHAT management with Superpowers' HOW execution into a unified 5-phase pipeline
 - **"Screenshots" section**: Added three screenshots demonstrating platform selection, initialization, and skill execution in action
 - **"What You'll Learn" section**: New section showcasing OpenSuper as a reference for stable nested skill triggering and multi-phase auto-flow patterns
-- **State Management YAML example**: Extended documentation with complete `.OpenSuper.yaml` field example showing all key configuration values
+- **State Management YAML example**: Extended documentation with complete `.opensuper.yaml` field example showing all key configuration values
 
 ### Changed
 
-- **OpenSuper-build skill description**: Clarified that execution mode (subagent vs executing-plans) is user-selectable based on task complexity, not always subagent-driven
+- **opensuper-build skill description**: Clarified that execution mode (subagent vs executing-plans) is user-selectable based on task complexity, not always subagent-driven
 - **Enhanced State Management docs**: Added explanation of how all states and phases are updated via scripts with completion validation before phase transitions
 
 ## What's Changed [0.2.2] - 2026-05-18
 
 ### Fixed
 
-- **Ctrl+Z/Ctrl+C crash during `OpenSuper init`**: Wrapped inquirer prompts in try/catch to handle `ExitPromptError`, showing `Cancelled.` and exiting cleanly instead of printing a raw stack trace
-- **Duplicate Superpowers installation**: `OpenSuper init` now detects Superpowers installed via Claude Code plugin system (`~/.claude/plugins/cache/`), skipping redundant `npx skills add` when Superpowers plugin is already present
+- **Ctrl+Z/Ctrl+C crash during `opensuper init`**: Wrapped inquirer prompts in try/catch to handle `ExitPromptError`, showing `Cancelled.` and exiting cleanly instead of printing a raw stack trace
+- **Duplicate Superpowers installation**: `opensuper init` now detects Superpowers installed via Claude Code plugin system (`~/.claude/plugins/cache/`), skipping redundant `npx skills add` when Superpowers plugin is already present
 
 ## What's Changed [0.2.1] - 2026-05-18
 
 ### Fixed
 
 - **CI pnpm version**: Added `packageManager` field for pnpm/action-setup v4
-- **Shell scripts**: Fixed `SCRIPT_DIR` typo, renamed `maven_compiles` → `build_passes` (language-agnostic), fixed `check_nonempty` path bug, fixed `cmd_set` sed delimiter for path values, corrected shellcheck directive placement
+- **Shell scripts**: Fixed `SCRIPT_DIR` typo, renamed `maven_compiles` �?`build_passes` (language-agnostic), fixed `check_nonempty` path bug, fixed `cmd_set` sed delimiter for path values, corrected shellcheck directive placement
 - **Node version**: Bumped minimum to Node 20 (vitest v4 coverage requires `node:inspector/promises`)
 
 ## What's Changed [0.2.0] - 2026-05-18
@@ -584,14 +1236,14 @@ OpenSuper 0.2.0 is a comprehensive optimization release: skill reliability, CLI 
 - **SKILL.md two-zone structure**: All 8 skills split into "Decision Core" (phase detection, upgrade criteria, error handling) and "Reference Appendix" (field reference, scripts, best practices)
 - **Quantified upgrade criteria**: Hotfix/tweak now define explicit thresholds for upgrading to full workflow (file count, cross-module coordination, architecture changes, etc.)
 - **Script location caching**: All skills use `${VAR:-$(find ...)}` env-var cache pattern, avoiding repeated `find` calls
-- **`manifest.json` fixed**: Added missing `OpenSuper-state.sh` and `OpenSuper-archive.sh` entries
-- **`OpenSuper-state.sh init` fixed**: Now writes `workflow` field to `.OpenSuper.yaml`, fixing `check design` which always failed
+- **`manifest.json` fixed**: Added missing `opensuper-state.sh` and `opensuper-archive.sh` entries
+- **`opensuper-state.sh init` fixed**: Now writes `workflow` field to `.opensuper.yaml`, fixing `check design` which always failed
 
 ### CLI Commands
 
-- **`OpenSuper status`**: Show active changes with phase, task progress, workflow mode, design doc, and plan (`--json` supported)
-- **`OpenSuper doctor`**: Diagnose installation health — OpenSpec CLI, working directories, skill completeness per platform, script presence, `.OpenSuper.yaml` validity (`--json` supported)
-- **`OpenSuper update`**: Update OpenSuper skill files to latest version from npm package (`--language`, `--scope` supported)
+- **`opensuper status`**: Show active changes with phase, task progress, workflow mode, design doc, and plan (`--json` supported)
+- **`opensuper doctor`**: Diagnose installation health �?OpenSpec CLI, working directories, skill completeness per platform, script presence, `.opensuper.yaml` validity (`--json` supported)
+- **`opensuper update`**: Update opensuper skill files to latest version from npm package (`--language`, `--scope` supported)
 - **`--json` on all commands**: `init`, `status`, `doctor`, `update` all accept structured output
 
 ### Engineering
@@ -607,58 +1259,62 @@ OpenSuper 0.2.0 is a comprehensive optimization release: skill reliability, CLI 
 
 ### Added
 
-- **`OpenSuper-state.sh` script**: Unified state management with 5 subcommands — `init` (create .OpenSuper.yaml), `set` (update with enum validation), `get` (read field), `check` (entry verification), `scale` (verification mode assessment)
+- **`opensuper-state.sh` script**: Unified state management with 5 subcommands �?`init` (create .opensuper.yaml), `set` (update with enum validation), `get` (read field), `check` (entry verification), `scale` (verification mode assessment)
 - **`check` subcommand**: Scripted entry verification replacing text checklists in all 8 skills
-- **`scale` subcommand**: Scripted scale assessment replacing prose decision rules in OpenSuper-verify
+- **`scale` subcommand**: Scripted scale assessment replacing prose decision rules in opensuper-verify
 
 ### Changed
 
-- **All `.OpenSuper.yaml` writes go through `OpenSuper-state.sh`**: No more raw `sed -i` — enum validation on every field write
+- **All `.opensuper.yaml` writes go through `opensuper-state.sh`**: No more raw `sed -i` �?enum validation on every field write
 - **All skill Step 0 checklists replaced with `check` subcommand**: Single command replaces text-based entry verification
-- **`OpenSuper-guard.sh` and `OpenSuper-archive.sh` use state.sh internally**: All state mutations through unified interface
+- **`opensuper-guard.sh` and `opensuper-archive.sh` use state.sh internally**: All state mutations through unified interface
 - **Removed write-verification blocks**: hotfix and tweak presets no longer have manual verification loops
 
 ## What's Changed [0.1.7] - 2026-05-16
 
 ### Added
 
-- **`OpenSuper-archive.sh` script**: One-command archive automation — validates entry state, syncs delta specs to main specs (overwrite), annotates design doc and plan frontmatter, moves change to archive directory, updates `archived: true`. Supports `--dry-run` for preview
-- **`--apply` mode for `OpenSuper-guard.sh`**: Opt-in flag that auto-updates `.OpenSuper.yaml` state fields after all guard checks pass. No manual state editing required during phase transitions
+- **`opensuper-archive.sh` script**: One-command archive automation �?validates entry state, syncs delta specs to main specs (overwrite), annotates design doc and plan frontmatter, moves change to archive directory, updates `archived: true`. Supports `--dry-run` for preview
+- **`--apply` mode for `opensuper-guard.sh`**: Opt-in flag that auto-updates `.opensuper.yaml` state fields after all guard checks pass. No manual state editing required during phase transitions
 - **Idempotent frontmatter annotation**: `annotate_frontmatter()` skips existing `archived-with:` lines, safe to re-run
 
 ### Changed
 
-- **Removed manual state editing**: All phase transitions (design → build → verify → archive) now use `guard --apply` instead of manual `.OpenSuper.yaml` field updates and write-verification loops
-- **Removed write-verification blocks**: Eliminated all `【写入验证】` / `【Write verification】` patterns from OpenSuper-open, OpenSuper-design, OpenSuper-build, OpenSuper-verify, and OpenSuper-archive skills
+- **Removed manual state editing**: All phase transitions (design �?build �?verify �?archive) now use `guard --apply` instead of manual `.opensuper.yaml` field updates and write-verification loops
+- **Removed write-verification blocks**: Eliminated all `【写入验证】` / `【Write verification】` patterns from opensuper-open, opensuper-design, opensuper-build, opensuper-verify, and opensuper-archive skills
 - **Removed `## ADDED`/`## MODIFIED`/`## REMOVED` delta format**: Delta specs are now complete specs; archive overwrites main spec instead of merging fragments
-- **Removed step 2b from OpenSuper-open**: Incremental modification of existing capabilities is just a new `/OpenSuper-open` — brainstorming reads existing specs as context naturally
-- **Simplified archive skill**: Steps 1b–5 replaced with single `OpenSuper-archive.sh` call
-- **Updated `OpenSuper/SKILL.md`**: Script location section now documents both `--apply` mode and archive script
+- **Removed step 2b from opensuper-open**: Incremental modification of existing capabilities is just a new `/opensuper-open` �?brainstorming reads existing specs as context naturally
+- **Simplified archive skill**: Steps 1b�? replaced with single `opensuper-archive.sh` call
+- **Updated `opensuper/SKILL.md`**: Script location section now documents both `--apply` mode and archive script
+
+### Tests
+
+- **Skill bootstrap coverage**: Updated the Skill documentation tests to accept either inline OpenSuper bootstrap blocks or delegated opensuper/reference/scripts.md references, while still checking the safe opensuper-env.mjs lookup and HOME glob behavior when a Skill keeps the bootstrap inline.
 
 ### Removed
 
 - Few-shot YAML examples for `isolation`, `build_mode`, `verify_mode` fields (redundant with agent judgment)
-- `openspec-archive-change` skill dependency from OpenSuper-archive (archive script handles all steps)
+- `openspec-archive-change` skill dependency from opensuper-archive (archive script handles all steps)
 
 ## What's Changed [0.1.6] - 2026-05-16
 
 ### Added
 
-- **Workspace Isolation Selection**: `OpenSuper-build` now prompts users to choose between creating a branch or a worktree before execution begins (Step 3: Workspace Isolation)
-- **`isolation` field in `.OpenSuper.yaml`**: New required field (`branch` or `worktree`) to record the user's workspace isolation choice
-- **`isolation` enum validation**: `OpenSuper-yaml-validate.sh` now validates `isolation` as a required field with allowed values `branch`/`worktree`
+- **Workspace Isolation Selection**: `opensuper-build` now prompts users to choose between creating a branch or a worktree before execution begins (Step 3: Workspace Isolation)
+- **`isolation` field in `.opensuper.yaml`**: New required field (`branch` or `worktree`) to record the user's workspace isolation choice
+- **`isolation` enum validation**: `opensuper-yaml-validate.sh` now validates `isolation` as a required field with allowed values `branch`/`worktree`
 
 ### Changed
 
-- `OpenSuper-build` step numbering: Step 3 (Select Execution Method) → Step 4, Step 4 (Spec Incremental Updates) → Step 5
+- `opensuper-build` step numbering: Step 3 (Select Execution Method) �?Step 4, Step 4 (Spec Incremental Updates) �?Step 5
 - Hotfix and tweak presets default to `isolation: branch` without prompting
-- `OpenSuper-yaml-validate.sh` `REQUIRED_FIELDS` and `KNOWN_KEYS` updated to include `isolation`
+- `opensuper-yaml-validate.sh` `REQUIRED_FIELDS` and `KNOWN_KEYS` updated to include `isolation`
 
 ## What's Changed [0.1.5] - 2026-05-15
 
 ### Added
 
-- **Bilingual OpenSuper skills**: `OpenSuper init` now prompts for language selection (English / 中文) and deploys the corresponding SKILL.md files
+- **Bilingual OpenSuper skills**: `opensuper init` now prompts for language selection (English / 中文) and deploys the corresponding SKILL.md files
 - **Language-aware asset structure**: English skills in `assets/skills/`, Chinese skills in `assets/skills-zh/`
 - **`languages` field in manifest.json**: Maps language IDs to asset directories for future extensibility
 
@@ -672,8 +1328,8 @@ OpenSuper 0.2.0 is a comprehensive optimization release: skill reliability, CLI 
 
 ### Fixed
 
-- **Superpowers redundant project-level install**: `OpenSuper init` now checks the global directories (`~/{platform}/skills/`) of all user-selected platforms before installing Superpowers. If Superpowers is already installed globally for any selected platform, the project-level install is skipped
-- **Unwanted `.agents/` directory creation**: `OpenSuper init` now passes `--agent` flag to `skills add`, targeting only the platforms the user selected. This prevents the skills CLI from auto-detecting and installing to all platforms, which previously created an unnecessary `.agents/` directory
+- **Superpowers redundant project-level install**: `opensuper init` now checks the global directories (`~/{platform}/skills/`) of all user-selected platforms before installing Superpowers. If Superpowers is already installed globally for any selected platform, the project-level install is skipped
+- **Unwanted `.agents/` directory creation**: `opensuper init` now passes `--agent` flag to `skills add`, targeting only the platforms the user selected. This prevents the skills CLI from auto-detecting and installing to all platforms, which previously created an unnecessary `.agents/` directory
 - **OpenSpec global detection**: Same global-directory fallback logic applied to OpenSpec detection, avoiding redundant OpenSpec installs when already present globally for selected platforms
 
 ### Changed
@@ -685,17 +1341,17 @@ OpenSuper 0.2.0 is a comprehensive optimization release: skill reliability, CLI 
 
 ### Added
 
-- **State File Separation**: OpenSuper workflow state now stored in independent `.OpenSuper.yaml` file instead of `.openspec.yaml` subtree
+- **State File Separation**: OpenSuper workflow state now stored in independent `.opensuper.yaml` file instead of `.openspec.yaml` subtree
 - **Three-Layer Reliability Defense**:
   - Entry verification for all phases with `[HARD STOP]` diagnostics
   - Write-then-verify pattern for all state mutations
-  - Schema validator script (`OpenSuper-yaml-validate.sh`) with field, enum, and path validation
+  - Schema validator script (`opensuper-yaml-validate.sh`) with field, enum, and path validation
 - **Path Traversal Protection**: Input validation for change names to prevent directory traversal attacks
 - **Guard Script Integration**: Automatic schema validation during phase transitions
 
 ### Changed
 
-- Updated all 9 OpenSuper skills to use `.OpenSuper.yaml` instead of `.openspec.yaml` OpenSuper: subtree
+- Updated all 9 OpenSuper skills to use `.opensuper.yaml` instead of `.openspec.yaml` opensuper: subtree
 - Improved error messages with specific field values instead of generic placeholders
 - Enhanced project structure documentation
 

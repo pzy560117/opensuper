@@ -1,0 +1,4614 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { spawnSync } from 'child_process';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
+import { parse } from 'yaml';
+
+const { readJsonMock, readFileMock, writeFileMock } = vi.hoisted(() => ({
+  readJsonMock: vi.fn(),
+  readFileMock: vi.fn(),
+  writeFileMock: vi.fn(),
+}));
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>();
+  readFileMock.mockImplementation(actual.readFile);
+  writeFileMock.mockImplementation(actual.writeFile);
+  return { ...actual, readFile: readFileMock, writeFile: writeFileMock };
+});
+
+vi.mock('../../../platform/fs/file-system.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../platform/fs/file-system.js')>();
+  readJsonMock.mockImplementation(actual.readJson);
+  return { ...actual, readJson: readJsonMock };
+});
+
+import {
+  getAssetsDir,
+  readManifest,
+  getManifestSkills,
+  createWorkingDirs,
+  copyOpenSuperSkillsForPlatform,
+  copyOpenSuperRulesForPlatform,
+  installOpenSuperHooksForPlatform,
+  parseProjectConfigOverrides,
+  renderProjectConfig,
+  mergeProjectConfig,
+} from '../../../domains/skill/platform-install.js';
+import {
+  reconcileOpenSuperHooksForPlatform,
+  reconcileProjectOpenSuperHooksForPlatform,
+} from '../../../domains/skill/hook-lifecycle.js';
+import {
+  removeOpenSuperHooksForPlatform,
+  removeOpenSuperRulesForPlatform,
+} from '../../../domains/skill/uninstall.js';
+import { PLATFORMS, type Platform } from '../../../platform/install/platforms.js';
+import {
+  artifactLanguageToSkillLanguage,
+  resolveArtifactLanguage,
+} from '../../../domains/skill/languages.js';
+import { assertClassicLayoutInitializationSafe } from '../../../domains/opensuper-classic/classic-layout-initialization.js';
+import {
+  createNativeChange,
+  writeNativeChange,
+} from '../../../domains/opensuper-native/native-change.js';
+import {
+  defaultProjectConfig,
+  writeProjectConfig,
+} from '../../../domains/opensuper-native/native-config.js';
+import {
+  ensureNativeDirectories,
+  nativeProjectPaths,
+} from '../../../domains/opensuper-native/native-paths.js';
+import { selectNativeChange } from '../../../domains/opensuper-native/native-selection.js';
+
+async function readLinkedSkillSection(
+  entry: string,
+  target: string,
+  skill = 'opensuper-native',
+  languageRoot = 'skills-zh',
+): Promise<string> {
+  expect(entry).toContain(`](${target})`);
+  const [relative, anchor] = target.split('#');
+  const source = await fs.readFile(
+    path.join(getAssetsDir(), languageRoot, skill, relative),
+    'utf8',
+  );
+  const lines = source.split(/\r?\n/u);
+  let fenced = false;
+  let start = -1;
+  let level = 0;
+  for (const [index, line] of lines.entries()) {
+    if (/^\s*```/u.test(line)) fenced = !fenced;
+    if (fenced) continue;
+    const heading = /^(#{1,6})\s+(.+)$/u.exec(line);
+    if (!heading) continue;
+    if (start >= 0 && heading[1].length <= level) return lines.slice(start, index).join('\n');
+    const slug = heading[2]
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+      .replace(/\s/gu, '-');
+    if (slug === anchor) {
+      start = index;
+      level = heading[1].length;
+    }
+  }
+  expect(start, `Missing linked ${skill} section: ${target}`).toBeGreaterThanOrEqual(0);
+  return lines.slice(start).join('\n');
+}
+
+describe('skills', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    readJsonMock.mockReset();
+    readJsonMock.mockImplementation(
+      async (filePath: string) =>
+        JSON.parse(await fs.readFile(filePath, 'utf-8')) as Record<string, unknown>,
+    );
+    readFileMock.mockReset();
+    readFileMock.mockImplementation(fs.readFile);
+    writeFileMock.mockReset();
+    writeFileMock.mockImplementation(fs.writeFile);
+    tmpDir = path.join(
+      os.tmpdir(),
+      `opensuper-skills-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('getAssetsDir', () => {
+    it('returns a path ending with assets', () => {
+      const assetsDir = getAssetsDir();
+      expect(path.basename(assetsDir)).toBe('assets');
+    });
+  });
+
+  describe('readManifest', () => {
+    it('reads and parses the manifest.json', async () => {
+      const manifest = await readManifest();
+      expect(manifest).toHaveProperty('version');
+      expect(manifest).toHaveProperty('skills');
+      expect(Array.isArray(manifest.skills)).toBe(true);
+      expect(manifest.skills.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('language constraints', () => {
+    it('resolves exact artifact language ids and defaults to en when unset', () => {
+      expect(resolveArtifactLanguage('zh-CN').id).toBe('zh-CN');
+      expect(resolveArtifactLanguage('en').id).toBe('en');
+      expect(resolveArtifactLanguage(undefined).id).toBe('en');
+    });
+
+    it('does not re-evaluate applicability after the opensuper skill loads', async () => {
+      const zhContent = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'opensuper', 'SKILL.md'),
+        'utf-8',
+      );
+      const enContent = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'opensuper', 'SKILL.md'),
+        'utf-8',
+      );
+
+      expect(zhContent).toContain(
+        '当用户明确调用 /opensuper，或明确要求使用 OpenSuper 但未指定 Native/Classic 时使用',
+      );
+      expect(zhContent).toContain('此时用户已选择使用 OpenSuper');
+      expect(zhContent).toContain('不再判断是否需要使用 OpenSuper');
+      expect(zhContent).toContain('加载本 Skill 后，立即执行下方步骤');
+      expect(zhContent).toContain('根据返回的 `skill`，立即使用 Skill 工具加载对应入口');
+      expect(zhContent).toContain('两个入口只能加载一个');
+      expect(zhContent).toContain(
+        '**立即执行：** 使用 Skill 工具加载 `opensuper-native` 技能。禁止跳过此步骤。',
+      );
+      expect(zhContent).toContain(
+        '**立即执行：** 使用 Skill 工具加载 `opensuper-classic` 技能。禁止跳过此步骤。',
+      );
+      expect(zhContent).toContain('不得搜索 Skill 文件、扫描平台配置目录或直接调用内部 bundle');
+      expect(zhContent).toContain('加载后，把用户原始请求完整交给该 Skill 执行');
+
+      expect(enContent).toContain(
+        'Use when the user invokes /opensuper or asks to use OpenSuper without choosing Native or Classic',
+      );
+      expect(enContent).toContain('The user has already chosen OpenSuper');
+      expect(enContent).toContain('without reconsidering whether to use it');
+      expect(enContent).toContain('Once this Skill is loaded, immediately follow the steps below');
+      expect(enContent).toContain(
+        'Immediately use the Skill tool to load the entry named by `skill`',
+      );
+      expect(enContent).toContain('Load exactly one entry');
+      expect(enContent).toContain(
+        '**Execute immediately:** Use the Skill tool to load the `opensuper-native` skill. Do not skip this step.',
+      );
+      expect(enContent).toContain(
+        '**Execute immediately:** Use the Skill tool to load the `opensuper-classic` skill. Do not skip this step.',
+      );
+      expect(enContent).toContain("Pass the user's original request unchanged to that Skill");
+    });
+
+    it('routes personal memory through every OpenSuper entry skill', async () => {
+      const pairs = [
+        ['opensuper', 'opensuper'],
+        ['opensuper-native', 'opensuper-native'],
+        ['opensuper-classic', 'opensuper-classic'],
+        ['opensuper-hotfix', 'opensuper-hotfix'],
+        ['opensuper-tweak', 'opensuper-tweak'],
+      ] as const;
+      for (const [skill, name] of pairs) {
+        let zh = await fs.readFile(
+          path.join(getAssetsDir(), 'skills-zh', skill, 'SKILL.md'),
+          'utf8',
+        );
+        if (skill === 'opensuper-classic') {
+          zh += await readLinkedSkillSection(
+            zh,
+            'reference/scripts.md#任务上下文与产物语言',
+            skill,
+          );
+        }
+        if (skill === 'opensuper-native') {
+          zh += await readLinkedSkillSection(zh, 'reference/commands.md#记忆接入');
+        }
+        let en = await fs.readFile(path.join(getAssetsDir(), 'skills', skill, 'SKILL.md'), 'utf8');
+        if (skill === 'opensuper-classic') {
+          en += await readLinkedSkillSection(
+            en,
+            'reference/scripts.md#task-context-and-artifact-language',
+            skill,
+            'skills',
+          );
+        }
+        if (skill === 'opensuper-native') {
+          en += await readLinkedSkillSection(
+            en,
+            'reference/commands.md#memory-integration',
+            skill,
+            'skills',
+          );
+        }
+        expect(zh, `${name} zh`).toContain('opensuper memory context');
+        expect(zh, `${name} zh`).not.toContain('opensuper rules');
+        expect(en, `${name} en`).toContain('opensuper memory context');
+        expect(en, `${name} en`).not.toContain('opensuper rules');
+      }
+    });
+
+    it('teaches every Chinese OpenSuper entry the progressive context lifecycle', async () => {
+      for (const skill of [
+        'opensuper',
+        'opensuper-native',
+        'opensuper-classic',
+        'opensuper-hotfix',
+        'opensuper-tweak',
+      ]) {
+        let content = await fs.readFile(
+          path.join(getAssetsDir(), 'skills-zh', skill, 'SKILL.md'),
+          'utf8',
+        );
+        if (skill === 'opensuper-classic') {
+          content += await readLinkedSkillSection(
+            content,
+            'reference/scripts.md#任务上下文与产物语言',
+            skill,
+          );
+        }
+        if (skill === 'opensuper-native') {
+          content += await readLinkedSkillSection(content, 'reference/commands.md#记忆接入');
+        }
+        expect(content, `${skill} zh`).toContain('Context Manifest');
+        expect(content, `${skill} zh`).toContain('--expand-context');
+        expect(content, `${skill} zh`).toContain('--application');
+        expect(content, `${skill} zh`).toContain('--outcome');
+      }
+    });
+
+    it('teaches every English OpenSuper entry the progressive context lifecycle', async () => {
+      for (const skill of [
+        'opensuper',
+        'opensuper-native',
+        'opensuper-classic',
+        'opensuper-hotfix',
+        'opensuper-tweak',
+      ]) {
+        let content = await fs.readFile(
+          path.join(getAssetsDir(), 'skills', skill, 'SKILL.md'),
+          'utf8',
+        );
+        if (skill === 'opensuper-classic') {
+          content += await readLinkedSkillSection(
+            content,
+            'reference/scripts.md#task-context-and-artifact-language',
+            skill,
+            'skills',
+          );
+        }
+        if (skill === 'opensuper-native') {
+          content += await readLinkedSkillSection(
+            content,
+            'reference/commands.md#memory-integration',
+            skill,
+            'skills',
+          );
+        }
+        expect(content, `${skill} en`).toContain('Context Manifest');
+        expect(content, `${skill} en`).toContain('--expand-context');
+        expect(content, `${skill} en`).toContain('--application');
+        expect(content, `${skill} en`).toContain('--outcome');
+      }
+    });
+
+    it('rejects zh and en-US as artifact language values', () => {
+      expect(() => resolveArtifactLanguage('zh')).toThrow('Invalid artifact language');
+      expect(() => resolveArtifactLanguage('en-US')).toThrow('Invalid artifact language');
+    });
+
+    it('maps persisted artifact languages to skill language ids', () => {
+      expect(artifactLanguageToSkillLanguage('zh-CN')).toBe('zh');
+      expect(artifactLanguageToSkillLanguage('en')).toBe('en');
+      expect(artifactLanguageToSkillLanguage(undefined)).toBe('en');
+    });
+
+    it('does not route OpenSuper artifact language through the current user request language', async () => {
+      const assetsDir = getAssetsDir();
+      const files = [
+        'skills/opensuper/SKILL.md',
+        'skills/opensuper-open/SKILL.md',
+        'skills/opensuper-design/SKILL.md',
+        'skills/opensuper-build/SKILL.md',
+        'skills/opensuper-verify/SKILL.md',
+        'skills/opensuper-archive/SKILL.md',
+        'skills/opensuper-hotfix/SKILL.md',
+        'skills/opensuper-tweak/SKILL.md',
+        'skills/opensuper-classic/reference/subagent-dispatch.md',
+        'skills-zh/opensuper/SKILL.md',
+        'skills-zh/opensuper-open/SKILL.md',
+        'skills-zh/opensuper-design/SKILL.md',
+        'skills-zh/opensuper-build/SKILL.md',
+        'skills-zh/opensuper-verify/SKILL.md',
+        'skills-zh/opensuper-archive/SKILL.md',
+        'skills-zh/opensuper-hotfix/SKILL.md',
+        'skills-zh/opensuper-tweak/SKILL.md',
+        'skills-zh/opensuper-classic/reference/subagent-dispatch.md',
+      ];
+
+      for (const file of files) {
+        const content = await fs.readFile(path.join(assetsDir, file), 'utf-8');
+        expect(content, file).not.toContain('user request that triggered this workflow');
+        expect(content, file).not.toContain('触发本次工作流的用户请求语言');
+      }
+    });
+
+    it('keeps both Native skills operational without unreleased migration narratives', async () => {
+      for (const languageDir of ['skills', 'skills-zh']) {
+        const nativeDir = path.join(getAssetsDir(), languageDir, 'opensuper-native');
+        const main = await fs.readFile(path.join(nativeDir, 'SKILL.md'), 'utf-8');
+        const references = await Promise.all(
+          ['commands.md', 'artifacts.md', 'recovery.md'].map((file) =>
+            fs.readFile(path.join(nativeDir, 'reference', file), 'utf-8'),
+          ),
+        );
+        const allContent = [main, ...references].join('\n');
+
+        for (const required of [
+          'opensuper native <command> --help',
+          'continuation.disposition',
+          'commandArgs',
+          'inputOptions',
+          'nextPageArgs',
+          'workspaceFinishResult',
+          '[blocking]',
+          '--confirmed',
+          '--accept-result',
+          '--revise-implementation',
+          '--revise-requirements',
+          languageDir === 'skills-zh' ? '决策树' : 'decision tree',
+          languageDir === 'skills-zh' ? 'subagent' : 'subagents',
+          'opensuper.native.children.v2',
+          languageDir === 'skills-zh' ? '集成 worktree' : 'integration worktree',
+        ]) {
+          expect(allContent, `${languageDir}: ${required}`).toContain(required);
+        }
+
+        const phaseHeadings = ['## Shape', '## Build', '## Verify', '## Archive'];
+        const phaseOffsets = phaseHeadings.map((heading) => main.indexOf(heading));
+        expect(phaseOffsets.every((offset) => offset >= 0)).toBe(true);
+        expect(phaseOffsets).toEqual([...phaseOffsets].sort((left, right) => left - right));
+
+        for (const unwanted of [
+          'opensuper.native.v1',
+          'opensuper.native.v2',
+          'strong coding model',
+          'another strong model',
+          'decision frontier',
+          'cold-start executable standard',
+          'Schema upgrades',
+          'legacy physical-tree baseline',
+          '强编码模型',
+          '强模型',
+          '决策前沿',
+          '冷启动可执行标准',
+          'Schema 升级',
+          '旧 schema',
+          '早期 v2',
+          'opensuper native list',
+          '--evidence-receipt',
+          '--failure-category',
+          '--failed-check',
+          'external-role handoff',
+          '外部角色交接',
+          'opensuper native select <change-name>',
+          'opensuper native check <change-name>',
+        ]) {
+          expect(allContent, `${languageDir}: ${unwanted}`).not.toContain(unwanted);
+        }
+      }
+
+      const zhMain = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const enMain = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      expect(zhMain).toContain('不依赖外部 Skill');
+      expect(enMain).toContain('without an external Skill dependency');
+    });
+
+    it('requires Native Supervisor auto-advance to be consumed without a second user prompt', async () => {
+      const zhEntry = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhMain = await readLinkedSkillSection(zhEntry, 'reference/commands.md#supervisor-协作');
+      const enEntry = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const enMain = await readLinkedSkillSection(
+        enEntry,
+        'reference/commands.md#supervisor-coordination',
+        'opensuper-native',
+        'skills',
+      );
+      expect(zhMain).toContain('parentAdvance');
+      expect(zhMain).toContain('不要求用户再次说“推进”');
+      expect(zhMain).toContain('最终 Archive、工作区收尾、merge、push 和 PR');
+      expect(enMain).toContain('parentAdvance');
+      expect(enMain).toContain('Do not require another “continue.”');
+      expect(enMain).toContain('Final Archive, workspace finishing, merge, push, and PR creation');
+    });
+
+    it('presents Native Archive finish choices with their actual effects', async () => {
+      const normalizeTablePadding = (text: string) =>
+        text.replace(/[\t ]+\|/g, ' |').replace(/\|[\t ]+/g, '| ');
+      const zhEntry = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhMain = normalizeTablePadding(
+        await readLinkedSkillSection(zhEntry, 'reference/workspace.md#archive-收尾'),
+      );
+      const enEntry = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const enMain = normalizeTablePadding(
+        await readLinkedSkillSection(
+          enEntry,
+          'reference/workspace.md#archive-completion',
+          'opensuper-native',
+          'skills',
+        ),
+      );
+      expect(zhMain).toContain('| 选项 | 方式 | 实际影响 |');
+      expect(zhMain).toContain(
+        '| A | 仅归档并保留工作区（`keep`） | 完成归档并在 change 分支创建归档提交；不合并、不推送、不创建 PR，保留当前分支和目录 |',
+      );
+      expect(zhMain).toContain('| B | 本地合并（`merge`） |');
+      expect(zhMain).toContain('| C | 归档并推送（`push`） |');
+      expect(zhMain).toContain('| D | 归档、推送并创建 PR（`pull-request`） |');
+      expect(zhMain).toContain('| E | 暂不归档 |');
+      expect(zhMain).toContain('使用 `current` 工作区时，不需要选择收尾方式');
+      expect(enMain).toContain('| Option | Mode | Actual impact |');
+      expect(enMain).toContain(
+        '| A | Archive and keep workspace (`keep`) | Archive and create an archive commit on the change branch. Do not merge, push, or create a PR; retain the branch and directory. |',
+      );
+      expect(enMain).toContain('| B | Local merge (`merge`) |');
+      expect(enMain).toContain('| C | Archive and push (`push`) |');
+      expect(enMain).toContain('| D | Archive, push, and create PR (`pull-request`) |');
+      expect(enMain).toContain('| E | Do not archive yet |');
+      expect(enMain).toContain('A `current` workspace needs no finish choice');
+    });
+
+    it('requires clarification before Native Shape can modify implementation or enter Build', async () => {
+      const zhMain = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const enMain = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'opensuper-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhClarification = await readLinkedSkillSection(
+        zhMain,
+        'reference/clarification.md#澄清',
+      );
+      const enClarification = await readLinkedSkillSection(
+        enMain,
+        'reference/clarification.md#clarification',
+        'opensuper-native',
+        'skills',
+      );
+
+      const zhSectionOffsets = [
+        zhMain.indexOf('## 必须遵守的规则'),
+        zhMain.indexOf('## 开始或恢复'),
+        zhMain.indexOf('## 按需读取'),
+        zhMain.indexOf('## Shape'),
+      ];
+      expect(zhSectionOffsets.every((offset) => offset >= 0)).toBe(true);
+      expect(zhSectionOffsets).toEqual([...zhSectionOffsets].sort((left, right) => left - right));
+      expect(zhMain).toContain('只读取当前动作对应的章节');
+      expect(zhMain).toContain('Shape：必须读取并执行[澄清]');
+      expect(zhMain).toContain('只有用户明确确认完整 Shape');
+      expect(zhClarification).toContain('进入 Shape 后必须读取本节');
+      expect(zhClarification).toContain('最终需求确认前，不修改项目实现或推进到 Build');
+      expect(zhClarification).toContain('继续保持 `[blocking]`');
+      expect(zhClarification).toContain('只有用户明确确认后');
+      expect(zhClarification).toContain('Sequential 模式一次提交一个单选或多选问题');
+
+      const enSectionOffsets = [
+        enMain.indexOf('## Required rules'),
+        enMain.indexOf('## Start or resume'),
+        enMain.indexOf('## Read only what the action needs'),
+        enMain.indexOf('## Shape'),
+      ];
+      expect(enSectionOffsets.every((offset) => offset >= 0)).toBe(true);
+      expect(enSectionOffsets).toEqual([...enSectionOffsets].sort((left, right) => left - right));
+      expect(enMain).toContain('Read the section for the current action');
+      expect(enMain).toContain('Shape: read and follow [clarification]');
+      expect(enClarification).toContain(
+        'Ambiguous, partial, or missing answers remain `[blocking]`',
+      );
+      expect(enClarification).toContain(
+        'Only after explicit confirmation may you execute the current `commandAlternatives` command with `--confirmed` and its state-version and expected-action guards',
+      );
+      expect(enClarification).toContain('Read this section on entering Shape');
+      expect(enClarification).toContain(
+        'Do not edit the project implementation or advance to Build until necessary questions, implicit assumptions, and final requirements confirmation are complete',
+      );
+      expect(enClarification).toContain(
+        'Sequential mode submits one single-choice or multiple-choice question at a time',
+      );
+    });
+  });
+
+  describe('getManifestSkills', () => {
+    it('returns the skills array from manifest', async () => {
+      const skills = await getManifestSkills();
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBeGreaterThan(0);
+      expect(skills.some((s) => s.includes('opensuper/SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('copyOpenSuperRulesForPlatform', () => {
+    it('merges the dsh project instruction Rule into AGENTS.local.md', async () => {
+      const dsh = PLATFORMS.find((candidate) => candidate.id === 'dsh')!;
+      const instructionPath = path.join(tmpDir, 'AGENTS.local.md');
+      await fs.writeFile(instructionPath, '# User instructions\n\nKeep this text.\n', 'utf8');
+
+      await expect(
+        copyOpenSuperRulesForPlatform(tmpDir, dsh, true, 'en', 'project', 'classic'),
+      ).resolves.toEqual({ copied: 1, skipped: 0, failed: 0 });
+
+      const content = await fs.readFile(instructionPath, 'utf8');
+      expect(content).toContain('Keep this text.');
+      expect(content).toContain('<!-- OPENSUPER:DSH:START -->');
+      expect(content).toContain('<!-- OPENSUPER:DSH:END -->');
+
+      await expect(removeOpenSuperRulesForPlatform(tmpDir, dsh, 'project')).resolves.toEqual({
+        removed: 1,
+        failed: 0,
+      });
+      await expect(fs.readFile(instructionPath, 'utf8')).resolves.toBe(
+        '# User instructions\n\nKeep this text.\n',
+      );
+    });
+
+    it('installs the unified workflow Rule for a Native project', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+
+      await expect(
+        copyOpenSuperRulesForPlatform(tmpDir, platform, true, 'en', 'project', 'native'),
+      ).resolves.toEqual({ copied: 1, skipped: 0, failed: 0 });
+
+      await expect(
+        fs.access(path.join(tmpDir, '.claude', 'rules', 'opensuper-workflow-guard.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.claude', 'rules', 'opensuper-phase-guard.md')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(
+        fs.access(path.join(tmpDir, '.claude', 'rules', 'opensuper-native-phase-guard.md')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('reports a missing Rule source as failed', async () => {
+      readJsonMock.mockResolvedValue({
+        version: 'test',
+        skills: [],
+        rules: ['opensuper/rules/missing-rule.md'],
+      });
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        await expect(
+          copyOpenSuperRulesForPlatform(tmpDir, platform, true, 'zh', 'project'),
+        ).resolves.toEqual({ copied: 0, skipped: 0, failed: 1 });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('Rule source not found'));
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('reports a Rule source permission failure without calling it missing', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      readFileMock.mockRejectedValueOnce(permissionError);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        await expect(
+          copyOpenSuperRulesForPlatform(tmpDir, platform, true, 'zh', 'project'),
+        ).resolves.toEqual({ copied: 0, skipped: 0, failed: 1 });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to copy rule'));
+        expect(error).not.toHaveBeenCalledWith(expect.stringContaining('Rule source not found'));
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('reports a Rule source access failure without calling it missing', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      const accessSpy = vi.spyOn(fs, 'access').mockRejectedValue(permissionError);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        await expect(
+          copyOpenSuperRulesForPlatform(tmpDir, platform, true, 'zh', 'project'),
+        ).resolves.toEqual({ copied: 0, skipped: 0, failed: 1 });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to copy rule'));
+        expect(error).not.toHaveBeenCalledWith(expect.stringContaining('Rule source not found'));
+      } finally {
+        accessSpy.mockRestore();
+        error.mockRestore();
+      }
+    });
+
+    it('reports a Rule copy permission failure', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      writeFileMock.mockRejectedValueOnce(permissionError);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        await expect(
+          copyOpenSuperRulesForPlatform(tmpDir, platform, true, 'zh', 'project'),
+        ).resolves.toEqual({ copied: 0, skipped: 0, failed: 1 });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to copy rule'));
+      } finally {
+        error.mockRestore();
+      }
+    });
+  });
+
+  it.each([
+    { installMode: 'copy' as const, destinationRoot: ['.claude', 'skills'] },
+    { installMode: 'symlink' as const, destinationRoot: ['.opensuper', 'skills', 'skills'] },
+  ])(
+    'counts a $installMode Skill destination preflight access error instead of rejecting',
+    async ({ installMode, destinationRoot }) => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+      const blockedDestination = path.join(tmpDir, ...destinationRoot, 'opensuper', 'SKILL.md');
+      const access = fs.access.bind(fs);
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      const accessSpy = vi.spyOn(fs, 'access').mockImplementation(async (filePath, mode) => {
+        if (path.resolve(String(filePath)) === path.resolve(blockedDestination)) {
+          throw permissionError;
+        }
+        await access(filePath, mode);
+      });
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        const result = await copyOpenSuperSkillsForPlatform(
+          tmpDir,
+          platform,
+          false,
+          'skills',
+          'project',
+          installMode,
+        );
+        expect(result.failed).toBeGreaterThan(0);
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
+      } finally {
+        error.mockRestore();
+        accessSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(['copy', 'symlink'] as const)(
+    'counts an OpenCode command artifact access failure in %s mode without rejecting',
+    async (installMode) => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'opencode')!;
+      const blockedArtifact = path.join(tmpDir, '.opencode', 'commands', 'opensuper.md');
+      const access = fs.access.bind(fs);
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      const accessSpy = vi.spyOn(fs, 'access').mockImplementation(async (filePath, mode) => {
+        if (path.resolve(String(filePath)) === path.resolve(blockedArtifact)) {
+          throw permissionError;
+        }
+        await access(filePath, mode);
+      });
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        const result = await copyOpenSuperSkillsForPlatform(
+          tmpDir,
+          platform,
+          false,
+          'skills',
+          'project',
+          installMode,
+        );
+        expect(result.failed).toBeGreaterThan(0);
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
+      } finally {
+        error.mockRestore();
+        accessSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(['copy', 'symlink'] as const)(
+    'counts a Pi settings write failure in %s mode without creating an extension',
+    async (installMode) => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'pi')!;
+      const settingsPath = path.join(tmpDir, '.pi', 'settings.json');
+      const extensionPath = path.join(tmpDir, '.pi', 'extensions', 'opensuper-commands.ts');
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      writeFileMock.mockImplementation(async (filePath, ...args) => {
+        const resolved = path.resolve(String(filePath));
+        if (resolved === path.resolve(settingsPath)) throw permissionError;
+        return fs.writeFile(filePath, ...args);
+      });
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        const result = await copyOpenSuperSkillsForPlatform(
+          tmpDir,
+          platform,
+          false,
+          'skills',
+          'project',
+          installMode,
+        );
+        expect(result.failed).toBeGreaterThanOrEqual(1);
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
+        await expect(fs.access(extensionPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
+
+  it.each(['copy', 'symlink'] as const)(
+    'counts a Pi extension write failure in %s mode without rejecting',
+    async (installMode) => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'pi')!;
+      const settingsPath = path.join(tmpDir, '.pi', 'settings.json');
+      const extensionPath = path.join(tmpDir, '.pi', 'extensions', 'opensuper-commands.ts');
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, '{"enableSkillCommands":true}\n', 'utf8');
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      writeFileMock.mockImplementation(async (filePath, ...args) => {
+        if (path.resolve(String(filePath)) === path.resolve(extensionPath)) throw permissionError;
+        return fs.writeFile(filePath, ...args);
+      });
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        const result = await copyOpenSuperSkillsForPlatform(
+          tmpDir,
+          platform,
+          false,
+          'skills',
+          'project',
+          installMode,
+        );
+        expect(result.failed).toBeGreaterThanOrEqual(1);
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
+
+  describe('createWorkingDirs', () => {
+    it('creates superpowers spec and plan directories', async () => {
+      await createWorkingDirs(tmpDir);
+
+      const specsDir = path.join(tmpDir, 'docs', 'superpowers', 'specs');
+      const plansDir = path.join(tmpDir, 'docs', 'superpowers', 'plans');
+
+      await expect(fs.stat(specsDir)).resolves.toBeDefined();
+      await expect(fs.stat(plansDir)).resolves.toBeDefined();
+    });
+
+    it('reuses an existing desired artifact root without a layout conflict', async () => {
+      await createWorkingDirs(tmpDir);
+      // After beta.13's Classic configuration recovery, a project whose desired
+      // (docs) root already exists and has no conflicting legacy root can be
+      // re-initialized in place instead of being rejected as unauthorized.
+      await expect(createWorkingDirs(tmpDir)).resolves.toBeUndefined();
+    });
+
+    it('installs ambient resume instructions while preserving user content', async () => {
+      await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# User\n\nKeep this.\n', 'utf-8');
+
+      await createWorkingDirs(tmpDir, 'zh-CN');
+
+      const agents = await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf-8');
+      const claude = await fs.readFile(path.join(tmpDir, 'CLAUDE.md'), 'utf-8');
+      expect(agents).toContain('# User\n\nKeep this.');
+      expect(agents).toContain('<opensuper-ambient-resume>');
+      expect(agents).toContain('开始处理需要改动或调查的任务前');
+      expect(claude).toContain('<opensuper-ambient-resume>');
+      expect(claude).toContain('开始处理需要改动或调查的任务前');
+    });
+
+    it('records the selected project language in OpenSuper config', async () => {
+      await mergeProjectConfig(tmpDir, 'zh-CN', 'docs');
+
+      const config = await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf-8');
+      expect(config).toContain('# Classic 工作流文档使用的产物语言');
+      expect(config).not.toContain('# Artifact language used for workflow documents');
+      expect(config).toContain('language: zh-CN');
+    });
+
+    it('defaults the project language to en when none is provided', async () => {
+      await mergeProjectConfig(tmpDir);
+
+      const config = await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf-8');
+      expect(config).toContain('# language: en | zh-CN');
+      expect(config).toContain('language: en');
+    });
+
+    it.each([
+      {
+        label: 'OpenSpec changes',
+        linkedPath: ['docs', 'openspec', 'changes'],
+        escapedWrite: ['archive'],
+      },
+      {
+        label: 'Superpowers root',
+        linkedPath: ['docs', 'superpowers'],
+        escapedWrite: ['specs'],
+      },
+      {
+        label: 'OpenSuper control directory',
+        linkedPath: ['.opensuper'],
+        escapedWrite: ['config.yaml'],
+      },
+    ])(
+      'rejects a $label junction created after initialization preflight',
+      async ({ linkedPath, escapedWrite }) => {
+        const outsideRoot = await fs.mkdtemp(
+          path.join(os.tmpdir(), 'opensuper-working-dirs-outside-'),
+        );
+        try {
+          const initialization = await assertClassicLayoutInitializationSafe(tmpDir, 'docs');
+          await fs.mkdir(initialization.openSpecRoot, { recursive: true });
+          const linked = path.join(tmpDir, ...linkedPath);
+          await fs.mkdir(path.dirname(linked), { recursive: true });
+          try {
+            await fs.symlink(
+              outsideRoot,
+              linked,
+              process.platform === 'win32' ? 'junction' : 'dir',
+            );
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+            throw error;
+          }
+
+          await expect(
+            createWorkingDirs(tmpDir, 'en', 'docs', initialization.initializationPermit),
+          ).rejects.toThrow(/symbolic link or junction/iu);
+          await expect(fs.access(path.join(outsideRoot, ...escapedWrite))).rejects.toMatchObject({
+            code: 'ENOENT',
+          });
+        } finally {
+          await fs.rm(outsideRoot, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  describe('copyOpenSuperSkillsForPlatform', () => {
+    const mockPlatform: Platform = {
+      id: 'claude',
+      name: 'Claude Code',
+      skillsDir: '.claude',
+      openspecToolId: 'claude',
+    };
+
+    it('copies skill files from assets to platform skills directory', async () => {
+      const result = await copyOpenSuperSkillsForPlatform(tmpDir, mockPlatform, false);
+      expect(result.copied).toBeGreaterThan(0);
+      expect(result.skipped).toBe(0);
+
+      // Verify a key file was copied
+      const opensuperSkillPath = path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md');
+      expect(await fileExists(opensuperSkillPath)).toBe(true);
+    });
+
+    it('skips existing files when overwrite is false', async () => {
+      // First copy
+      await copyOpenSuperSkillsForPlatform(tmpDir, mockPlatform, false);
+      // Second copy should skip all
+      const result = await copyOpenSuperSkillsForPlatform(tmpDir, mockPlatform, false);
+      expect(result.copied).toBe(0);
+      expect(result.skipped).toBeGreaterThan(0);
+    });
+
+    it('overwrites existing files when overwrite is true', async () => {
+      await copyOpenSuperSkillsForPlatform(tmpDir, mockPlatform, false);
+      const result = await copyOpenSuperSkillsForPlatform(tmpDir, mockPlatform, true);
+      expect(result.copied).toBeGreaterThan(0);
+    });
+
+    it('copies to Chinese skills directory when language is zh', async () => {
+      const result = await copyOpenSuperSkillsForPlatform(tmpDir, mockPlatform, false, 'skills-zh');
+      expect(result.copied).toBeGreaterThan(0);
+
+      const manifest = await readManifest();
+      for (const skillRelPath of manifest.skills) {
+        const copiedPath = path.join(tmpDir, '.claude', 'skills', skillRelPath);
+        expect(await fileExists(copiedPath), `zh install should include ${skillRelPath}`).toBe(
+          true,
+        );
+      }
+    });
+
+    it('creates OpenCode slash commands for copied OpenSuper skills', async () => {
+      const opencodePlatform: Platform = {
+        id: 'opencode',
+        name: 'OpenCode',
+        skillsDir: '.opencode',
+        globalSkillsDir: '.config/opencode',
+        openspecToolId: 'opencode',
+      };
+
+      const result = await copyOpenSuperSkillsForPlatform(tmpDir, opencodePlatform, false);
+
+      expect(result.copied).toBeGreaterThan(0);
+      const commandPath = path.join(tmpDir, '.opencode', 'commands', 'opensuper-open.md');
+      const command = await fs.readFile(commandPath, 'utf-8');
+
+      expect(command).toContain('description: Run the opensuper-open OpenSuper workflow');
+      expect(command).toContain('Equivalent OpenSuper skill: `opensuper-open`');
+      expect(command).toContain(
+        'Use the invocation arguments below as the user input for this workflow:',
+      );
+      expect(command).toContain('$ARGUMENTS');
+      expect(command).toContain('# OpenSuper Phase 1: Open');
+      expect(command).toContain('## Steps');
+      expect(command).toContain('opensuper state init <name> full');
+      expect(command).not.toContain(
+        'Immediately load the `opensuper-open` skill with the skill tool',
+      );
+      expect(path.basename(commandPath)).toBe('opensuper-open.md');
+    });
+
+    it('creates OpenCode slash commands from the selected language skill content', async () => {
+      const opencodePlatform: Platform = {
+        id: 'opencode',
+        name: 'OpenCode',
+        skillsDir: '.opencode',
+        globalSkillsDir: '.config/opencode',
+        openspecToolId: 'opencode',
+      };
+
+      await copyOpenSuperSkillsForPlatform(tmpDir, opencodePlatform, false, 'skills-zh');
+
+      const commandPath = path.join(tmpDir, '.opencode', 'commands', 'opensuper-open.md');
+      const command = await fs.readFile(commandPath, 'utf-8');
+
+      expect(command).toContain('description: Run the opensuper-open OpenSuper workflow');
+      expect(command).toContain('Equivalent OpenSuper skill: `opensuper-open`');
+      expect(command).toContain('# OpenSuper 阶段 1：开启（Open）');
+      expect(command).toContain('## 步骤');
+      expect(command).not.toContain('# OpenSuper Phase 1: Open');
+      expect(path.basename(commandPath)).toBe('opensuper-open.md');
+    });
+
+    it('creates OpenCode slash commands in the global OpenCode config directory', async () => {
+      const opencodePlatform: Platform = {
+        id: 'opencode',
+        name: 'OpenCode',
+        skillsDir: '.opencode',
+        globalSkillsDir: '.config/opencode',
+        openspecToolId: 'opencode',
+      };
+
+      await copyOpenSuperSkillsForPlatform(tmpDir, opencodePlatform, false, 'skills', 'global');
+
+      await expect(
+        fs.access(path.join(tmpDir, '.config', 'opencode', 'commands', 'opensuper.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.opencode', 'commands', 'opensuper.md')),
+      ).rejects.toThrow();
+    });
+
+    it('creates MimoCode slash commands in project and global config directories', async () => {
+      const mimocodePlatform: Platform = {
+        id: 'mimocode',
+        name: 'MimoCode',
+        skillsDir: '.mimocode',
+        globalSkillsDir: '.config/mimocode',
+        openspecToolId: 'opencode',
+      };
+
+      await copyOpenSuperSkillsForPlatform(tmpDir, mimocodePlatform, false, 'skills', 'project');
+      await expect(
+        fs.access(path.join(tmpDir, '.mimocode', 'commands', 'opensuper-open.md')),
+      ).resolves.toBeUndefined();
+
+      const globalRoot = path.join(tmpDir, 'global-root');
+      await fs.mkdir(globalRoot, { recursive: true });
+      await copyOpenSuperSkillsForPlatform(globalRoot, mimocodePlatform, false, 'skills', 'global');
+      await expect(
+        fs.access(path.join(globalRoot, '.config', 'mimocode', 'commands', 'opensuper.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(globalRoot, '.mimocode', 'commands', 'opensuper.md')),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('installOpenSuperHooksForPlatform', () => {
+    const staleOpenSuperCommand = 'bash .legacy/skills/opensuper/scripts/opensuper-hook-guard.sh';
+    const currentOpenSuperScript = 'opensuper/scripts/opensuper-hook-router.mjs';
+    const normalized = (value: string) => value.replace(/\\/g, '/');
+    const expectedHookCommand = (
+      skillsDir: string,
+      platformId: string,
+      baseDir = tmpDir,
+      scope: 'project' | 'global' = 'project',
+    ) =>
+      `node "${normalized(path.join(baseDir, skillsDir, 'skills', ...currentOpenSuperScript.split('/')))}" --platform "${platformId}"${scope === 'project' ? ` --project-root "${normalized(baseDir)}"` : ''}`;
+    const runManagedHookCommand = (command: string, cwd: string) =>
+      spawnSync(command, {
+        cwd,
+        input: JSON.stringify({
+          tool_name: 'Write',
+          tool_input: { file_path: 'src/app.ts' },
+        }),
+        shell: true,
+        encoding: 'utf8',
+        timeout: 20_000,
+      });
+    const configureNativeBuildChange = async (projectRoot: string): Promise<void> => {
+      await writeProjectConfig(projectRoot, defaultProjectConfig('.'));
+      const paths = await nativeProjectPaths(projectRoot, '.');
+      await ensureNativeDirectories(paths);
+      const change = await createNativeChange({
+        paths,
+        name: 'trae-cn-build',
+        language: 'en',
+        verificationProtocol: 'legacy-v1',
+      });
+      change.phase = 'build';
+      await writeNativeChange(paths, change);
+      await selectNativeChange(paths, change.name);
+    };
+
+    it('installs the Claude Code Router as an exec-form Node Hook', async () => {
+      const claude = PLATFORMS.find((candidate) => candidate.id === 'claude')!;
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, claude, 'project', 'native'),
+      ).resolves.toEqual({ status: 'installed' });
+
+      const settings = JSON.parse(
+        await fs.readFile(path.join(tmpDir, '.claude', 'settings.local.json'), 'utf8'),
+      ) as {
+        hooks: {
+          PreToolUse: Array<{
+            hooks: Array<{ type: string; command: string; args?: string[] }>;
+          }>;
+        };
+      };
+      expect(settings.hooks.PreToolUse[0].hooks[0]).toEqual({
+        type: 'command',
+        command: 'node',
+        args: [
+          path.join(
+            tmpDir,
+            '.claude',
+            'skills',
+            'opensuper',
+            'scripts',
+            'opensuper-hook-router.mjs',
+          ),
+          '--platform',
+          'claude',
+          '--project-root',
+          tmpDir,
+        ],
+      });
+    });
+
+    it('installs only the unified Router Hook for a Native project', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, codex, 'project', 'native'),
+      ).resolves.toEqual({ status: 'installed' });
+
+      const hooks = JSON.parse(
+        await fs.readFile(path.join(tmpDir, '.codex', 'hooks.json'), 'utf8'),
+      ) as { hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> } };
+      const source = JSON.stringify(hooks).replaceAll('\\', '/');
+      expect(source).toContain('opensuper/scripts/opensuper-hook-router.mjs');
+      expect(source).toContain('--platform /"codex/"');
+      expect(source).not.toContain('opensuper/scripts/opensuper-hook-guard.mjs');
+      expect(source).not.toContain('opensuper-native/scripts/opensuper-native-hook-guard.mjs');
+    });
+
+    it('installs dsh Claude-compatible Hooks and a project Cordis patch', async () => {
+      const dsh = PLATFORMS.find((candidate) => candidate.id === 'dsh')!;
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, dsh, 'project', 'classic'),
+      ).resolves.toMatchObject({
+        status: 'installed',
+        reason: expect.stringContaining('--patch .dsh/cordis.patch.yml'),
+      });
+
+      const hooks = JSON.parse(
+        await fs.readFile(path.join(tmpDir, '.dsh', 'hooks.json'), 'utf8'),
+      ) as { hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> } };
+      expect(JSON.stringify(hooks)).toContain('opensuper/scripts/opensuper-hook-router.mjs');
+
+      const patch = await fs.readFile(path.join(tmpDir, '.dsh', 'cordis.patch.yml'), 'utf8');
+      expect(patch).toContain('dsh-hooks-claude-code');
+      expect(patch).toContain('./.dsh/hooks.json');
+    });
+
+    it('installs the Native Copilot Hook with a write matcher and structured denial output', async () => {
+      const copilot = PLATFORMS.find((candidate) => candidate.id === 'github-copilot')!;
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, copilot, 'project', 'native'),
+      ).resolves.toEqual({ status: 'installed' });
+
+      const config = JSON.parse(
+        await fs.readFile(path.join(tmpDir, '.github', 'hooks', 'opensuper-guard.json'), 'utf8'),
+      ) as {
+        hooks: {
+          preToolUse: Array<{ matcher?: string; bash: string; powershell: string }>;
+        };
+      };
+      expect(config.hooks.preToolUse).toHaveLength(1);
+      expect(config.hooks.preToolUse[0].matcher).toBe('create|edit|str_replace_editor|apply_patch');
+      expect(config.hooks.preToolUse[0].bash.replaceAll('\\', '/')).toContain(
+        'opensuper/scripts/opensuper-hook-router.mjs',
+      );
+      expect(config.hooks.preToolUse[0].bash).toContain('--platform "github-copilot"');
+      expect(config.hooks.preToolUse[0].powershell).toBe(config.hooks.preToolUse[0].bash);
+    });
+
+    it('preserves existing Copilot Hook entries and settings when installing', async () => {
+      const copilot = PLATFORMS.find((candidate) => candidate.id === 'github-copilot')!;
+      const hookPath = path.join(tmpDir, '.github', 'hooks', 'opensuper-guard.json');
+      const userHook = { matcher: '*', bash: 'node user-hook.mjs' };
+      await fs.mkdir(path.dirname(hookPath), { recursive: true });
+      await fs.writeFile(
+        hookPath,
+        JSON.stringify({
+          version: 2,
+          customSetting: true,
+          hooks: {
+            postToolUse: [{ matcher: '*', bash: 'node post-hook.mjs' }],
+            preToolUse: [userHook],
+          },
+        }),
+        'utf8',
+      );
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, copilot, 'project', 'native'),
+      ).resolves.toEqual({ status: 'installed' });
+
+      const updated = JSON.parse(await fs.readFile(hookPath, 'utf8')) as {
+        version: number;
+        customSetting: boolean;
+        hooks: {
+          postToolUse: unknown[];
+          preToolUse: Array<Record<string, unknown>>;
+        };
+      };
+      expect(updated.version).toBe(2);
+      expect(updated.customSetting).toBe(true);
+      expect(updated.hooks.postToolUse).toEqual([{ matcher: '*', bash: 'node post-hook.mjs' }]);
+      expect(updated.hooks.preToolUse).toContainEqual(userHook);
+      expect(
+        updated.hooks.preToolUse.some((entry) =>
+          String(entry.bash).includes('opensuper-hook-router'),
+        ),
+      ).toBe(true);
+    });
+
+    it('installs and removes the Oh My Pi Hook bridge without changing user Hooks', async () => {
+      const omp = PLATFORMS.find((candidate) => candidate.id === 'oh-my-pi')!;
+      const hooksDir = path.join(tmpDir, '.omp', 'hooks', 'pre');
+      const bridgePath = path.join(hooksDir, 'opensuper-hook-router.ts');
+      const userHookPath = path.join(hooksDir, 'user-hook.ts');
+      await fs.mkdir(hooksDir, { recursive: true });
+      await fs.writeFile(userHookPath, 'export default function userHook() {}\n', 'utf8');
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, omp, 'project', 'both'),
+      ).resolves.toEqual({
+        status: 'installed',
+      });
+      const source = await fs.readFile(bridgePath, 'utf8');
+      expect(source).toContain("pi.on('tool_call'");
+      expect(source).toContain("'--platform', 'oh-my-pi'");
+      expect(source).toContain('tool_name: event.toolName');
+      expect(source).toContain('cwd: ctx.cwd');
+      expect(source).toContain('return { block: true, reason }');
+
+      await expect(removeOpenSuperHooksForPlatform(tmpDir, omp, 'project')).resolves.toEqual({
+        removed: 1,
+        failed: 0,
+      });
+      await expect(fs.access(bridgePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.readFile(userHookPath, 'utf8')).resolves.toContain('userHook');
+    });
+
+    it('installs the Oh My Pi user Hook under the agent root and discovers projects from ctx.cwd', async () => {
+      const omp = PLATFORMS.find((candidate) => candidate.id === 'oh-my-pi')!;
+      const bridgePath = path.join(
+        tmpDir,
+        '.omp',
+        'agent',
+        'hooks',
+        'pre',
+        'opensuper-hook-router.ts',
+      );
+
+      await expect(
+        reconcileOpenSuperHooksForPlatform(tmpDir, omp, 'global', 'both'),
+      ).resolves.toEqual({
+        status: 'installed',
+      });
+      const source = await fs.readFile(bridgePath, 'utf8');
+      expect(source).toContain('cwd: ctx.cwd');
+      expect(source).not.toContain("'--project-root'");
+
+      await expect(removeOpenSuperHooksForPlatform(tmpDir, omp, 'global')).resolves.toEqual({
+        removed: 1,
+        failed: 0,
+      });
+      await expect(fs.access(bridgePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('installs the Oh My Pi workflow Rule as always-apply MDC', async () => {
+      const omp = PLATFORMS.find((candidate) => candidate.id === 'oh-my-pi')!;
+
+      await expect(copyOpenSuperRulesForPlatform(tmpDir, omp, true, 'en')).resolves.toMatchObject({
+        copied: 1,
+        failed: 0,
+      });
+      const rule = await fs.readFile(
+        path.join(tmpDir, '.omp', 'rules', 'opensuper-workflow-guard.mdc'),
+        'utf8',
+      );
+      expect(rule).toContain('alwaysApply: true');
+      expect(rule).toContain('description: opensuper workflow guard');
+    });
+
+    it('returns failed when the Hook manifest cannot be read', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      readJsonMock.mockRejectedValueOnce(new Error('manifest unavailable'));
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'failed',
+        reason: 'manifest unavailable',
+      });
+    });
+
+    it('returns failed when a Hook-capable platform does not declare a format', async () => {
+      const platform: Platform = {
+        id: 'missing-hook-format',
+        name: 'Missing Hook Format',
+        skillsDir: '.missing-hook-format',
+        openspecToolId: 'missing-hook-format',
+        supportsHooks: true,
+      };
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, platform, 'project')).resolves.toEqual({
+        status: 'failed',
+        reason: 'hook-capable platform does not declare a hook format',
+      });
+    });
+
+    it('writes project Codex hooks to .codex/hooks.json', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const root = tmpDir;
+
+      await expect(installOpenSuperHooksForPlatform(root, codex, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+
+      const hooks = JSON.parse(await fs.readFile(path.join(root, '.codex', 'hooks.json'), 'utf-8'));
+      expect(hooks.hooks.PreToolUse[0].hooks[0].command.replaceAll('\\', '/')).toContain(
+        '/.agents/skills/opensuper/scripts/opensuper-hook-router.mjs',
+      );
+      await expect(
+        fs.access(path.join(root, '.codex', 'settings.local.json')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('removes a historical global Codex Hook without changing the user Hook', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const homeDir = path.join(tmpDir, 'home');
+      const hooksPath = path.join(homeDir, '.codex', 'hooks.json');
+      const userHook = { type: 'command', command: 'node my-user-hook.mjs' };
+      await fs.mkdir(path.dirname(hooksPath), { recursive: true });
+      await fs.writeFile(
+        hooksPath,
+        JSON.stringify({
+          model: 'gpt-5',
+          hooks: {
+            PreToolUse: [
+              { matcher: 'Write|Edit', hooks: [userHook] },
+              {
+                matcher: 'Write|Edit',
+                hooks: [
+                  {
+                    type: 'command',
+                    command: expectedHookCommand('.agents', 'codex', homeDir, 'global'),
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        'utf-8',
+      );
+
+      await expect(reconcileOpenSuperHooksForPlatform(homeDir, codex, 'global')).resolves.toEqual({
+        status: 'skipped',
+        reason: 'blocking Hooks are project-scoped; removed 1 legacy global Hook',
+      });
+
+      const updated = JSON.parse(await fs.readFile(hooksPath, 'utf-8'));
+      expect(updated.model).toBe('gpt-5');
+      expect(updated.hooks.PreToolUse[0]).toEqual({ matcher: 'Write|Edit', hooks: [userHook] });
+      expect(updated.hooks.PreToolUse[1]).toEqual({ matcher: 'Write|Edit', hooks: [] });
+    });
+
+    it('installs a project Router and removes the historical global Router atomically', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const projectRoot = path.join(tmpDir, 'project');
+      const homeDir = path.join(tmpDir, 'home');
+      const globalHooksPath = path.join(homeDir, '.codex', 'hooks.json');
+      const userHook = { type: 'command', command: 'node user-hook.mjs' };
+      await fs.mkdir(path.dirname(globalHooksPath), { recursive: true });
+      await fs.writeFile(
+        globalHooksPath,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: 'Write|Edit',
+                hooks: [
+                  userHook,
+                  {
+                    type: 'command',
+                    command: expectedHookCommand('.agents', 'codex', homeDir, 'global'),
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+
+      await expect(
+        reconcileProjectOpenSuperHooksForPlatform(projectRoot, codex, 'native', {
+          globalBaseDir: homeDir,
+        }),
+      ).resolves.toEqual({ status: 'installed' });
+
+      const projectHooks = JSON.parse(
+        await fs.readFile(path.join(projectRoot, '.codex', 'hooks.json'), 'utf8'),
+      );
+      expect(projectHooks.hooks.PreToolUse[0].hooks[0].command).toBe(
+        expectedHookCommand('.agents', 'codex', projectRoot),
+      );
+      const globalHooks = JSON.parse(await fs.readFile(globalHooksPath, 'utf8'));
+      expect(globalHooks.hooks.PreToolUse[0].hooks).toEqual([userHook]);
+    });
+
+    it('does not remove the project Router when the project root is also the configured home', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+
+      await expect(
+        reconcileProjectOpenSuperHooksForPlatform(tmpDir, codex, 'native', {
+          globalBaseDir: tmpDir,
+        }),
+      ).resolves.toEqual({ status: 'installed' });
+
+      const hooks = JSON.parse(
+        await fs.readFile(path.join(tmpDir, '.codex', 'hooks.json'), 'utf8'),
+      );
+      expect(hooks.hooks.PreToolUse[0].hooks[0].command).toBe(
+        expectedHookCommand('.agents', 'codex', tmpDir),
+      );
+    });
+
+    it('reports incomplete project reconciliation when historical global cleanup fails', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const projectRoot = path.join(tmpDir, 'project');
+      const homeDir = path.join(tmpDir, 'home');
+      const legacyPath = path.join(homeDir, '.codex', 'settings.local.json');
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, '{not-json', 'utf8');
+
+      await expect(
+        reconcileProjectOpenSuperHooksForPlatform(projectRoot, codex, 'native', {
+          globalBaseDir: homeDir,
+        }),
+      ).resolves.toEqual({
+        status: 'failed',
+        cleanupFailed: 1,
+        reason:
+          'project Router installed, but failed to remove 1 historical global Hook configuration(s)',
+      });
+      await expect(
+        fs.access(path.join(projectRoot, '.codex', 'hooks.json')),
+      ).resolves.toBeUndefined();
+      await expect(fs.readFile(legacyPath, 'utf8')).resolves.toBe('{not-json');
+    });
+
+    it('reports failure when a legacy Codex Hook config cannot be cleaned up', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, '{not-json', 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'failed',
+        cleanupFailed: 1,
+        reason: expect.stringContaining('legacy Hook cleanup failed'),
+      });
+      await expect(fs.readFile(legacyPath, 'utf-8')).resolves.toBe('{not-json');
+    });
+
+    it('keeps Codex hook installation idempotent when the project path contains spaces', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const root = path.join(tmpDir, 'Jane Doe project');
+      const canonicalPath = path.join(root, '.codex', 'hooks.json');
+
+      await installOpenSuperHooksForPlatform(root, codex, 'project');
+      const firstInstall = JSON.parse(await fs.readFile(canonicalPath, 'utf-8'));
+      await installOpenSuperHooksForPlatform(root, codex, 'project');
+      const secondInstall = JSON.parse(await fs.readFile(canonicalPath, 'utf-8'));
+
+      expect(secondInstall).toEqual(firstInstall);
+      expect(secondInstall.hooks.PreToolUse[0].hooks).toHaveLength(1);
+    });
+
+    it('preserves canonical group metadata and malformed entries while replacing managed hooks', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const canonicalPath = path.join(tmpDir, '.codex', 'hooks.json');
+      const userHandler = { type: 'command', command: 'node my-user-hook.mjs' };
+      const canonical = {
+        hooks: {
+          PreToolUse: [
+            null,
+            'manual-group',
+            {
+              matcher: 'Write|Edit',
+              description: 'primary group metadata',
+              hooks: [null, 'manual-handler', { type: 'command', command: staleOpenSuperCommand }],
+            },
+            {
+              matcher: 'Write|Edit',
+              customField: { duplicate: true },
+              hooks: [{ type: 'command', command: staleOpenSuperCommand }, userHandler],
+            },
+            {
+              matcher: 'Write|Edit',
+              keepEmpty: true,
+              hooks: [{ type: 'command', command: staleOpenSuperCommand }],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
+      await fs.writeFile(canonicalPath, JSON.stringify(canonical, null, 2), 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+      const firstInstall = JSON.parse(await fs.readFile(canonicalPath, 'utf-8'));
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+      const secondInstall = JSON.parse(await fs.readFile(canonicalPath, 'utf-8'));
+
+      expect(secondInstall).toEqual(firstInstall);
+      expect(secondInstall.hooks.PreToolUse[0]).toBeNull();
+      expect(secondInstall.hooks.PreToolUse[1]).toBe('manual-group');
+      expect(secondInstall.hooks.PreToolUse[2].description).toBe('primary group metadata');
+      expect(secondInstall.hooks.PreToolUse[2].hooks.slice(0, 2)).toEqual([null, 'manual-handler']);
+      expect(secondInstall.hooks.PreToolUse[2].hooks).toEqual([null, 'manual-handler']);
+      expect(secondInstall.hooks.PreToolUse[3]).toEqual({
+        matcher: 'Write|Edit',
+        customField: { duplicate: true },
+        hooks: [userHandler],
+      });
+      expect(secondInstall.hooks.PreToolUse[4]).toEqual({
+        matcher: 'Write|Edit',
+        keepEmpty: true,
+        hooks: [],
+      });
+      expect(secondInstall.hooks.PreToolUse[5].hooks).toHaveLength(1);
+      expect(secondInstall.hooks.PreToolUse[5].hooks[0].command.replaceAll('\\', '/')).toContain(
+        '/.agents/skills/opensuper/scripts/opensuper-hook-router.mjs',
+      );
+    });
+
+    it('migrates only OpenSuper hooks from the historical Codex settings file', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const legacy = {
+        model: 'gpt-5',
+        hooks: {
+          PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo post' }] }],
+          PreToolUse: [
+            {
+              matcher: 'Write|Edit',
+              hooks: [
+                { type: 'command', command: staleOpenSuperCommand },
+                { type: 'command', command: 'node my-user-hook.mjs' },
+              ],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, JSON.stringify(legacy, null, 2), 'utf-8');
+
+      await installOpenSuperHooksForPlatform(tmpDir, codex, 'project');
+
+      const migrated = JSON.parse(await fs.readFile(legacyPath, 'utf-8'));
+      expect(migrated.model).toBe('gpt-5');
+      expect(migrated.hooks.PostToolUse).toEqual(legacy.hooks.PostToolUse);
+      expect(migrated.hooks.PreToolUse[0].hooks).toEqual([
+        { type: 'command', command: 'node my-user-hook.mjs' },
+      ]);
+      await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).resolves.toBeUndefined();
+    });
+
+    it('migrates quoted managed hook paths with spaces without matching malformed commands', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const managedPath =
+        'C:/Users/Jane Doe/.agents/skills/opensuper/scripts/opensuper-hook-guard.mjs';
+      const preservedCommands = [`node "${managedPath}`, `node "${managedPath}"; echo not-managed`];
+      const legacy = {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Write|Edit',
+              hooks: [
+                {
+                  type: 'command',
+                  command: `node "${managedPath}" --project-root "C:/Users/Jane Doe"`,
+                },
+                { type: 'command', command: `node '${managedPath}'` },
+                {
+                  type: 'command',
+                  command:
+                    'node C:/Users/Jane/.agents/skills/opensuper/scripts/opensuper-hook-guard.mjs',
+                },
+                ...preservedCommands.map((command) => ({ type: 'command', command })),
+              ],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, JSON.stringify(legacy, null, 2), 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+
+      const migrated = JSON.parse(await fs.readFile(legacyPath, 'utf-8'));
+      expect(
+        migrated.hooks.PreToolUse[0].hooks.map((handler: { command: string }) => handler.command),
+      ).toEqual(preservedCommands);
+    });
+
+    it('reports Codex hook installation failure when legacy cleanup cannot be written', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const canonicalPath = path.join(tmpDir, '.codex', 'hooks.json');
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const legacy = {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Write|Edit',
+              hooks: [{ type: 'command', command: staleOpenSuperCommand }],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, JSON.stringify(legacy, null, 2), 'utf-8');
+      writeFileMock
+        .mockImplementationOnce(fs.writeFile)
+        .mockRejectedValueOnce(new Error('simulated legacy write failure'));
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'failed',
+        cleanupFailed: 1,
+        reason: 'legacy Hook cleanup failed for settings.local.json',
+      });
+      await expect(fs.access(canonicalPath)).resolves.toBeUndefined();
+      await expect(fs.readFile(legacyPath, 'utf-8')).resolves.toBe(JSON.stringify(legacy, null, 2));
+    });
+
+    it('reports Codex hook installation failure when legacy access fails', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const canonicalPath = path.join(tmpDir, '.codex', 'hooks.json');
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const legacy = '{\n  "hooks": {}\n}\n';
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, legacy, 'utf-8');
+      const access = fs.access.bind(fs);
+      const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      const accessSpy = vi.spyOn(fs, 'access').mockImplementation(async (filePath, mode) => {
+        if (path.resolve(String(filePath)) === path.resolve(legacyPath)) throw permissionError;
+        await access(filePath, mode);
+      });
+
+      try {
+        await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+          status: 'failed',
+          cleanupFailed: 1,
+          reason: 'legacy Hook cleanup failed for settings.local.json',
+        });
+      } finally {
+        accessSpy.mockRestore();
+      }
+
+      await expect(fs.access(canonicalPath)).resolves.toBeUndefined();
+      await expect(fs.readFile(legacyPath, 'utf-8')).resolves.toBe(legacy);
+    });
+
+    it('preserves legacy hook groups, group fields, and non-object handlers during migration', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const legacy = {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Write|Edit',
+              description: 'OpenSuper-only group metadata',
+              hooks: [{ type: 'command', command: staleOpenSuperCommand }],
+            },
+            {
+              matcher: 'Bash',
+              customField: { preserved: true },
+              hooks: [null, 'manual-marker', { type: 'command', command: staleOpenSuperCommand }],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, JSON.stringify(legacy, null, 2), 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+
+      const migrated = JSON.parse(await fs.readFile(legacyPath, 'utf-8'));
+      expect(migrated.hooks.PreToolUse).toEqual([
+        {
+          matcher: 'Write|Edit',
+          description: 'OpenSuper-only group metadata',
+          hooks: [],
+        },
+        {
+          matcher: 'Bash',
+          customField: { preserved: true },
+          hooks: [null, 'manual-marker'],
+        },
+      ]);
+    });
+
+    it('installs canonical Codex hooks without changing invalid historical JSON', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const invalid = '{\r\n  "hooks": {\r\n';
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, invalid, 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, codex, 'project')).resolves.toEqual({
+        status: 'failed',
+        cleanupFailed: 1,
+        reason: 'legacy Hook cleanup failed for settings.local.json',
+      });
+
+      await expect(fs.readFile(legacyPath, 'utf-8')).resolves.toBe(invalid);
+      await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).resolves.toBeUndefined();
+    });
+
+    it('does not overwrite invalid canonical Codex hooks or migrate the historical file', async () => {
+      const codex = PLATFORMS.find((candidate) => candidate.id === 'codex')!;
+      const canonicalPath = path.join(tmpDir, '.codex', 'hooks.json');
+      const legacyPath = path.join(tmpDir, '.codex', 'settings.local.json');
+      const invalidCanonical = '{\r\n  "hooks": {\r\n';
+      const legacy = `${JSON.stringify(
+        {
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: 'Write|Edit',
+                hooks: [{ type: 'command', command: staleOpenSuperCommand }],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\r\n`;
+      await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
+      await fs.writeFile(canonicalPath, invalidCanonical, 'utf-8');
+      await fs.writeFile(legacyPath, legacy, 'utf-8');
+
+      const result = await installOpenSuperHooksForPlatform(tmpDir, codex, 'project');
+
+      expect(result.status).toBe('failed');
+      expect(result.reason).toContain('Invalid Codex settings');
+      await expect(fs.readFile(canonicalPath, 'utf-8')).resolves.toBe(invalidCanonical);
+      await expect(fs.readFile(legacyPath, 'utf-8')).resolves.toBe(legacy);
+    });
+
+    it('installs a dedicated Claude-style matcher group without replacing user hooks', async () => {
+      const platform: Platform = {
+        id: 'claude',
+        name: 'Claude Code',
+        skillsDir: '.claude',
+        openspecToolId: 'claude',
+        supportsHooks: true,
+        hookFormat: 'claude-code',
+      };
+      const settingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+      const initialSettings = {
+        model: 'sonnet',
+        hooks: {
+          PostToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'echo post' }] }],
+          PreToolUse: [
+            {
+              matcher: 'Write|Edit',
+              hooks: [
+                { type: 'command', command: 'echo user-write-check' },
+                { type: 'command', command: staleOpenSuperCommand },
+              ],
+            },
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'echo user-bash-check' }],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, JSON.stringify(initialSettings), 'utf-8');
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform);
+      const firstInstall = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+      const opensuperGroup = firstInstall.hooks.PreToolUse.find(
+        (entry: { hooks?: Array<{ command?: string; args?: string[] }> }) =>
+          entry?.hooks?.some(
+            (hook) =>
+              hook.command === 'node' &&
+              hook.args?.some((arg) => arg.endsWith('opensuper-hook-router.mjs')),
+          ),
+      );
+
+      expect(firstInstall.model).toBe('sonnet');
+      expect(firstInstall.hooks.PostToolUse).toEqual(initialSettings.hooks.PostToolUse);
+      expect(firstInstall.hooks.PreToolUse).toHaveLength(3);
+      expect(firstInstall.hooks.PreToolUse[0]).toEqual({
+        matcher: 'Write|Edit',
+        hooks: [{ type: 'command', command: 'echo user-write-check' }],
+      });
+      expect(firstInstall.hooks.PreToolUse[1]).toEqual(initialSettings.hooks.PreToolUse[1]);
+      expect(opensuperGroup.matcher).toBe('Write|Edit');
+      expect(opensuperGroup.hooks).toHaveLength(1);
+      const hook = opensuperGroup.hooks[0] as { type: string; command: string; args: string[] };
+      expect(hook).toEqual({
+        type: 'command',
+        command: 'node',
+        args: [
+          path.join(
+            tmpDir,
+            '.claude',
+            'skills',
+            'opensuper',
+            'scripts',
+            'opensuper-hook-router.mjs',
+          ),
+          '--platform',
+          'claude',
+          '--project-root',
+          tmpDir,
+        ],
+      });
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform);
+      const secondInstall = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+      expect(secondInstall).toEqual(firstInstall);
+    });
+
+    it('does not throw when an existing hook group is malformed (non-array)', async () => {
+      // Hand-edited settings may store a hook group as an object/scalar rather
+      // than an array; install must coerce it instead of throwing.
+      const platform: Platform = {
+        id: 'claude',
+        name: 'Claude Code',
+        skillsDir: '.claude',
+        openspecToolId: 'claude',
+        supportsHooks: true,
+        hookFormat: 'claude-code',
+      };
+      const settingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+      const malformedSettings = {
+        hooks: {
+          PreToolUse: { matcher: 'Write|Edit', hooks: [{ type: 'command', command: 'echo x' }] },
+        },
+      };
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, JSON.stringify(malformedSettings), 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, platform)).resolves.toEqual({
+        status: 'installed',
+      });
+
+      const updated = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+      expect(updated.hooks.PreToolUse).toHaveLength(1);
+      expect(updated.hooks.PreToolUse[0].matcher).toBe('Write|Edit');
+    });
+
+    it.each([
+      { id: 'qwen', skillsDir: '.qwen', hookFormat: 'qwen' as const },
+      { id: 'qoder', skillsDir: '.qoder', hookFormat: 'qoder' as const },
+      { id: 'codebuddy', skillsDir: '.codebuddy', hookFormat: 'codebuddy' as const },
+      { id: 'workbuddy', skillsDir: '.workbuddy', hookFormat: 'codebuddy' as const },
+    ])(
+      'installs a dedicated $id matcher group idempotently',
+      async ({ id, skillsDir, hookFormat }) => {
+        const platform: Platform = {
+          id,
+          name: id,
+          skillsDir,
+          openspecToolId: id,
+          supportsHooks: true,
+          hookFormat,
+        };
+        const settingsPath = path.join(tmpDir, skillsDir, 'settings.json');
+        const initialSettings = {
+          theme: 'dark',
+          hooks: {
+            AfterTool: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo after' }] }],
+            PreToolUse: [
+              {
+                matcher: 'Write|Edit',
+                hooks: [
+                  {
+                    type: 'command',
+                    command: 'echo user-write-check',
+                    description: 'User write check',
+                  },
+                  {
+                    type: 'command',
+                    command: staleOpenSuperCommand,
+                    description: 'Old OpenSuper hook',
+                  },
+                ],
+              },
+            ],
+          },
+        };
+        await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+        await fs.writeFile(settingsPath, JSON.stringify(initialSettings), 'utf-8');
+
+        await installOpenSuperHooksForPlatform(tmpDir, platform);
+        const firstInstall = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+
+        expect(firstInstall.theme).toBe('dark');
+        expect(firstInstall.hooks.AfterTool).toEqual(initialSettings.hooks.AfterTool);
+        expect(firstInstall.hooks.PreToolUse).toHaveLength(2);
+        expect(firstInstall.hooks.PreToolUse[0].hooks).toEqual([
+          {
+            type: 'command',
+            command: 'echo user-write-check',
+            description: 'User write check',
+          },
+        ]);
+        expect(firstInstall.hooks.PreToolUse[1].hooks).toEqual([
+          {
+            type: 'command',
+            command: expectedHookCommand(skillsDir, id),
+            description: 'Route each write to the selected OpenSuper Native or Classic phase guard',
+          },
+        ]);
+
+        await installOpenSuperHooksForPlatform(tmpDir, platform);
+        const secondInstall = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+        expect(secondInstall).toEqual(firstInstall);
+      },
+    );
+
+    it('writes Trae project hooks to hooks.json with versioned PreToolUse groups', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'trae')!;
+      const hooksPath = path.join(tmpDir, '.trae', 'hooks.json');
+      const initialHooks = {
+        version: 1,
+        userSetting: 'keep',
+        hooks: {
+          PostToolUse: [{ matcher: 'Read', hooks: [{ type: 'command', command: 'echo post' }] }],
+          PreToolUse: [
+            {
+              matcher: 'Write|Edit',
+              hooks: [
+                { type: 'command', command: 'echo user-write-check', timeout: 5 },
+                { type: 'command', command: staleOpenSuperCommand, timeout: 10 },
+              ],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(hooksPath), { recursive: true });
+      await fs.writeFile(hooksPath, JSON.stringify(initialHooks), 'utf-8');
+
+      await configureNativeBuildChange(tmpDir);
+      await copyOpenSuperSkillsForPlatform(tmpDir, platform, false, 'skills', 'project');
+      await expect(installOpenSuperHooksForPlatform(tmpDir, platform, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+      const firstInstall = JSON.parse(await fs.readFile(hooksPath, 'utf-8'));
+
+      expect(firstInstall.version).toBe(1);
+      expect(firstInstall.userSetting).toBe('keep');
+      expect(firstInstall.hooks.PostToolUse).toEqual(initialHooks.hooks.PostToolUse);
+      expect(firstInstall.hooks.PreToolUse).toEqual([
+        {
+          matcher: 'Write|Edit',
+          hooks: [{ type: 'command', command: 'echo user-write-check', timeout: 5 }],
+        },
+        {
+          matcher: 'Write|Edit',
+          hooks: [
+            {
+              type: 'command',
+              command: expectedHookCommand('.trae', 'trae'),
+              timeout: 30,
+            },
+          ],
+        },
+      ]);
+      const router = runManagedHookCommand(
+        firstInstall.hooks.PreToolUse[1].hooks[0].command,
+        tmpDir,
+      );
+      expect(router.status, router.stderr).toBe(0);
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform, 'project');
+      const secondInstall = JSON.parse(await fs.readFile(hooksPath, 'utf-8'));
+      expect(secondInstall).toEqual(firstInstall);
+    });
+
+    it('writes and removes Trae CN project hooks from .trae and global hooks from .trae-cn', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'trae-cn')!;
+      const projectHooksPath = path.join(tmpDir, '.trae', 'hooks.json');
+      const globalRoot = path.join(tmpDir, 'home');
+      const globalHooksPath = path.join(globalRoot, '.trae-cn', 'hooks.json');
+
+      await configureNativeBuildChange(tmpDir);
+      await copyOpenSuperSkillsForPlatform(tmpDir, platform, false, 'skills', 'project');
+      await copyOpenSuperSkillsForPlatform(globalRoot, platform, false, 'skills', 'global');
+      await expect(installOpenSuperHooksForPlatform(tmpDir, platform, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+      await expect(
+        installOpenSuperHooksForPlatform(globalRoot, platform, 'global'),
+      ).resolves.toEqual({
+        status: 'installed',
+      });
+
+      const projectHooks = JSON.parse(await fs.readFile(projectHooksPath, 'utf-8'));
+      const globalHooks = JSON.parse(await fs.readFile(globalHooksPath, 'utf-8'));
+      expect(projectHooks.hooks.PreToolUse[0].hooks[0]).toMatchObject({
+        type: 'command',
+        command: expectedHookCommand('.trae-cn', 'trae-cn'),
+        timeout: 30,
+      });
+      expect(globalHooks.hooks.PreToolUse[0].hooks[0]).toMatchObject({
+        type: 'command',
+        command: expectedHookCommand('.trae-cn', 'trae-cn', globalRoot, 'global'),
+        timeout: 30,
+      });
+      const projectRouter = runManagedHookCommand(
+        projectHooks.hooks.PreToolUse[0].hooks[0].command,
+        tmpDir,
+      );
+      const globalRouter = runManagedHookCommand(
+        globalHooks.hooks.PreToolUse[0].hooks[0].command,
+        tmpDir,
+      );
+      expect(projectRouter.status, projectRouter.stderr).toBe(0);
+      expect(globalRouter.status, globalRouter.stderr).toBe(0);
+
+      await expect(removeOpenSuperHooksForPlatform(tmpDir, platform, 'project')).resolves.toEqual({
+        removed: 1,
+        failed: 0,
+      });
+      await expect(
+        removeOpenSuperHooksForPlatform(globalRoot, platform, 'global'),
+      ).resolves.toEqual({
+        removed: 1,
+        failed: 0,
+      });
+      const cleanedProjectHooks = JSON.parse(await fs.readFile(projectHooksPath, 'utf-8'));
+      const cleanedGlobalHooks = JSON.parse(await fs.readFile(globalHooksPath, 'utf-8'));
+      expect(cleanedProjectHooks.hooks).toBeUndefined();
+      expect(cleanedGlobalHooks.hooks).toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.trae-cn', 'hooks.json'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+
+    it('leaves invalid Trae hooks byte-for-byte unchanged', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'trae')!;
+      const hooksPath = path.join(tmpDir, '.trae', 'hooks.json');
+      const invalidHooks = '{\r\n  "hooks": {\r\n';
+      await fs.mkdir(path.dirname(hooksPath), { recursive: true });
+      await fs.writeFile(hooksPath, invalidHooks, 'utf-8');
+
+      const result = await installOpenSuperHooksForPlatform(tmpDir, platform, 'project');
+
+      expect(result.status).toBe('failed');
+      expect(result.reason).toContain('Invalid Trae settings');
+      await expect(fs.readFile(hooksPath, 'utf-8')).resolves.toBe(invalidHooks);
+    });
+
+    it('does not add a global CodeBuddy Hook or change unrelated user config', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'codebuddy')!;
+      const homeDir = path.join(tmpDir, 'home');
+      const settingsPath = path.join(homeDir, '.codebuddy', 'settings.json');
+      const initialSettings = {
+        enabledPlugins: { 'cloudbase@codebuddy-plugins-official': true },
+      };
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, JSON.stringify(initialSettings), 'utf-8');
+
+      await expect(installOpenSuperHooksForPlatform(homeDir, platform, 'global')).resolves.toEqual({
+        status: 'skipped',
+        reason: 'blocking Hooks are project-scoped',
+      });
+
+      const updated = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+      expect(updated).toEqual(initialSettings);
+    });
+
+    it('leaves invalid CodeBuddy settings byte-for-byte unchanged', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'codebuddy')!;
+      const settingsPath = path.join(tmpDir, '.codebuddy', 'settings.json');
+      const invalidSettings = '{\r\n  "enabledPlugins": {\r\n';
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, invalidSettings, 'utf-8');
+
+      const result = await installOpenSuperHooksForPlatform(tmpDir, platform, 'project');
+
+      expect(result.status).toBe('failed');
+      expect(result.reason).toContain('Invalid CodeBuddy settings');
+      await expect(fs.readFile(settingsPath, 'utf-8')).resolves.toBe(invalidSettings);
+    });
+
+    it.each([
+      {
+        id: 'claude',
+        configPath: ['.claude', 'settings.local.json'],
+      },
+      {
+        id: 'amazon-q',
+        configPath: ['.amazonq', 'settings.local.json'],
+      },
+      {
+        id: 'gemini',
+        configPath: ['.gemini', 'settings.json'],
+      },
+      {
+        id: 'windsurf',
+        configPath: ['.devin', 'hooks.json'],
+      },
+    ])('leaves malformed $id Hook JSON byte-for-byte unchanged', async ({ id, configPath }) => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === id)!;
+      const settingsPath = path.join(tmpDir, ...configPath);
+      const malformedSettings = '{\r\n  "hooks": {\r\n';
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, malformedSettings, 'utf-8');
+
+      const result = await installOpenSuperHooksForPlatform(tmpDir, platform, 'project');
+
+      expect(result.status).toBe('failed');
+      expect(result.reason).toContain(`Invalid ${platform.name} settings`);
+      await expect(fs.readFile(settingsPath, 'utf-8')).resolves.toBe(malformedSettings);
+    });
+
+    it('preserves working legacy Windsurf hooks when canonical Devin hooks are malformed', async () => {
+      const platform = PLATFORMS.find((candidate) => candidate.id === 'windsurf')!;
+      const canonicalPath = path.join(tmpDir, '.devin', 'hooks.json');
+      const legacyPath = path.join(tmpDir, '.windsurf', 'hooks.json');
+      const malformedCanonical = '{\r\n  "hooks": {\r\n';
+      const userHook = { command: 'echo user-write-check', show_output: false };
+      await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(canonicalPath, malformedCanonical, 'utf-8');
+      await fs.writeFile(
+        legacyPath,
+        JSON.stringify({
+          hooks: {
+            pre_write_code: [
+              userHook,
+              { command: expectedHookCommand('.windsurf', 'windsurf'), show_output: true },
+            ],
+          },
+        }),
+        'utf-8',
+      );
+
+      const result = await installOpenSuperHooksForPlatform(tmpDir, platform, 'project');
+
+      expect(result.status).toBe('failed');
+      expect(result.reason).toContain(`Invalid ${platform.name} settings`);
+      await expect(fs.readFile(canonicalPath, 'utf-8')).resolves.toBe(malformedCanonical);
+      await expect(fs.readFile(legacyPath, 'utf-8').then(JSON.parse)).resolves.toMatchObject({
+        hooks: {
+          pre_write_code: [
+            userHook,
+            { command: expectedHookCommand('.windsurf', 'windsurf'), show_output: true },
+          ],
+        },
+      });
+    });
+
+    it('installs a dedicated Gemini matcher group idempotently', async () => {
+      const platform: Platform = {
+        id: 'gemini',
+        name: 'Gemini CLI',
+        skillsDir: '.gemini',
+        openspecToolId: 'gemini',
+        supportsHooks: true,
+        hookFormat: 'gemini',
+      };
+      const settingsPath = path.join(tmpDir, '.gemini', 'settings.json');
+      const initialSettings = {
+        selectedAuthType: 'oauth',
+        hooks: {
+          AfterTool: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo after' }] }],
+          BeforeTool: [
+            {
+              matcher: 'write_file|edit_file',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'echo user-write-check',
+                  name: 'User write check',
+                },
+                {
+                  type: 'command',
+                  command: staleOpenSuperCommand,
+                  name: 'Old OpenSuper hook',
+                },
+              ],
+            },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, JSON.stringify(initialSettings), 'utf-8');
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform);
+      const firstInstall = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+
+      expect(firstInstall.selectedAuthType).toBe('oauth');
+      expect(firstInstall.hooks.AfterTool).toEqual(initialSettings.hooks.AfterTool);
+      expect(firstInstall.hooks.BeforeTool).toHaveLength(2);
+      expect(firstInstall.hooks.BeforeTool[0].hooks).toEqual([
+        {
+          type: 'command',
+          command: 'echo user-write-check',
+          name: 'User write check',
+        },
+      ]);
+      expect(firstInstall.hooks.BeforeTool[1].hooks).toEqual([
+        {
+          type: 'command',
+          command: expectedHookCommand('.gemini', 'gemini'),
+          name: 'Route each write to the selected OpenSuper Native or Classic phase guard',
+        },
+      ]);
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform);
+      const secondInstall = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+      expect(secondInstall).toEqual(firstInstall);
+    });
+
+    it('replaces only managed Windsurf hooks and preserves user hooks idempotently', async () => {
+      const platform: Platform = {
+        id: 'windsurf',
+        name: 'Windsurf',
+        skillsDir: '.windsurf',
+        openspecToolId: 'windsurf',
+        supportsHooks: true,
+        hookFormat: 'windsurf',
+      };
+      const hooksPath = path.join(tmpDir, '.windsurf', 'hooks.json');
+      const initialHooks = {
+        enabled: true,
+        hooks: {
+          post_write_code: [{ command: 'echo post', show_output: false }],
+          pre_write_code: [
+            { command: 'echo user-write-check', show_output: false },
+            { command: staleOpenSuperCommand, show_output: true },
+          ],
+        },
+      };
+      await fs.mkdir(path.dirname(hooksPath), { recursive: true });
+      await fs.writeFile(hooksPath, JSON.stringify(initialHooks), 'utf-8');
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform);
+      const firstInstall = JSON.parse(await fs.readFile(hooksPath, 'utf-8'));
+
+      expect(firstInstall.enabled).toBe(true);
+      expect(firstInstall.hooks.post_write_code).toEqual(initialHooks.hooks.post_write_code);
+      expect(firstInstall.hooks.pre_write_code).toEqual([
+        { command: 'echo user-write-check', show_output: false },
+        {
+          command: expectedHookCommand('.windsurf', 'windsurf'),
+          show_output: true,
+        },
+      ]);
+
+      await installOpenSuperHooksForPlatform(tmpDir, platform);
+      const secondInstall = JSON.parse(await fs.readFile(hooksPath, 'utf-8'));
+      expect(secondInstall).toEqual(firstInstall);
+    });
+
+    it('does not overwrite an unmanaged Kiro file at the canonical Router path', async () => {
+      const kiro = PLATFORMS.find((candidate) => candidate.id === 'kiro')!;
+      const canonicalPath = path.join(tmpDir, '.kiro', 'hooks', 'opensuper-hook-router.kiro.hook');
+      const original = {
+        enabled: true,
+        then: { type: 'runCommand', command: 'node user-hook.mjs' },
+      };
+      await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
+      await fs.writeFile(canonicalPath, JSON.stringify(original, null, 2), 'utf8');
+
+      await expect(
+        installOpenSuperHooksForPlatform(tmpDir, kiro, 'project'),
+      ).resolves.toMatchObject({
+        status: 'failed',
+        reason: expect.stringContaining('user-owned'),
+      });
+      await expect(fs.readFile(canonicalPath, 'utf8').then(JSON.parse)).resolves.toEqual(original);
+    });
+
+    it('preserves unmanaged legacy-named Kiro files while removing managed legacy files', async () => {
+      const kiro = PLATFORMS.find((candidate) => candidate.id === 'kiro')!;
+      const hooksDir = path.join(tmpDir, '.kiro', 'hooks');
+      const classicLegacyPath = path.join(hooksDir, 'opensuper-hook-guard.kiro.hook');
+      const nativeLegacyPath = path.join(hooksDir, 'opensuper-native-hook-guard.kiro.hook');
+      const staleNativeCommand = `node "${normalized(
+        path.join(
+          tmpDir,
+          '.kiro',
+          'skills',
+          'opensuper-native',
+          'scripts',
+          'opensuper-native-hook-guard.mjs',
+        ),
+      )}"`;
+      await fs.mkdir(hooksDir, { recursive: true });
+      await fs.writeFile(
+        classicLegacyPath,
+        JSON.stringify({ then: { type: 'runCommand', command: 'node user.mjs' } }),
+        'utf8',
+      );
+      await fs.writeFile(
+        nativeLegacyPath,
+        JSON.stringify({ then: { type: 'runCommand', command: staleNativeCommand } }),
+        'utf8',
+      );
+
+      await expect(installOpenSuperHooksForPlatform(tmpDir, kiro, 'project')).resolves.toEqual({
+        status: 'installed',
+      });
+      await expect(fs.readFile(classicLegacyPath, 'utf8').then(JSON.parse)).resolves.toBeTruthy();
+      await expect(fs.access(nativeLegacyPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('keeps migrated Copilot entries schema-valid and carries metadata onto the Router entry', async () => {
+      const copilot = PLATFORMS.find((candidate) => candidate.id === 'github-copilot')!;
+      const hookPath = path.join(tmpDir, '.github', 'hooks', 'opensuper-guard.json');
+      const staleRouterCommand = expectedHookCommand('.github', 'github-copilot');
+      await fs.mkdir(path.dirname(hookPath), { recursive: true });
+      await fs.writeFile(
+        hookPath,
+        JSON.stringify({
+          hooks: {
+            preToolUse: [{ matcher: 'old', bash: staleRouterCommand, label: 'keep-me' }],
+          },
+        }),
+        'utf8',
+      );
+
+      await installOpenSuperHooksForPlatform(tmpDir, copilot, 'project');
+
+      const entries = (
+        JSON.parse(await fs.readFile(hookPath, 'utf8')) as {
+          hooks: { preToolUse: Array<Record<string, unknown>> };
+        }
+      ).hooks.preToolUse;
+      expect(
+        entries.every((entry) =>
+          ['command', 'bash', 'powershell'].some((key) => typeof entry[key] === 'string'),
+        ),
+      ).toBe(true);
+      expect(entries).toContainEqual(
+        expect.objectContaining({ label: 'keep-me', bash: expect.any(String) }),
+      );
+    });
+  });
+
+  describe('Chinese OpenSuper workflow safeguards', () => {
+    it('uses the OpenSpec status graph to drive Chinese open artifacts', async () => {
+      const zhOpen = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-open', 'SKILL.md'),
+        'utf-8',
+      );
+
+      expect(zhOpen).toContain(
+        'opensuper classic openspec --agent-json -- instructions <artifact-id> --change "<name>" --json',
+      );
+      expect(zhOpen).toContain('不得写死生成顺序');
+      expect(zhOpen).not.toContain(
+        'opensuper classic openspec --agent-json -- instructions proposal --change "<name>" --json',
+      );
+      for (const field of [
+        '`context`',
+        '`rules`',
+        '`template`',
+        '`instruction`',
+        '`resolvedOutputPath`',
+        '`dependencies`',
+      ]) {
+        expect(zhOpen).toContain(field);
+      }
+      expect(zhOpen).toContain(
+        '遵守 `context` 和 `rules` 中的约束，**不得将这些内容复制到产物中**',
+      );
+      expect(zhOpen).toContain('每创建一个产物后');
+      expect(zhOpen).toContain(
+        'opensuper classic openspec --agent-json -- status --change "<name>" --json',
+      );
+      expect(zhOpen).toContain('必须立即停止并报告 OpenSpec 错误');
+      expect(zhOpen).toContain('不能改用写死的文档结构');
+    });
+
+    it('uses the OpenSpec status graph to drive English open artifacts', async () => {
+      const enOpen = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-open', 'SKILL.md'),
+        'utf-8',
+      );
+
+      expect(enOpen).toContain(
+        'opensuper classic openspec --agent-json -- instructions <artifact-id> --change "<name>" --json',
+      );
+      expect(enOpen).toContain('Do not hard-code generation order');
+      expect(enOpen).not.toContain(
+        'opensuper classic openspec --agent-json -- instructions proposal --change "<name>" --json',
+      );
+      for (const field of [
+        '`context`',
+        '`rules`',
+        '`template`',
+        '`instruction`',
+        '`resolvedOutputPath`',
+        '`dependencies`',
+      ]) {
+        expect(enOpen).toContain(field);
+      }
+      expect(enOpen).toContain('do not copy them into the artifact');
+      expect(enOpen).toContain('After each artifact is created, refresh status once');
+      expect(enOpen).toContain(
+        'opensuper classic openspec --agent-json -- status --change "<name>" --json',
+      );
+      expect(enOpen).toContain(
+        'Also stop and report the OpenSpec error if adapter `status` / `instructions` fails',
+      );
+      expect(enOpen).toContain('Do not substitute a hard-coded document structure');
+    });
+
+    it('routes Chinese tweak build through OpenSpec apply without changing full workflow', async () => {
+      const zhTweak = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-tweak', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhBuild = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+
+      expect(zhTweak).toContain('使用 Skill 工具加载 `openspec-apply-change` 技能');
+      expect(zhTweak).toContain('这条 apply 路径只属于 tweak');
+      expect(zhTweak).toContain(
+        '完整 `/opensuper-classic` 或 `workflow: full` 不得套用 tweak 的 `openspec-apply-change` 构建路径',
+      );
+      expect(zhTweak).toContain('单个 OpenSpec change');
+      expect(zhTweak).not.toContain('不新增 capability');
+      expect(zhBuild).not.toContain('openspec-apply-change');
+    });
+
+    it('requires explicit user confirmation at full-workflow decision points', async () => {
+      const zhOpenSuper = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhOpen = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-open', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhDesign = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-design', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhBuild = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhVerify = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-verify', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhArchive = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-archive', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhHotfix = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-hotfix', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhTweak = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-tweak', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhScripts = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'reference', 'scripts.md'),
+        'utf-8',
+      );
+      const zhIntentFrame = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'reference', 'intent-frame.md'),
+        'utf-8',
+      );
+      const zhOpenSuperRule = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.md'),
+        'utf-8',
+      );
+      const zhDecisionPoint = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'reference', 'decision-point.md'),
+        'utf-8',
+      );
+      const zhDebugGate = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'reference', 'debug-gate.md'),
+        'utf-8',
+      );
+      const zhRecovery = await fs.readFile(
+        path.resolve('assets/skills-zh/opensuper-classic/reference/context-recovery.md'),
+        'utf8',
+      );
+      const zhFields = await fs.readFile(
+        path.resolve('assets/skills-zh/opensuper-classic/reference/opensuper-yaml-fields.md'),
+        'utf8',
+      );
+
+      expect(zhOpenSuper).toContain('决策点是阻塞点');
+      expect(zhOpenSuper).toContain('OpenSuperIntentFrame');
+      expect(zhOpenSuper).toContain('opensuper classic intent route --stdin');
+      expect(zhOpenSuper).toContain('最小示例与目标选择规则');
+      const frame = JSON.parse(zhIntentFrame.match(/```json\s*([\s\S]*?)```/u)![1]);
+      expect(frame.schema_version).toBe('opensuper.intent.v1');
+      expect(frame).toHaveProperty('slots');
+      expect(frame).toHaveProperty('context.active_change_names');
+      expect(frame.evidence).toEqual([]);
+      expect(frame.proposed_route).toEqual({ name: 'ask_user', confidence: 0.5 });
+      for (const key of [
+        'entities',
+        'slots.target_area',
+        'slots.scope',
+        'context.dirty_worktree',
+      ]) {
+        expect(frame).not.toHaveProperty(key);
+      }
+      expect(zhOpenSuper).not.toContain('字段命名采用常见 NLU / Agent Router 术语');
+      expect(zhOpenSuper).not.toContain('填槽指南');
+      expect(zhOpenSuper).toContain('`ask_user`');
+      expect(zhOpenSuper).toContain('Agent 只负责按证据填写意图字段，路由由 Runtime 计算');
+      expect(zhOpenSuper).toContain('以返回结果为准，不另写一套自然语言评分规则');
+      expect(zhOpenSuper).toContain('`opensuper-classic/reference/intent-frame.md`');
+      expect(zhIntentFrame).toContain('`requested_action`');
+      expect(zhIntentFrame).toContain('`workflow_candidate`');
+      expect(zhIntentFrame).toContain('`user_explicit_workflow`');
+      expect(zhIntentFrame).toContain('`existing_behavior`');
+      expect(zhIntentFrame).toContain('`new_capability`');
+      expect(zhIntentFrame).toContain('`public_api_change`');
+      expect(zhIntentFrame).toContain('`schema_change`');
+      expect(zhIntentFrame).toContain('`cross_module_change`');
+      expect(zhIntentFrame).toContain('`proposed_route`');
+      expect(zhHotfix).toContain('入口已传入需求意图摘要（intent frame）');
+      expect(zhHotfix).toContain(
+        '复核 `risk_signal`，以及是否新增功能、引入公共 API、修改结构化数据格式（schema）、需要跨模块协调或涉及深层架构问题',
+      );
+      expect(zhTweak).toContain('入口已传入需求意图摘要（intent frame）');
+      expect(zhTweak).toContain(
+        '复核 `risk_signal`，以及是否新增功能、引入公共 API、修改结构化数据格式（schema）、需要跨模块协调或涉及深层架构问题',
+      );
+      expect(zhScripts).toContain('opensuper classic intent route --stdin');
+      expect(zhScripts).not.toContain('<opensuper-intent-script>');
+      expect(zhOpenSuper).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect(zhDecisionPoint).toContain('存在 `AskUserQuestion` 时，使用它展示单选/多选选项');
+      expect(zhDecisionPoint).toContain('若无法使用 `AskUserQuestion`');
+      expect(zhDecisionPoint).toContain('本会话后续决策点不得反复重试它');
+      expect(zhDecisionPoint).toContain('否则在对话中提出明确选项并等待用户回复');
+      expect(zhDecisionPoint).toContain('不得用推荐规则、默认值、历史偏好');
+      expect(zhOpen).toContain('### 1b. 整理需求并确定 Change 名称');
+      expect(zhOpen).toContain('范围与命名都明确时直接继续');
+      expect(zhOpen).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect(zhOpen).toContain(
+        '完整 `/opensuper-classic` 流程默认不得使用 Skill 工具加载 `openspec-propose` 技能',
+      );
+      expect(zhOpen).toContain(
+        'Step 1b 已形成范围明确的 resolved brief 时，不再执行其中的 "STOP and wait for user direction"',
+      );
+      expect(zhOpen).not.toContain('OpenSpec artifact 指令');
+      expect(zhOpen).not.toContain('fast-forward');
+      expect(zhOpen).toContain(
+        '澄清摘要必须包含：目标、非目标、范围边界、关键未知项、验收场景草案',
+      );
+      expect(zhDesign).toContain(
+        '**立即执行：** 使用 Skill 工具加载 Superpowers `brainstorming` 技能。禁止跳过此步骤。',
+      );
+      expect(zhDesign).toContain('技能加载后，按其指引使用以下上下文');
+      expect(zhDesign).not.toContain('ARGUMENTS 包含');
+      expect(zhDesign).toContain(
+        '必须按 `opensuper-classic/reference/decision-point.md` 的协议暂停并等待用户明确确认设计方案',
+      );
+      expect(zhDesign).toContain('brainstorming 引用这些需求，只讨论尚未解决的技术选择');
+      expect(zhDesign).not.toContain('跳过重复上下文探索，直接进入设计提问');
+      expect(zhOpen).toContain('opensuper-classic/reference/workspace.md');
+      expect(zhOpen).toContain('推荐理由不能代替用户选择');
+      expect(zhBuild).toContain('工作区必须已在 Open 阶段准备并绑定');
+      expect(zhBuild).toContain('在同一轮提问中收集执行方式、TDD 和审查模式');
+      expect(zhBuild).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect(zhVerify).toContain('前 3 次可修复的失败自动回到 build');
+      expect(zhVerify).toContain(
+        '只有接受 WARNING/SUGGESTION 偏差或第 4 次失败后的策略选择才是用户决策点',
+      );
+      expect(zhVerify).toContain('verify 阶段不处理、合并或丢弃分支');
+      expect(zhVerify).toContain('不写入 `branch_status: handled`');
+      expect(zhArchive).toContain('### 5. 交付归档提交并完成');
+      expect(zhArchive).toContain('opensuper state set <change-name> branch_status handled');
+      expect(zhArchive).toContain('### 1. 请用户确认归档与交付方式');
+      expect(zhArchive).toContain('不能在获得授权前运行 archive-confirm 或 archive');
+      expect(zhArchive).toContain('按 decision-point.md 暂停，请用户确认归档和交付方式');
+      expect(zhArchive).toMatch(/\|\s*选项\s*\|\s*方式\s*\|\s*实际影响\s*\|/u);
+      expect(zhArchive).toMatch(
+        /\|\s*A\s*\|\s*仅归档（不推送）\s*\|\s*完成归档并创建唯一归档提交；提交只保留在当前绑定分支，不推送、不创建 PR\s*\|/u,
+      );
+      expect(zhArchive).toContain('「确认归档并立即推送」');
+      expect(zhArchive).toContain('「确认归档、立即推送并创建 PR」');
+      expect(zhArchive).toContain('「需要调整或重新验证」');
+      expect(zhArchive).toContain('「暂不归档」');
+      expect(zhArchive).toContain('`opensuper state transition <change-name> archive-reopen`');
+      expect(zhArchive).toContain(
+        'handled 只是兼容旧流程的状态字段，不能表示用户已授权 local/push/pr，也不能证明这些动作已成功',
+      );
+      expect(zhArchive).toContain('归档阶段不再调用 Superpowers `finishing-a-development-branch`');
+      expect(zhArchive).not.toContain('使用 Skill 工具加载 Superpowers');
+      expect(zhArchive).toContain('调用 `/opensuper-classic` 或 `/opensuper-open`');
+      expect(zhArchive).not.toContain('调用 `/opensuper` 或 `/opensuper-open`');
+      expect(zhVerify).toContain('验证通过本身不代表用户已授权归档');
+      expect(zhHotfix).toContain(
+        '出现上述变化，或改动文件数超过提示阈值时，**必须按 `opensuper-classic/reference/decision-point.md` 暂停并等待用户明确选择**',
+      );
+      expect(zhHotfix).toContain('不得直接进入 `/opensuper-design`');
+      expect(zhTweak).toContain(
+        '出现上述变化，或改动文件数超过提示阈值时，**必须按 `opensuper-classic/reference/decision-point.md` 暂停并等待用户明确选择**',
+      );
+      expect(zhTweak).toContain('不得直接进入 `/opensuper-design`');
+      expect(zhOpenSuper).toContain('opensuper-classic/reference/context-recovery.md');
+      expect(zhRecovery).toContain('`verify_result: fail` → 自动调用 `/opensuper-build` 继续修复');
+      expect(zhOpenSuper).not.toContain(
+        '`verify_result: fail` → `opensuper state transition <name> verify-fail` 后 `/opensuper-build`',
+      );
+      expect(zhHotfix).toContain(
+        '若 hotfix 创建了 delta spec，则根据 opensuper-verify 的规模评估规则进入完整验证路径',
+      );
+      expect(zhHotfix).not.toContain('停止 hotfix，升级为 `/opensuper`');
+      expect(zhTweak).toContain('带 delta spec 的验证分流');
+
+      // HIGH: hotfix/tweak IMPORTANT blocks must acknowledge verify decision points
+      expect(zhHotfix).toContain('验证阶段（opensuper-verify）需要接受 WARNING/SUGGESTION 偏差');
+      expect(zhTweak).toContain('验证阶段（opensuper-verify）需要接受 WARNING/SUGGESTION 偏差');
+      expect(zhHotfix).toContain('归档前在一个最终确认中选择是否归档及归档提交的交付方式');
+      expect(zhTweak).toContain('归档前在一个最终确认中选择是否归档及归档提交的交付方式');
+
+      // MEDIUM: opensuper-design brainstorming does not write Design Doc before confirmation
+      expect(zhDesign).toContain(
+        'brainstorming 阶段先提出候选方案，供用户在 Step 1c 确认，不直接写成正式 Design Doc',
+      );
+      expect(zhDesign).toContain('正式技术设计以 `design_doc` 指向的文件为准');
+      expect(zhDesign).toContain('优先使用 `<classic-change-dir>/design.md`');
+      expect(zhDesign).toContain('不能只检查 Spec Patch');
+      expect(zhDesign).toContain('持续更新 `brainstorm-summary.md`');
+      expect(zhDesign).toContain('### 3a. 可选主动式上下文压缩');
+
+      // MEDIUM: opensuper-verify Spec drift requires user choice
+      expect(zhVerify).toContain('必须以单选题形式暂停、展示处理方式并等待用户选择');
+
+      // A user-requested plan pause resumes without reconfiguring valid choices.
+      expect(zhRecovery).toContain('`build_pause: plan-ready` 表示用户要求计划后暂停');
+      expect(zhRecovery).toContain('有效计划与配置沿用');
+      expect(zhRecovery).toContain('只有用户明确要求继续才清除暂停');
+      expect(zhRecovery).toContain('仅在配置缺失或用户明确要求更改时');
+      expect(zhFields).toContain('`build_pause` 不是执行方式，不得写入 `build_mode`');
+      for (const source of [zhOpenSuper, zhRecovery, zhBuild]) {
+        expect(source).not.toContain('重新发起同一个联合决策；只有用户给出完整配置后才清除暂停');
+      }
+      expect(zhBuild).toContain('在同一轮提问中收集执行方式、TDD 和审查模式');
+      expect(zhBuild).toContain('计划完成后，默认按已确认的策略继续，不再追加配置确认');
+      expect(zhBuild).toContain('executing-plans：使用 Skill 工具加载');
+      expect(zhBuild).toContain('review_mode');
+      expect(zhBuild).toContain('保留 isolation、bound_branch 和已有暂停状态');
+      expect(zhBuild).toContain('Build 只做任务或分段审查，Verify 负责唯一最终集成审查');
+      expect(zhBuild).toContain('不新建 Worktree、重新选择隔离、追加最终审查');
+      expect(zhBuild).toContain('验收任务后进入 Verify');
+      expect(zhBuild).toContain('必须解决 CRITICAL/IMPORTANT 问题');
+      expect(zhBuild).toContain(
+        'opensuper check run <change-name> build --local -- <program> [args...]',
+      );
+      expect(zhVerify).toContain(
+        'opensuper check run <change-name> verify --local -- <program> [args...]',
+      );
+      expect(zhBuild).toContain('OpenSuper **绝不会执行该文本**，也不能据此自动推进');
+      expect(zhVerify).toContain('手工 `record-check` 只保存声明，不能据此自动推进阶段');
+      expect(zhBuild).toContain('构建通过不替代测试和验收场景');
+      expect(zhVerify).toContain('verify 与 build 的检查结果彼此独立，不能互相替代');
+      expect(zhBuild).toContain(
+        '`OPENSUPER_SKIP_BUILD=1` 仅是旧流程的兼容绕过方式，不是可审计的构建证据',
+      );
+      expect(zhVerify).toContain('`OPENSUPER_SKIP_BUILD=1` 不能作为可核实的检查记录');
+
+      // MEDIUM: opensuper-verify Step 1b auto-repairs CRITICAL/IMPORTANT findings
+      // without turning mandatory work into a user decision.
+      expect(zhVerify).toContain('不额外询问“是否修复”');
+      expect(zhVerify).toContain('CRITICAL/IMPORTANT 始终不可豁免');
+      expect(zhVerify).toContain('Verify 负责整个 change 的唯一最终集成代码审查');
+      expect(zhVerify).toContain('`review_mode: off`：跳过自动代码审查');
+      expect(zhVerify).toContain(
+        '`review_mode: standard|thorough`：安排独立审查者（reviewer）审查整个 change',
+      );
+      expect(zhVerify).toContain('无 CRITICAL 或 IMPORTANT 问题');
+      expect(zhVerify).toContain('不影响正确性、安全或边界条件的代码写法一致性建议');
+      expect(zhVerify).toContain('它不替代 spec 覆盖率、Design Doc 一致性或漂移检查');
+      expect(zhHotfix).toContain('默认 `review_mode: off`');
+
+      // MEDIUM: hotfix task count alone does not escalate; only qualitative scope signals do.
+      expect(zhHotfix).toContain('任务数量本身不触发 `/opensuper-build`');
+
+      // LOW: opensuper-build "中" level requires user confirmation before brainstorming
+      expect(zhBuild).toContain(
+        '暂停、展示选择并等待用户明确确认后**，必须使用 Skill 工具加载 Superpowers `brainstorming`',
+      );
+
+      // Task granularity alone cannot create an authorization boundary.
+      expect(zhBuild).toContain('任务数量或增长比例本身不触发暂停');
+      expect(zhBuild).toContain('只有实际扩大范围、需要重新设计或出现可独立交付的新功能时');
+      expect(zhBuild).not.toContain('50% 阈值判定');
+
+      // LOW: opensuper-verify Step 2b disambiguates design.md vs Design Doc
+      expect(zhVerify).toContain('实现符合 `<classic-change-dir>/design.md` 高层设计决策');
+      expect(zhTweak).not.toContain('停止 tweak，升级为完整 `/opensuper`');
+
+      // IMPORTANT: main /opensuper preset detection must match the current tweak positioning.
+      expect(zhIntentFrame).toContain(
+        '用户明确说明这是一个可以在单一 OpenSpec change 内完成的轻量或中等变更',
+      );
+      expect(zhIntentFrame).toContain('通过 OpenSpec apply 执行');
+      expect(zhOpenSuper).not.toContain('用户明确描述为文案/配置/文档/prompt 小调整');
+
+      // CRITICAL: build scope split must not bypass OpenSuper state initialization
+      expect(zhBuild).toContain('通过 `/opensuper-open` 创建独立 change');
+      expect(zhBuild).not.toContain('`/opsx:new` 创建独立 change');
+
+      // CRITICAL: open phase PRD split must happen before OpenSpec artifacts are created
+      expect(zhOpen).toContain('### 1a. 创建前确认是否拆分 PRD');
+      expect(zhOpen).toContain('创建多个 OpenSpec changes');
+      expect(zhOpen).toContain('保持为一个 change');
+      expect(zhOpen).toContain('调整拆分方案后继续');
+      expect(zhOpen).toContain('每个被接受的拆分项都必须通过 `/opensuper-open` 创建独立 change');
+      expect(zhOpen).not.toContain('每个被接受的拆分项都必须通过 `/opsx:new` 创建独立 change');
+      expect(zhOpen).toContain('已确认拆分项');
+      expect(zhOpen).toContain('跳过 PRD 拆分预检');
+      expect(zhOpen).toContain(
+        '批量拆分模式下，单个拆分项完成 open 阶段后，不得自动进入 `/opensuper-design`',
+      );
+      expect(zhOpen).toContain('只有所有拆分项都通过入口检查后');
+      expect(zhOpen).toContain('该入口已检查 OpenSpec 的全部必需依赖、实际输出和 OpenSuper 状态');
+      expect(zhOpen).toContain('顶层 tasks 已完成不能掩盖未完成依赖');
+      expect(zhOpen).toContain('闭包不要求 design 时，不强制生成');
+      expect(zhOpen).toContain('中断后恢复时，先读取 `.opensuper/batches/<batch-id>.json`');
+
+      // The router exposes the decision protocol; phase-specific boundaries live there.
+      expect(zhOpenSuper).toContain('opensuper-classic/reference/decision-point.md');
+      expect(zhDecisionPoint).toContain('公开行为或接口发生变化、验收要求或风险承担方式改变');
+      expect(zhDecisionPoint).toContain('一次确认归档与 local/push/pr 交付方式');
+      expect(zhDecisionPoint).toContain('是否拆分 PRD');
+
+      // IMPORTANT: accepted Spec drift edits must not loop back through dirty-worktree handling
+      expect(zhVerify).toContain('选项 A 属于 verify 阶段允许产物');
+
+      // Dependency triggers must be explicit skill invocations, not ambiguous prose.
+      expect(zhOpen).toContain('直接使用 `worktree`');
+      expect(zhBuild).not.toContain('using-git-worktrees');
+      expect(zhBuild).not.toContain('或使用原生 `EnterWorktree` 工具');
+      expect(zhBuild).toContain('必须使用 Skill 工具加载 Superpowers `brainstorming`');
+      expect(zhRecovery).toContain('subagent-driven-development 模式下，主会话不接管实现');
+      expect(zhBuild).toContain('主会话负责协调，不代替实现代理编写代码');
+      expect(zhBuild).toContain('保留 isolation、bound_branch 和已有暂停状态');
+      expect(zhBuild).not.toContain('不得预检、推断或筛除');
+      expect(zhBuild).not.toContain('真实异步派发、独立上下文、结果回收和所需交接能力');
+      expect(zhBuild).not.toContain('`platform-default`');
+      expect(zhBuild).toContain('同时写入 `subagent_dispatch confirmed`');
+      expect(zhBuild).not.toContain('使用 Skill 工具加载对应技能');
+      expect(zhBuild).toContain('tdd_mode');
+      expect(zhBuild).toContain(
+        'opensuper state set <name> build_mode autonomous subagent_dispatch null tdd_mode tdd review_mode standard --json',
+      );
+      expect(zhOpenSuper).toContain('不得擅自把已有 full change 改成轻量流程');
+      expect(zhRecovery).toContain('产物完整仍需核对 Open 用户确认');
+      expect(zhOpenSuper).toContain('文件与对话用于核对');
+      expect(zhOpenSuper).toContain('不能据此手改 phase，绕过确认或验证');
+      expect(zhBuild).toContain('配置为 tdd 时');
+      expect(zhBuild).toContain(
+        '配置为 tdd 时，每个实现任务都必须记录 RED 和对应 GREEN 的命令及真实结果，并确认 RED 的失败原因就是待实现的行为',
+      );
+      expect(zhOpenSuper).toContain('opensuper-classic/reference/opensuper-yaml-fields.md');
+      expect(zhFields).toContain('full workflow 离开 build 阶段前 `tdd_mode` 必须已选择');
+      expect(zhHotfix).toContain('立即使用 Skill 工具加载 `opensuper-design` skill');
+      expect(zhTweak).toContain('立即使用 Skill 工具加载 `opensuper-design` skill');
+      expect(zhVerify).toContain(
+        '用户选择 B 后，运行 `opensuper state transition <change-name> verify-fail`，然后调用 `/opensuper-build`',
+      );
+
+      // CRITICAL: implementation-time crashes must enter systematic debugging and keep tests in the current change.
+      expect(zhBuild).toContain(
+        'autonomous 直接遵循异常调试协议，其他策略加载 Superpowers `systematic-debugging`',
+      );
+      expect(zhBuild).toContain('`opensuper-classic/reference/debug-gate.md`');
+      expect(zhBuild).toContain('出现非预期的崩溃、异常行为、测试失败或构建失败');
+      expect(zhHotfix).toContain('必须使用 Skill 工具加载 Superpowers `systematic-debugging` 技能');
+      expect(zhHotfix).toContain('`opensuper-classic/reference/debug-gate.md`');
+      expect(zhTweak).toContain('`opensuper-classic/reference/debug-gate.md`');
+      expect(zhDebugGate).toContain('先补充能复现该崩溃/异常的最小失败测试');
+      expect(zhDebugGate).toContain(
+        '必须在当前 change 中完成修复和验证，不能另外创建一个“写测试用例”的 change 来代替',
+      );
+
+      // Entries may name the preferred tool; the shared protocol owns platform fallback.
+      expect(zhOpenSuper).toContain('`AskUserQuestion` 优先规则');
+      for (const phase of [zhOpen, zhDesign, zhBuild, zhVerify, zhArchive, zhHotfix, zhTweak]) {
+        expect(phase).toContain('opensuper-classic/reference/decision-point.md');
+        expect(phase).not.toContain('本会话结构化提问不可用');
+      }
+      expect(zhOpenSuper).toContain('`auto_transition: false`');
+      expect(zhOpenSuper).toContain('不改变 Guard 已更新的 phase');
+      expect(zhOpenSuperRule).toContain(
+        'brainstorming in progress: incrementally update brainstorm-summary.md',
+      );
+      expect(zhOpenSuperRule).toContain('Design Doc、状态和最新 handoff 落盘后按需执行');
+      expect(zhOpenSuperRule).toContain(
+        '使用 Skill 工具重新加载 Superpowers `subagent-driven-development` 技能',
+      );
+      expect(zhOpenSuperRule).toContain(
+        '读取 `opensuper-classic/reference/subagent-dispatch.md` 获取 OpenSuper 专属扩展',
+      );
+      expect(zhOpenSuperRule).toContain('禁止在主会话中直接执行 task');
+      for (const content of [zhOpen, zhDesign]) {
+        expect(content).toContain('自动衔接下一阶段');
+        expect(content).toContain('opensuper state next <change-name>');
+        expect(content).toContain('`NEXT: auto`');
+        expect(content).toContain('`NEXT: manual`');
+        expect(content).toContain('按 `HINT`');
+      }
+      for (const content of [zhBuild, zhVerify]) {
+        expect(content).toContain('自动衔接下一阶段');
+        expect(content).toContain('opensuper state next <change-name>');
+        expect(content).toContain('`NEXT: auto`');
+        expect(content).toContain('`NEXT: manual`');
+        expect(content).toContain('按 `HINT`');
+      }
+      expect(zhHotfix).toContain('自动衔接下一阶段');
+      expect(zhHotfix).toContain('opensuper state next <name>');
+      expect(zhHotfix).toContain('`NEXT: auto`');
+      expect(zhHotfix).toContain(
+        '`phase: build` 返回 `opensuper-hotfix`，`verify` 返回 `opensuper-verify`，`archive` 返回 `opensuper-archive`',
+      );
+      expect(zhTweak).toContain('自动衔接下一阶段');
+      expect(zhTweak).toContain('opensuper state next <name>');
+      expect(zhTweak).toContain('`NEXT: auto`');
+      expect(zhTweak).toContain(
+        '`phase: build` 返回 `opensuper-tweak`，`verify` 返回 `opensuper-verify`，`archive` 返回 `opensuper-archive`',
+      );
+    });
+  });
+
+  describe('English OpenSuper workflow safeguards', () => {
+    it('matches the Chinese workflow decision-point requirements', async () => {
+      const enOpenSuper = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'SKILL.md'),
+        'utf-8',
+      );
+      const enOpen = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-open', 'SKILL.md'),
+        'utf-8',
+      );
+      const enDesign = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-design', 'SKILL.md'),
+        'utf-8',
+      );
+      const enBuild = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+      const enVerify = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-verify', 'SKILL.md'),
+        'utf-8',
+      );
+      const enArchive = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-archive', 'SKILL.md'),
+        'utf-8',
+      );
+      const enHotfix = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-hotfix', 'SKILL.md'),
+        'utf-8',
+      );
+      const enTweak = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-tweak', 'SKILL.md'),
+        'utf-8',
+      );
+      const enScripts = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'scripts.md'),
+        'utf-8',
+      );
+      const enIntentFrame = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'intent-frame.md'),
+        'utf-8',
+      );
+      const enOpenSuperRule = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.en.md'),
+        'utf-8',
+      );
+      const enDecisionPoint = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'decision-point.md'),
+        'utf-8',
+      );
+      const enDebugGate = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'debug-gate.md'),
+        'utf-8',
+      );
+      const enRecovery = await fs.readFile(
+        path.resolve('assets/skills/opensuper-classic/reference/context-recovery.md'),
+        'utf8',
+      );
+      const enFields = await fs.readFile(
+        path.resolve('assets/skills/opensuper-classic/reference/opensuper-yaml-fields.md'),
+        'utf8',
+      );
+
+      expect
+        .soft(enOpenSuper)
+        .toContain('Decision points block dependent work until the user answers explicitly');
+      expect(enOpenSuper).toContain('OpenSuperIntentFrame');
+      expect(enOpenSuper).toContain('opensuper classic intent route --stdin');
+      expect
+        .soft(enOpenSuper)
+        .toContain(
+          'read the minimal example and target-selection rules in `opensuper-classic/reference/intent-frame.md`',
+        );
+      const frame = JSON.parse(enIntentFrame.match(/```json\s*([\s\S]*?)```/u)![1]);
+      expect(frame.schema_version).toBe('opensuper.intent.v1');
+      expect(frame).toHaveProperty('slots');
+      expect(frame).toHaveProperty('context.active_change_names');
+      expect(frame.evidence).toEqual([]);
+      expect(frame.proposed_route).toEqual({ name: 'ask_user', confidence: 0.5 });
+      for (const key of [
+        'entities',
+        'slots.target_area',
+        'slots.scope',
+        'context.dirty_worktree',
+      ]) {
+        expect(frame).not.toHaveProperty(key);
+      }
+      expect(enIntentFrame).toContain('## Target Selection and Routing');
+      expect(enOpenSuper).not.toContain('Field names use common NLU / Agent Router terminology');
+      expect(enOpenSuper).not.toContain('Slot-filling guide');
+      expect(enOpenSuper).toContain('`ask_user`');
+      expect
+        .soft(enOpenSuper)
+        .toContain('The Agent extracts intent fields from evidence; Runtime computes the route');
+      expect(enOpenSuper).toContain('`opensuper-classic/reference/intent-frame.md`');
+      expect(enIntentFrame).toContain('`requested_action`');
+      expect(enIntentFrame).toContain('`workflow_candidate`');
+      expect(enIntentFrame).toContain('`user_explicit_workflow`');
+      expect(enIntentFrame).toContain('`existing_behavior`');
+      expect(enIntentFrame).toContain('`new_capability`');
+      expect(enIntentFrame).toContain('`public_api_change`');
+      expect(enIntentFrame).toContain('`schema_change`');
+      expect(enIntentFrame).toContain('`cross_module_change`');
+      expect(enIntentFrame).toContain('`proposed_route`');
+      expect(enHotfix).toContain('passes an intent frame');
+      expect(enHotfix).toContain('before Build recheck only `risk_signal`');
+      expect(enTweak).toContain('passes an intent frame');
+      expect(enTweak).toContain('before Build recheck only `risk_signal`');
+      expect(enScripts).toContain('opensuper classic intent route --stdin');
+      expect(enScripts).not.toContain('<opensuper-intent-script>');
+      expect
+        .soft(enDecisionPoint)
+        .toContain('Use `AskUserQuestion` for single-select or multi-select choices');
+      expect(enDecisionPoint).toContain('If `AskUserQuestion` cannot be used');
+      expect(enDecisionPoint).toContain('Do not repeatedly retry it at later decision points');
+      expect
+        .soft(enDecisionPoint)
+        .toContain('otherwise present clear text options and wait for the reply');
+      expect
+        .soft(enDecisionPoint)
+        .toContain('Never substitute recommendations, defaults, historical preferences');
+      expect(enOpen).toContain('### 1b. Summarize requirements and choose the change name');
+      expect
+        .soft(enOpen)
+        .toContain(
+          'While the resolved brief or change identity is still unclear, do not run `opensuper classic openspec -- new change` or create proposal/design/tasks',
+        );
+      expect
+        .soft(enOpen)
+        .toContain(
+          'Do not load `openspec-propose` by default in the full `/opensuper-classic` flow. Load it only if the user explicitly requests a proposal and artifacts generated together',
+        );
+      expect(enOpen).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect
+        .soft(enOpen)
+        .toContain(
+          'If Step 1b already produced a clear resolved brief, override its “STOP and wait for user direction” behavior',
+        );
+      expect
+        .soft(enOpen)
+        .toContain(
+          'The summary must include all five areas: goal, non-goals, scope, key unknowns, and draft acceptance scenarios',
+        );
+      expect
+        .soft(enDesign)
+        .toContain(
+          '**Immediately execute:** Use the Skill tool to load the Superpowers `brainstorming` skill. Skipping this step is prohibited.',
+        );
+      expect
+        .soft(enDesign)
+        .toContain('After the skill loads, follow its guidance and use the following context');
+      expect(enDesign).not.toContain('ARGUMENTS containing');
+      expect
+        .soft(enDesign)
+        .toContain(
+          'follow `opensuper-classic/reference/decision-point.md` and wait for the user to explicitly confirm the design',
+        );
+      expect
+        .soft(enDesign)
+        .toContain(
+          'discuss only unresolved technical choices; do not ask again about confirmed requirements',
+        );
+      expect(enDesign).not.toContain('Skip redundant context exploration');
+      expect(enBuild).toContain('Confirm the execution strategy before writing a plan.');
+      expect(enOpen).toContain('opensuper-classic/reference/workspace.md');
+      expect(enOpen).toContain("a recommendation does not replace the user's choice");
+      expect(enBuild).toContain('Open must already have prepared and bound the workspace');
+      expect(enBuild).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect
+        .soft(enVerify)
+        .toContain('Automatically return to Build for the first 3 repairable failures');
+      expect
+        .soft(enVerify)
+        .toContain(
+          'Accepting WARNING/SUGGESTION deviations or choosing a strategy after the fourth failure requires a user decision',
+        );
+      expect(enVerify).toContain('Do not handle, merge, or discard branches in Verify');
+      expect(enVerify).toContain('or write `branch_status: handled`');
+      expect(enArchive).toContain('### 5. Deliver the archive commit and finish');
+      expect(enArchive).toContain('opensuper state set <change-name> branch_status handled');
+      expect(enTweak).toContain('Load `openspec-apply-change` using the Skill tool');
+      expect(enTweak).toContain('This apply path belongs only to tweak');
+      expect
+        .soft(enTweak)
+        .toContain(
+          "Full `/opensuper-classic` or `workflow: full` must not use tweak's `openspec-apply-change` Build path",
+        );
+      expect(enTweak).toContain('one OpenSpec change');
+      expect(enTweak).not.toContain('No new capability');
+      expect(enBuild).not.toContain('openspec-apply-change');
+      expect(enArchive).toContain('### 1. Ask the user to confirm archive and delivery');
+      expect
+        .soft(enArchive)
+        .toContain(
+          'Do not infer archive, push, or PR authorization solely from branch_status: handled. Do not run archive-confirm or archive before authorization',
+        );
+      expect(enArchive).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect(enArchive).toMatch(/\|\s*Option\s*\|\s*Method\s*\|\s*Effect\s*\|/u);
+      expect
+        .soft(enArchive)
+        .toMatch(
+          /\|\s*A\s*\|\s*Archive locally; do not push\s*\|\s*Archive and create the single archive commit\. Keep it on the currently bound branch; do not push or create a PR\.\s*\|/u,
+        );
+      expect(enArchive).toContain('Confirm archive and push now');
+      expect(enArchive).toContain('Confirm archive, push, and create a PR');
+      expect(enArchive).toContain('Adjust or verify again');
+      expect(enArchive).toContain('Do not archive yet');
+      expect(enArchive).toContain('`opensuper state transition <change-name> archive-reopen`');
+      expect
+        .soft(enArchive)
+        .toContain(
+          'handled is only a legacy compatibility field. It neither authorizes local/push/pr nor proves those actions succeeded',
+        );
+      expect
+        .soft(enArchive)
+        .toContain('Do not invoke Superpowers `finishing-a-development-branch` in Archive');
+      expect(enArchive).not.toContain('use the Skill tool to load Superpowers');
+      expect
+        .soft(enArchive)
+        .toContain('Start new Classic work with `/opensuper-classic` or `/opensuper-open`');
+      expect(enArchive).not.toContain('invoke `/opensuper` or `/opensuper-open`');
+      expect(enVerify).toContain('Passing verification alone does not authorize archive.');
+      expect
+        .soft(enHotfix)
+        .toContain(
+          'pause under `opensuper-classic/reference/decision-point.md` and wait for an explicit choice',
+        );
+      expect
+        .soft(enHotfix)
+        .toContain('Do not enter `/opensuper-design` or create a Design Doc automatically');
+      expect
+        .soft(enTweak)
+        .toContain(
+          'pause under `opensuper-classic/reference/decision-point.md` and wait for an explicit choice',
+        );
+      expect
+        .soft(enTweak)
+        .toContain('Do not enter `/opensuper-design` or create a Design Doc automatically');
+      expect(enTweak).toContain('`opensuper-classic/reference/debug-gate.md`');
+      expect(enOpenSuper).toContain('read `opensuper-classic/reference/context-recovery.md`');
+      expect
+        .soft(enRecovery)
+        .toContain(
+          '`verify_result: fail` automatically invokes `/opensuper-build` to continue repairing the recorded failure without recording verify-fail a second time',
+        );
+      expect
+        .soft(enRecovery)
+        .not.toContain(
+          '`verify_result: fail` → `opensuper state transition <name> verify-fail` then `/opensuper-build`',
+        );
+
+      expect
+        .soft(enHotfix)
+        .toContain(
+          'apply “Escalation decisions” if the repair meets an escalation condition or exceeds the file-count prompt',
+        );
+      expect(enTweak).toContain('Escalation decisions');
+      expect
+        .soft(enTweak)
+        .toContain('must neither escalate nor decide to stay on tweak without the user');
+      expect(enHotfix).toContain('Verify needs acceptance of a WARNING/SUGGESTION deviation');
+      expect(enTweak).toContain('Verify needs acceptance of a WARNING/SUGGESTION deviation');
+      expect
+        .soft(enHotfix)
+        .toContain(
+          'The final pre-archive choice of whether to archive and how to deliver the archive commit',
+        );
+      expect
+        .soft(enTweak)
+        .toContain(
+          'The final pre-archive choice of whether to archive and how to deliver the archive commit',
+        );
+      expect
+        .soft(enHotfix)
+        .toContain(
+          'The final pre-archive choice of whether to archive and how to deliver the archive commit',
+        );
+      expect
+        .soft(enTweak)
+        .toContain(
+          'The final pre-archive choice of whether to archive and how to deliver the archive commit',
+        );
+      expect
+        .soft(enDesign)
+        .toContain('Create or update the formal design and delta spec only after confirmation');
+      expect
+        .soft(enVerify)
+        .toContain('pause, present a single-choice question, and wait for the user');
+      expect
+        .soft(enRecovery)
+        .toContain(
+          'Obtain current phase, configuration, and nextAction before entering the matching phase Skill',
+        );
+      expect
+        .soft(enRecovery)
+        .toContain('`build_pause: plan-ready` means the user requested a pause after planning');
+      expect
+        .soft(enOpenSuper)
+        .toContain(
+          'Read `opensuper-classic/reference/opensuper-yaml-fields.md` for state-field meanings',
+        );
+      expect
+        .soft(enFields)
+        .toContain('`build_pause` is not an execution mode; must not be written to `build_mode`');
+      expect
+        .soft(enRecovery)
+        .toContain(
+          'Reuse valid plan and configuration; clear the pause only after the user explicitly asks to continue',
+        );
+      expect
+        .soft(enRecovery)
+        .toContain(
+          "Return to Build's pre-plan configuration step only for missing configuration or an explicit request to change it",
+        );
+      expect(enRecovery).toContain('Recovery does not justify re-asking valid configuration');
+      expect
+        .soft(enRecovery)
+        .toContain(
+          'If the plan is missing, reconcile files and state, repair it, and retain the requested pause',
+        );
+      expect(enBuild).toContain('Confirm the execution strategy before writing a plan.');
+      expect
+        .soft(enBuild)
+        .toContain(
+          'Continue under the confirmed strategy after planning; do not add another configuration approval.',
+        );
+      expect(enBuild).toContain('executing-plans:');
+      expect(enBuild).toContain('Build reviews tasks or sections only');
+      expect(enBuild).toContain('Verify owns the single final integration review');
+      expect(enBuild).toContain('accept tasks and enter Verify');
+      expect(enBuild).toContain('Resolve CRITICAL/IMPORTANT findings.');
+      expect
+        .soft(enBuild)
+        .toContain('opensuper check run <change-name> build --local -- <program> [args...]');
+      expect
+        .soft(enVerify)
+        .toContain('opensuper check run <change-name> verify --local -- <program> [args...]');
+      expect
+        .soft(enBuild)
+        .toContain(
+          'OpenSuper **never executes that text**, and it cannot automatically authorize advancement',
+        );
+      expect
+        .soft(enVerify)
+        .toContain(
+          'Manual `record-check` only stores a declaration and cannot automatically advance the phase',
+        );
+      expect(enBuild).toContain('Build and Verify evidence are separate');
+      expect
+        .soft(enVerify)
+        .toContain('Verify and Build evidence are separate and cannot substitute for one another');
+      expect
+        .soft(enBuild)
+        .toContain('`OPENSUPER_SKIP_BUILD=1` is a legacy bypass, not auditable build evidence');
+      expect(enVerify).toContain('`OPENSUPER_SKIP_BUILD=1` is not a verifiable check record');
+      expect(enVerify).toContain('Do not add “should I fix it?” approval');
+      expect(enVerify).toContain('CRITICAL/IMPORTANT findings can never be waived');
+      expect
+        .soft(enVerify)
+        .toContain('Verify owns the single final integration code review for the whole change');
+      expect(enVerify).toContain('dispatch an independent reviewer');
+      expect
+        .soft(enVerify)
+        .toContain('check results, and repairs, focusing on correctness, security, and edge cases');
+      expect(enVerify).toContain('no CRITICAL or IMPORTANT issues');
+      expect
+        .soft(enVerify)
+        .toContain(
+          'It does not replace spec coverage, Design Doc consistency, or divergence checks',
+        );
+      expect(enHotfix).toContain("Follow opensuper-verify's light-verification checklist");
+      expect(enHotfix).toContain('Task count alone does not trigger `/opensuper-build`');
+      expect(enBuild).toContain('Pause, present choices, and wait for explicit confirmation');
+      expect
+        .soft(enBuild)
+        .toContain(
+          'Only actual scope expansion, redesign, or a new independently shippable feature requires a decision under `opensuper-classic/reference/decision-point.md`: continue, adjust, or split',
+        );
+      expect
+        .soft(enVerify)
+        .toContain(
+          'Implementation follows the high-level decisions in `<classic-change-dir>/design.md`',
+        );
+      expect(enBuild).toContain('create an independent change through `/opensuper-open`');
+      expect(enBuild).not.toContain('create independent change through `/opsx:new`');
+      expect(enOpen).toContain('### 1a. Confirm whether to split the PRD before creation');
+      expect(enOpen).toContain('Create multiple OpenSpec changes');
+      expect(enOpen).toContain('Keep one change');
+      expect(enOpen).toContain('Revise the split');
+      expect
+        .soft(enOpen)
+        .toContain(
+          'Create every accepted item through `/opensuper-open`, not directly through `/opsx:new`',
+        );
+      expect
+        .soft(enOpen)
+        .not.toContain(
+          'Every accepted split item must be created as an independent change through `/opsx:new`',
+        );
+      expect(enOpen).toContain('confirmed split item');
+      expect(enOpen).toContain('Skip the PRD split assessment for a confirmed item');
+      expect
+        .soft(enOpen)
+        .toContain(
+          'Do not automatically move an individual batch item from Open to `/opensuper-design`',
+        );
+      expect(enOpen).toContain('Only after every item passes entry checks');
+      expect(enOpen).toContain('On recovery, read `.opensuper/batches/<batch-id>.json`');
+      expect
+        .soft(enOpenSuper)
+        .toContain('when Build needs to expand scope, redesign, or split a change');
+      expect
+        .soft(enOpenSuper)
+        .toContain('Archive and delivery method are combined into one final confirmation');
+      expect
+        .soft(enOpenSuper)
+        .toContain('If the target change, PRD split, or workspace isolation still needs a choice');
+      expect(enVerify).toContain('This is an allowed Verify artifact');
+      expect(enOpen).toContain('use `worktree` directly');
+      expect(enBuild).not.toContain('using-git-worktrees');
+      expect(enBuild).not.toContain('native `EnterWorktree` tool');
+      expect
+        .soft(enBuild)
+        .toContain('then load Superpowers `brainstorming` through the Skill tool');
+      expect
+        .soft(enDesign)
+        .toContain(
+          "The script generates and records the pack using the `context_compression` snapshot in the change's `.opensuper.yaml`",
+        );
+      expect(enDesign).toContain('The default `context_compression: off` generates');
+      expect(enDesign).toContain('For context_compression: beta, use:');
+      expect(enDesign).toContain('<classic-change-dir>/.opensuper/handoff/spec-context.md');
+      expect(enDesign).toContain('In beta mode, `spec-context.json` is structurally valid');
+      expect
+        .soft(enDesign)
+        .toContain('Keep `brainstorm-summary.md` updated throughout brainstorming');
+      expect(enDesign).toContain('### 3a. Optional Proactive Context Compression');
+      expect(enHotfix).toContain('Immediately load `opensuper-design` using the Skill tool');
+      expect(enTweak).toContain('Immediately load `opensuper-design` using the Skill tool');
+      expect
+        .soft(enVerify)
+        .toContain(
+          'run `opensuper state transition <change-name> verify-fail` after the user chooses B, then invoke `/opensuper-build`',
+        );
+
+      expect
+        .soft(enIntentFrame)
+        .toContain(
+          'The user explicitly describes a lightweight or medium change that fits within one OpenSpec change',
+        );
+      expect(enIntentFrame).toContain('needs OpenSpec apply');
+      expect
+        .soft(enOpenSuper)
+        .not.toContain('User explicitly describes copy/config/docs/prompt small adjustment');
+
+      expect(enBuild).toContain('other strategies load Superpowers `systematic-debugging`');
+      expect(enBuild).toContain('`opensuper-classic/reference/debug-gate.md`');
+      expect
+        .soft(enBuild)
+        .toContain(
+          'Investigate the root cause of unexpected crashes, behavior, test failures, or build failures before changing source',
+        );
+      expect
+        .soft(enDebugGate)
+        .toContain(
+          'add the smallest failing test that reproduces the crash or unexpected behavior before modifying the source',
+        );
+      expect
+        .soft(enHotfix)
+        .toContain('requires loading Superpowers `systematic-debugging` through the Skill tool');
+      expect(enHotfix).toContain('`opensuper-classic/reference/debug-gate.md`');
+      expect
+        .soft(enDebugGate)
+        .toContain('a separate “write test cases” change cannot replace them');
+
+      // Entry and clarification phases link the shared tool priority and fallback rules.
+      for (const content of [enOpenSuper, enOpen, enDesign]) {
+        expect(content).toContain('opensuper-classic/reference/decision-point.md');
+        expect(content).toContain('AskUserQuestion');
+      }
+      expect(enOpenSuper).toContain('`opensuper-classic/reference/decision-point.md`');
+      expect(enOpenSuper).toContain('`auto_transition: false`');
+      expect
+        .soft(enOpenSuper)
+        .toContain('controls the next Skill invocation, not the phase already advanced by Guard');
+      expect
+        .soft(enOpenSuperRule)
+        .toContain('brainstorming in progress: incrementally update brainstorm-summary.md');
+      expect
+        .soft(enOpenSuperRule)
+        .toContain('only after the Design Doc, state evidence, and latest handoff are persisted');
+      expect
+        .soft(enOpenSuperRule)
+        .toContain(
+          'Use the Skill tool to reload the Superpowers `subagent-driven-development` skill',
+        );
+      expect
+        .soft(enOpenSuperRule)
+        .toContain(
+          'Re-read `opensuper-classic/reference/subagent-dispatch.md` for OpenSuper-specific extensions',
+        );
+      expect(enOpenSuperRule).toContain('Do not execute tasks directly in the main session');
+      for (const content of [enOpen, enDesign, enBuild, enVerify]) {
+        expect(content).toContain('opensuper-classic/reference/auto-transition.md');
+        expect(content).toContain('agent.continuation');
+        expect(content).toContain('opensuper state next <change-name>');
+        expect(content).toContain('`NEXT: auto`');
+        expect(content).toContain('`NEXT: manual`');
+        expect(content).toContain('`HINT`');
+        expect(content).toMatch(/end this invocation without another confirmation/u);
+      }
+      expect(enHotfix).toContain('## Continue to the next phase');
+      expect(enHotfix).toContain('opensuper state next <name>');
+      expect(enHotfix).toContain('`NEXT: auto`');
+      expect
+        .soft(enHotfix)
+        .toContain(
+          'build returns `opensuper-hotfix`, verify returns `opensuper-verify`, and archive returns `opensuper-archive`',
+        );
+      expect(enTweak).toContain('## Continue to the next phase');
+      expect(enTweak).toContain('opensuper state next <name>');
+      expect(enTweak).toContain('`NEXT: auto`');
+      expect
+        .soft(enTweak)
+        .toContain(
+          'build returns `opensuper-tweak`, verify returns `opensuper-verify`, and archive returns `opensuper-archive`',
+        );
+    });
+  });
+
+  describe('OpenSuper output language safeguards', () => {
+    it('requires OpenSpec and Superpowers outputs to follow the configured OpenSuper artifact language', async () => {
+      const skillNames = [
+        'opensuper-classic',
+        'opensuper-open',
+        'opensuper-design',
+        'opensuper-build',
+        'opensuper-verify',
+        'opensuper-archive',
+        'opensuper-hotfix',
+        'opensuper-tweak',
+      ] as const;
+
+      const readSkills = async (languageDir: 'skills' | 'skills-zh') =>
+        Object.fromEntries(
+          await Promise.all(
+            skillNames.map(async (skillName) => [
+              skillName,
+              await fs.readFile(
+                path.resolve('assets', languageDir, skillName, 'SKILL.md'),
+                'utf-8',
+              ),
+            ]),
+          ),
+        ) as Record<(typeof skillNames)[number], string>;
+
+      const zhSkills = await readSkills('skills-zh');
+      const enSkills = await readSkills('skills');
+
+      const zhLanguage = await readLinkedSkillSection(
+        zhSkills['opensuper-classic'],
+        'reference/scripts.md#任务上下文与产物语言',
+        'opensuper-classic',
+      );
+      expect(zhLanguage).toContain(
+        '所有 OpenSpec 和 Superpowers 产物都必须使用 OpenSuper 配置的产物语言',
+      );
+      expect(zhSkills['opensuper-open']).toContain(
+        '向 OpenSpec 传递提问和文档生成要求时，都必须明确指定 OpenSuper 配置的产物语言',
+      );
+      expect(zhSkills['opensuper-design']).toContain(
+        'Language: 使用入口 configuration.language 中的 OpenSuper 配置产物语言输出',
+      );
+      expect(zhSkills['opensuper-build']).toContain('使用 configuration.language');
+      expect(zhSkills['opensuper-build']).toContain('传入入口 configuration.language');
+      expect(zhSkills['opensuper-verify']).toContain(
+        '验证报告使用本轮入口返回的 configuration.language',
+      );
+      expect(zhSkills['opensuper-archive']).toContain(
+        '归档摘要和流程完成说明，使用本轮入口返回的 configuration.language',
+      );
+      expect(zhSkills['opensuper-hotfix']).toContain(
+        '精简版 OpenSpec 产物必须使用 OpenSuper 配置产物语言',
+      );
+      expect(zhSkills['opensuper-tweak']).toContain(
+        '精简版 OpenSpec 产物必须使用 OpenSuper 配置产物语言',
+      );
+
+      const enLanguage = await readLinkedSkillSection(
+        enSkills['opensuper-classic'],
+        'reference/scripts.md#task-context-and-artifact-language',
+        'opensuper-classic',
+        'skills',
+      );
+      expect(enLanguage).toContain(
+        'Every OpenSpec and Superpowers artifact must use the configured OpenSuper artifact language',
+      );
+      expect(enSkills['opensuper-open']).toContain(
+        'Every question and artifact-generation request passed to OpenSpec must specify the resolved OpenSuper artifact language',
+      );
+      expect(enSkills['opensuper-design']).toContain(
+        'Language: Use the OpenSuper artifact language from entry configuration.language',
+      );
+      expect(enSkills['opensuper-build']).toContain('use configuration.language');
+      expect(enSkills['opensuper-build']).toContain('pass entry configuration.language');
+      expect(enSkills['opensuper-verify']).toContain(
+        "Use configuration.language from this invocation's entry result for the report",
+      );
+      expect(enSkills['opensuper-archive']).toContain(
+        "Use configuration.language from this invocation's entry result for the archive summary and completion message",
+      );
+      expect(enSkills['opensuper-hotfix']).toContain(
+        "Use OpenSuper's configured artifact language for the reduced OpenSpec artifacts",
+      );
+      expect(enSkills['opensuper-tweak']).toContain(
+        "Use OpenSuper's configured artifact language for the reduced OpenSpec artifacts",
+      );
+    });
+  });
+
+  describe('OpenSuper build subagent dispatch safeguards', () => {
+    it('creates the implementation plan inline instead of dispatching a planning subagent', async () => {
+      const zhBuild = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+      const enBuild = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhPlanSection = zhBuild.slice(zhBuild.indexOf('### 2.'), zhBuild.indexOf('### 3.'));
+      const enPlanSection = enBuild.slice(enBuild.indexOf('### 2.'), enBuild.indexOf('### 3.'));
+
+      expect(zhPlanSection).toContain('其他计划执行策略：使用 `writing-plans` Skill');
+      expect(zhPlanSection).toContain(
+        'autonomous：由当前 Agent 直接编写和自检，不加载 writing-plans',
+      );
+      expect(zhPlanSection).not.toContain('通过 subagent 创建实施计划');
+      expect(zhPlanSection).not.toContain('**Subagent 指令**');
+      expect(zhPlanSection).not.toContain('**执行 subagent**');
+      expect(zhPlanSection).not.toContain('子代理回报');
+      expect(zhPlanSection).not.toContain('subagent');
+
+      expect(enPlanSection).toContain(
+        'use the `writing-plans` skill for writing and self-checking only',
+      );
+      expect(enPlanSection).not.toContain('Create the implementation plan through a subagent');
+      expect(enPlanSection).not.toContain('**Subagent instructions**');
+      expect(enPlanSection).not.toContain('**Execute subagent**');
+      expect(enPlanSection).not.toContain('After the subagent completes');
+      expect(enPlanSection).not.toContain('subagent');
+    });
+
+    it('composes the Superpowers loop with the Chinese OpenSuper dispatch contract', async () => {
+      const zhBuild = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhDispatch = await fs.readFile(
+        path.resolve(
+          'assets',
+          'skills-zh',
+          'opensuper-classic',
+          'reference',
+          'subagent-dispatch.md',
+        ),
+        'utf-8',
+      );
+      const zhRecovery = await fs.readFile(
+        path.resolve(
+          'assets',
+          'skills-zh',
+          'opensuper-classic',
+          'reference',
+          'context-recovery.md',
+        ),
+        'utf-8',
+      );
+      const zhGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.md'),
+        'utf-8',
+      );
+
+      expect(zhBuild).toContain('subagent-driven-development：加载同名 Superpowers Skill');
+      expect(zhBuild).toContain('在同一轮提问中收集执行方式、TDD 和审查模式');
+      expect(zhBuild).toContain('工作区必须已在 Open 阶段准备并绑定');
+      expect(zhBuild).toContain('`opensuper-classic/reference/subagent-dispatch.md`');
+      expect(zhBuild).not.toContain('不得预检、推断或筛除');
+      expect(zhBuild).not.toContain('无子agent环境');
+      expect(zhBuild).not.toContain('#### Subagent 调度协议');
+      for (const required of [
+        '先加载同名 Superpowers Skill，再执行这里的规则',
+        '开始前检查计划',
+        '任务完成状态只以 `tasks.md` 为准',
+        'opensuper state tasks <name> --json',
+        '同一模块中，使用相同局部上下文且依赖关系明确的关联任务，可以组成范围明确的一组任务',
+        '出现范围变化、依赖冲突或新风险时，暂停受影响的任务',
+        '逐 ID 报告、验收和勾选',
+        '修复优先返回原会话',
+        '审查子代理（reviewer）始终独立于实现子代理',
+        '子代理不再向下派发任务',
+        '配置中的产物语言',
+        '允许修改的范围',
+        '必须执行的检查，以及反馈格式',
+        '通过外部 Skill 支持的文件方式交接',
+        '主会话确认文件和提交已出现在当前工作区后，才能验收',
+        '它只负责实现和自测，不勾选任务',
+        'subagent-driven-development 模式下，主会话不能代替子代理编写实现',
+        '实际执行的 RED 失败命令、GREEN 通过命令和结果摘要',
+        '这里的安排取代外部 Skill 默认的审查步骤，不另外叠加一套审查',
+        '初审必须读取实际需求、diff 和证据',
+        '复查只覆盖未解决问题、修复及新增风险',
+        '主会话必须同时核对实际 diff 和子代理报告',
+        '审查子代理应保持独立判断，不能预先要求它忽略某类问题',
+        '`off` 不允许忽略测试失败',
+        '唯一一次最终集成审查',
+        '也不重新计算已用复查次数',
+        'opensuper state checkpoint <name> --file <json-path>',
+        '<classic-change-dir>/.opensuper/rulings.md',
+        '扩大范围、修改规格或验收要求、接受重要缺陷、安全例外，以及会改变外部系统的操作，仍需用户授权',
+        '在外部 Skill 的临时文件被清理前，保存必要结论和证据引用',
+      ])
+        expect(zhDispatch).toContain(required);
+      for (const forbidden of [
+        'spec reviewer',
+        'code quality reviewer',
+        'spec compliance reviewer',
+        'dual-review',
+        'both reviews',
+        'task-reviewer-prompt',
+        'task-brief',
+        'review-package',
+        'sdd-workspace',
+        '.superpowers/sdd',
+        'SDD ' + '技能',
+        '当前 ' + 'SDD',
+        'Superpowers ' + 'SDD',
+      ]) {
+        expect(zhDispatch, `zh dispatch should not bind to ${forbidden}`).not.toContain(forbidden);
+      }
+      expect(zhDispatch).toContain(
+        'opensuper state task-complete <name> <task-id> --expect <revision> --json',
+      );
+      expect(zhDispatch).toContain('不能只换成新 revision 就盲目重试');
+      expect(zhDispatch).toContain('不要求每个小任务都单独创建一次进度提交');
+      expect(zhDispatch).toContain('不能擅自丢弃旧计划中额外存在的实际任务');
+      expect(zhDispatch).toContain('不逐个任务询问');
+      expect(zhDispatch).toContain('授权存在歧义');
+      expect(zhDispatch).toContain('任务分配失败或会话不可用时，记录实际原因');
+      expect(zhDispatch).toContain('不能擅自改变用户选定的执行方式');
+      expect(zhDispatch).toContain('所有任务验收完成后，立即返回');
+      expect(zhDispatch).toContain('不恢复旧的 Build final-review/final-fix 状态');
+      expect(zhRecovery).toContain('其他策略只在上下文缺少所需方法时加载');
+      expect(zhRecovery).toContain(
+        '按 subagent-dispatch.md 恢复原先分配的任务范围，以及负责实现的子代理会话',
+      );
+      expect(zhRecovery).toContain('读取结果为 `{checkpoint, stale}`');
+      expect(zhGuard).toContain('重新加载 Superpowers `subagent-driven-development` 技能');
+      expect(zhGuard).toContain(
+        '读取 `opensuper-classic/reference/subagent-dispatch.md` 获取 OpenSuper 专属扩展',
+      );
+      expect(zhGuard).toContain('读取 `<classic-change-dir>/.opensuper/subagent-progress.md`');
+    });
+
+    it('keeps the English dispatch contract behaviorally aligned', async () => {
+      const enBuild = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-build', 'SKILL.md'),
+        'utf-8',
+      );
+      const enDispatch = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'subagent-dispatch.md'),
+        'utf-8',
+      );
+      const enRecovery = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'context-recovery.md'),
+        'utf-8',
+      );
+      const enGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.en.md'),
+        'utf-8',
+      );
+
+      expect(enBuild).toContain('load the same-named Superpowers skill');
+      expect(enBuild).toContain('`opensuper-classic/reference/subagent-dispatch.md`');
+      expect(enBuild).toContain(
+        'every implementation task must record actual RED and corresponding GREEN commands/results',
+      );
+      expect(enBuild).toContain('Open must already have prepared and bound the workspace');
+      expect(enBuild).toContain('collect execution mode, TDD, and review mode together');
+      expect(enBuild).toContain('Build reviews tasks or sections only');
+      expect(enBuild).toContain('Preserve isolation, bound_branch, and any existing pause');
+      expect(enBuild).not.toContain('Do not preflight, infer, or filter');
+      expect(enBuild).not.toContain('no subagent environment');
+      expect(enBuild).not.toContain(
+        'real asynchronous execution, isolated context, result collection',
+      );
+      expect(enBuild).not.toContain('`platform-default`');
+      expect(enBuild).not.toContain(
+        'ask the user to choose both workspace isolation ' + 'and execution method',
+      );
+      expect(enBuild).toContain('Build reviews tasks or sections only');
+      expect(enBuild).toContain(
+        'standard`: review risky tasks and perform the single final integration review in Verify',
+      );
+      expect(enBuild).toContain(
+        'thorough`: independently review each task or section according to the selected execution strategy, then complete the final integration review',
+      );
+      expect(enBuild).not.toContain('must wait for both reviews to pass');
+      for (const required of [
+        'Classic defines the execution method',
+        'Perform one plan preflight',
+        'clearly scoped group completed consecutively by one implementer',
+        'Report, accept, and check off each ID',
+        'one passing task does not complete the whole group',
+        'Reviewers remain independent',
+        'Subagents do not nest dispatch',
+        'artifact language',
+        'allowed scope',
+        'required checks',
+        'file handoff supported by the external Skill',
+        'files and commits are visible',
+        'implement and self-test, but do not check off tasks',
+        'it does not implement tasks itself',
+        'RED failure and GREEN success',
+        "replace the external Skill's default review steps",
+        'Initial review reads actual requirements',
+        'Rechecks cover unresolved findings, fixes, and new risks',
+        'checks actual diff against self-report',
+        'Reviewers remain neutral',
+        '`off` does not waive test failures',
+        'only final integrated review',
+        'without repeating all requirement analysis or resetting rounds already used',
+        'Runtime validates and generates Markdown; do not manually maintain subagent-progress.md',
+        '<classic-change-dir>/.opensuper/rulings.md',
+        'Expanding scope, changing specifications or acceptance, accepting important defects, security exceptions, and external side effects still require user authorization',
+        'before upstream temporary files are cleaned',
+        'opensuper state task-complete <name> <task-id> --expect <revision> --json',
+        'rather than blindly retrying with a new revision',
+        'without mechanical per-microtask progress commits',
+        'genuine extra tasks are not silently discarded',
+        'without asking between tasks',
+        'unclear authorization',
+        'Record dispatch/session failures',
+        'without silently changing the selected strategy',
+        'After all tasks are accepted, immediately return',
+        'do not restore old Build final-review/final-fix states',
+      ]) {
+        expect(enDispatch, required).toContain(required);
+      }
+      expect(enRecovery).toContain('other strategies load methods only when missing from context');
+      expect(enRecovery).toContain('subagent-dispatch.md');
+      expect(enRecovery).toContain('opensuper state checkpoint <change-name>');
+      expect(enGuard).toContain('reload the Superpowers `subagent-driven-development` skill');
+      expect(enGuard).toContain(
+        'Re-read `opensuper-classic/reference/subagent-dispatch.md` for OpenSuper-specific extensions',
+      );
+      expect(enGuard).toContain('Read `<classic-change-dir>/.opensuper/subagent-progress.md`');
+      expect(enGuard).not.toContain('wait for both spec compliance and code quality reviews');
+      for (const forbidden of [
+        'spec reviewer',
+        'code quality reviewer',
+        'spec compliance reviewer',
+        'dual-review',
+        'both reviews',
+        'task-reviewer-prompt',
+        'task-brief',
+        'review-package',
+        'sdd-workspace',
+        '.superpowers/sdd',
+        'SDD ' + 'skill',
+        'loaded ' + 'SDD',
+        'Superpowers ' + 'SDD',
+      ]) {
+        expect(enDispatch, `en dispatch should not bind to ${forbidden}`).not.toContain(forbidden);
+      }
+      expect(enDispatch).not.toContain('After both reviews pass');
+      expect(enDispatch).not.toContain('dual-review approval');
+    });
+
+    it('does not install a Stop hook for task continuity', async () => {
+      const manifest = await readManifest();
+      const hooks = Object.values(manifest.hooks ?? {});
+
+      expect(hooks.length).toBeGreaterThan(0);
+      expect(hooks.every((hook) => hook.matcher === 'Write|Edit')).toBe(true);
+      expect(hooks.some((hook) => /stop/i.test(hook.matcher))).toBe(false);
+    });
+  });
+
+  describe('OpenSuper phase guard rules', () => {
+    const section = (content: string, heading: string) => {
+      const start = content.indexOf(heading);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const rest = content.slice(start + heading.length);
+      const nextHeading = rest.search(/\n## /u);
+      return nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+    };
+
+    it('ships one bilingual workflow Rule with shared ownership semantics', async () => {
+      const manifest = await readManifest();
+      expect(manifest.rules).toEqual([
+        'opensuper/rules/opensuper-workflow-guard.md',
+        'opensuper/rules/opensuper-workflow-guard.en.md',
+      ]);
+      expect(manifest.nativeRules).toBeUndefined();
+
+      const zhGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-workflow-guard.md'),
+        'utf-8',
+      );
+      const enGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-workflow-guard.en.md'),
+        'utf-8',
+      );
+      for (const guard of [zhGuard, enGuard]) {
+        expect(guard).toContain('default_workflow');
+        expect(guard).toContain('.opensuper/current-change.json');
+        expect(guard).toContain('Native');
+        expect(guard).toContain('Classic');
+        expect(guard).toContain('Hook Router');
+        expect(guard).toContain('opensuper task');
+        expect(guard).not.toContain('opensuper rules context');
+        expect(guard).toContain('.opensuper/config.yaml');
+      }
+      expect(zhGuard).toContain('先记录失败并通过 Native Runtime 回到 Build');
+      expect(zhGuard).toContain('点号开头的普通项目文件');
+      expect(zhGuard).toContain('零个表示当前没有 OpenSuper 需求');
+      expect(zhGuard).toContain('多个候选时暂停并让用户选择');
+      expect(zhGuard).toContain('普通写入权限不覆盖 brief 中未解决的 `[blocking]`');
+      expect(zhGuard).toContain('无法归因的事件和仅位于项目外的目标保持中立');
+      expect(zhGuard).toContain('一旦写入已归属于本项目');
+      expect(zhGuard).toContain('个人记忆和项目知识');
+      expect(zhGuard).toContain('Context Manifest');
+      expect(zhGuard).toContain('--expand-context');
+      expect(zhGuard).toContain('--application');
+      expect(zhGuard).toContain('--outcome');
+      expect(zhGuard).toContain('| Classic | Open、Design、Verify、Archive | Build |');
+      expect(zhGuard).toContain('Classic 的 Verify 只写验证报告和状态等阶段产物');
+      expect(zhGuard).toContain('不修改 tasks 或普通项目实现');
+      expect(zhGuard).toContain('状态包含 `children` 时');
+      expect(zhGuard).toContain('不得运行 Supervisor Change Builder');
+      expect(zhGuard).toContain('状态已记录 Design Doc 且实施计划存在并可用');
+      expect(zhGuard).toContain('Classic Hook 在阶段判断前固定放行');
+      expect(enGuard).toContain('personal memory and project knowledge');
+      expect(enGuard).toContain('Context Manifest');
+      expect(enGuard).toContain('--expand-context');
+      expect(enGuard).toContain('--application');
+      expect(enGuard).toContain('--outcome');
+      expect(enGuard).toContain('| Classic | Open, Design, Verify, Archive | Build |');
+      expect(enGuard).toContain('Classic Verify writes only the verification report and state');
+      expect(enGuard).toContain('It does not modify tasks or ordinary project implementation');
+      expect(enGuard).toContain('When Native state contains `children`');
+      expect(enGuard).toContain('do not run a Supervisor Change Builder');
+      expect(enGuard).toContain(
+        'records a Design Doc and its implementation plan exists and is ready',
+      );
+      expect(enGuard).toContain('Before phase evaluation, the Classic Hook always allows');
+      expect(enGuard).toContain('record the failed result');
+      expect(enGuard).toContain('return to Build before modifying the implementation');
+      expect(enGuard).toContain('dot-prefixed project files');
+      expect(enGuard).toContain('zero means there is no current OpenSuper request');
+      expect(enGuard).toContain('multiple candidates require an explicit user selection');
+      expect(enGuard).toContain('does not override unresolved `[blocking]` user decisions');
+      expect(enGuard).toContain('targets that are entirely outside the project remain neutral');
+      expect(enGuard).toContain('Once a write is attributed to this project');
+      expect(enGuard).toContain('opensuper task');
+      expect(enGuard).not.toContain('opensuper rules context');
+      expect(enGuard).toContain('.opensuper/config.yaml');
+
+      await expect(
+        fs.access(
+          path.resolve(
+            'assets',
+            'skills',
+            'opensuper-native',
+            'rules',
+            'opensuper-native-phase-guard.md',
+          ),
+        ),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(
+        fs.access(
+          path.resolve(
+            'assets',
+            'skills',
+            'opensuper-native',
+            'rules',
+            'opensuper-native-phase-guard.en.md',
+          ),
+        ),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('delegates post-guard handoff to opensuper-state next so auto_transition is honored', async () => {
+      const zhGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.md'),
+        'utf-8',
+      );
+      const enGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.en.md'),
+        'utf-8',
+      );
+
+      const zhSection = section(zhGuard, '## 阶段退出后自动过渡');
+      expect(zhSection).toContain('opensuper state next <change-name>');
+      expect(zhSection).toContain('NEXT: auto');
+      expect(zhSection).toContain('NEXT: manual');
+      expect(zhSection).toContain('NEXT: done');
+      expect(zhSection).not.toContain('必须调用下一阶段的 skill');
+      expect(zhSection).not.toContain('open → `opensuper-design`');
+
+      const enSection = section(enGuard, '## Automatic Transition After Phase Exit');
+      expect(enSection).toContain('opensuper state next <change-name>');
+      expect(enSection).toContain('NEXT: auto');
+      expect(enSection).toContain('NEXT: manual');
+      expect(enSection).toContain('NEXT: done');
+      expect(enSection).not.toContain("must invoke the next phase's skill");
+      expect(enSection).not.toContain('open → `opensuper-design`');
+    });
+
+    it('keeps build decision rules aligned with the four build choices', async () => {
+      const zhGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.md'),
+        'utf-8',
+      );
+      const enGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.en.md'),
+        'utf-8',
+      );
+
+      expect(zhGuard).toContain(
+        'plan 写入后只提供一个联合决策，一次确认是否继续、执行方式、TDD 模式和代码审查模式',
+      );
+      expect(zhGuard).toContain('在归档前一个最终确认中同时选择是否归档及归档提交的交付方式');
+      expect(enGuard).toContain(
+        'After the plan is written, provide one joint decision that collects whether to continue, the execution method, TDD mode, and code-review mode',
+      );
+      expect(enGuard).toContain(
+        'One final pre-archive confirmation that chooses both whether to archive and how to deliver the archive commit',
+      );
+    });
+
+    it('documents the Superpowers workspace hook allowlist in both languages', async () => {
+      const zhGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.md'),
+        'utf-8',
+      );
+      const enGuard = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper', 'rules', 'opensuper-phase-guard.en.md'),
+        'utf-8',
+      );
+
+      expect(zhGuard).toContain('`.superpowers/*`');
+      expect(enGuard).toContain('`.superpowers/*`');
+    });
+  });
+
+  describe('Repository authoring guidance', () => {
+    it('documents consistent skill invocation wording in CLAUDE.md', async () => {
+      const claude = await fs.readFile(path.resolve('CLAUDE.md'), 'utf-8');
+
+      expect(claude).toContain('## Skill 触发表述规范');
+      expect(claude).toContain(
+        '中文统一使用：`**立即执行：** 使用 Skill 工具加载 <skill-name> 技能。禁止跳过此步骤。`',
+      );
+      expect(claude).toContain(
+        '英文统一使用：`**Immediately execute:** Use the Skill tool to load the <skill-name> skill. Skipping this step is prohibited.`',
+      );
+      expect(claude).toContain(
+        '后续输入、上下文或执行要求写在“技能加载后 / After the skill loads”段落',
+      );
+    });
+  });
+
+  describe('OpenSuper script discovery helper', () => {
+    it('ships a shared script locator helper', async () => {
+      const manifest = await readManifest();
+      expect(manifest.skills).toContain('opensuper-classic/reference/intent-frame.md');
+      expect(manifest.skills).toContain('opensuper/scripts/opensuper-env.mjs');
+      expect(manifest.skills).toContain('opensuper/scripts/opensuper-intent.mjs');
+    });
+
+    it('documents Ambient Resume in both OpenSuper entry Skills', async () => {
+      const zh = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'SKILL.md'),
+        'utf-8',
+      );
+      const en = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'SKILL.md'),
+        'utf-8',
+      );
+
+      expect(zh).toContain('Ambient Resume');
+      expect(zh).toContain('opensuper resume-probe . --stdin --json');
+      expect(zh).toContain('opensuper-classic/reference/context-recovery.md');
+      expect(zh).toContain('`out_of_scope`/`none` 不进入');
+      expect(en).toContain('Ambient Resume');
+      expect(en).toContain('opensuper resume-probe . --stdin --json');
+      expect(en).toContain('`out_of_scope`/`none` does not enter');
+    });
+
+    it('documents the public resume probe CLI bilingually', async () => {
+      const zh = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'reference', 'scripts.md'),
+        'utf-8',
+      );
+      const en = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'scripts.md'),
+        'utf-8',
+      );
+
+      expect(zh).toContain('opensuper resume-probe . --stdin --json');
+      expect(zh).not.toContain('<opensuper-resume-probe-script>');
+      expect(en).toContain('opensuper resume-probe . --stdin --json');
+      expect(en).not.toContain('<opensuper-resume-probe-script>');
+    });
+
+    it('uses only the public CLI without platform-directory discovery bilingually', async () => {
+      for (const languageDir of ['skills-zh', 'skills']) {
+        const source = await fs.readFile(
+          path.resolve('assets', languageDir, 'opensuper-classic', 'reference', 'scripts.md'),
+          'utf-8',
+        );
+
+        expect(source).toContain('opensuper state select <change-name>');
+        expect(source).not.toContain('Base directory');
+        expect(source).not.toContain('<opensuper-state-script>');
+        expect(source).not.toContain('"$PWD/../.claude/skills"');
+        expect(source).not.toContain('"$HOME/.claude/skills"');
+      }
+    });
+
+    it('documents every Classic transition event and the archive boundary bilingually', async () => {
+      const zh = await fs.readFile(
+        path.resolve('assets', 'skills-zh', 'opensuper-classic', 'reference', 'scripts.md'),
+        'utf-8',
+      );
+      const en = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'scripts.md'),
+        'utf-8',
+      );
+
+      for (const event of [
+        'open-complete',
+        'design-complete',
+        'build-complete',
+        'verify-pass',
+        'verify-fail',
+        'archive-confirm',
+        'archive-reopen',
+        'archived',
+        'preset-escalate',
+      ]) {
+        expect(zh).toContain(`opensuper state transition <change-name> ${event}`);
+        expect(en).toContain(`opensuper state transition <change-name> ${event}`);
+      }
+      expect(zh).toContain('不要在归档流程之外手动执行 `archived` transition');
+      expect(en).toContain(
+        'Do not manually run the `archived` transition outside the archive procedure',
+      );
+    });
+
+    it('documents the Ambient Resume probe command in context recovery references', async () => {
+      const zh = await fs.readFile(
+        path.resolve(
+          'assets',
+          'skills-zh',
+          'opensuper-classic',
+          'reference',
+          'context-recovery.md',
+        ),
+        'utf-8',
+      );
+      const en = await fs.readFile(
+        path.resolve('assets', 'skills', 'opensuper-classic', 'reference', 'context-recovery.md'),
+        'utf-8',
+      );
+
+      expect(zh).toContain('先按 scripts.md 确认公开 CLI 和所选工作区');
+      expect(zh).toContain('opensuper resume-probe . --stdin --json');
+      expect(en).toContain(
+        'First establish the public CLI and selected workspace using scripts.md',
+      );
+      expect(en).toContain('opensuper resume-probe . --stdin --json');
+    });
+
+    it('keeps review_mode wired through state and schema scripts', async () => {
+      const stateScript = await fs.readFile(
+        path.resolve('domains', 'opensuper-classic', 'classic-state-command.ts'),
+        'utf-8',
+      );
+      const guardScript = await fs.readFile(
+        path.resolve('domains', 'opensuper-classic', 'classic-guard.ts'),
+        'utf-8',
+      );
+      const validateScript = await fs.readFile(
+        path.resolve('domains', 'opensuper-classic', 'classic-validate-command.ts'),
+        'utf-8',
+      );
+
+      expect(stateScript).toContain('review_mode: reviewMode');
+      const stateOptions = await fs.readFile(
+        path.resolve('domains', 'opensuper-classic', 'classic-state-options.ts'),
+        'utf-8',
+      );
+      expect(stateOptions).toContain("review_mode: ['off', 'standard', 'thorough']");
+      expect(stateScript).toContain("from './classic-state-options.js'");
+      expect(stateScript).toContain("projectConfigValue('review_mode')");
+      expect(stateScript).toContain('review_mode must be selected before leaving build');
+      expect(guardScript).toContain('reviewModeSelected');
+      expect(guardScript).toContain("check('review_mode selected'");
+      expect(validateScript).toContain("review_mode: ['off', 'standard', 'thorough']");
+    });
+
+    it('keeps platform search roots out of English and Chinese skill prose', async () => {
+      const manifest = await readManifest();
+      const skillPaths = manifest.skills.filter(
+        (skillPath) =>
+          skillPath.endsWith('.md') &&
+          (skillPath === 'opensuper/SKILL.md' ||
+            skillPath.startsWith('opensuper-') ||
+            skillPath.startsWith('opensuper-any/')),
+      );
+
+      for (const languageDir of ['skills', 'skills-zh']) {
+        for (const skillPath of skillPaths) {
+          const content = await fs.readFile(
+            path.resolve('assets', languageDir, skillPath),
+            'utf-8',
+          );
+          if (!content.includes('OPENSUPER_STATE') && !content.includes('OPENSUPER_GUARD'))
+            continue;
+
+          // Skills may either carry the bootstrap inline or delegate it to
+          // reference/scripts.md for progressive loading. Inline bootstrap still
+          // needs explicit installed-skill roots; delegated bootstrap is validated
+          // in scripts.md.
+          const isMainEntry = skillPath === 'opensuper/SKILL.md';
+          const delegatesBootstrap = content.includes('opensuper-classic/reference/scripts.md');
+          const hasInlineBootstrap = content.includes('node "$OPENSUPER_ENV"');
+
+          if (!isMainEntry) {
+            expect(
+              delegatesBootstrap || hasInlineBootstrap,
+              `${languageDir}/${skillPath} should either delegate or inline OpenSuper bootstrap`,
+            ).toBe(true);
+            if (hasInlineBootstrap) {
+              expect(content, `${languageDir}/${skillPath} should use opensuper-env.mjs`).toContain(
+                'opensuper-env.mjs',
+              );
+              expect(
+                content,
+                `${languageDir}/${skillPath} should include the Codex skill root`,
+              ).toContain('"$HOME/.codex/skills"');
+              expect(
+                content,
+                `${languageDir}/${skillPath} should include the Claude workspace skill root`,
+              ).toContain('"$PWD/../.claude/skills"');
+            }
+          } else {
+            expect(
+              content,
+              `${languageDir}/${skillPath} should delegate bootstrap to reference/scripts.md`,
+            ).toContain('opensuper-classic/reference/scripts.md');
+          }
+          expect(content, `${languageDir}/${skillPath} should not inline roots`).not.toContain(
+            'OPENSUPER_SEARCH_ROOTS=',
+          );
+        }
+      }
+    });
+
+    it('uses node (not bash) in shipped OpenSuper command examples', async () => {
+      const manifest = await readManifest();
+      const skillPaths = manifest.skills.filter(
+        (skillPath) =>
+          skillPath.endsWith('SKILL.md') &&
+          (skillPath === 'opensuper/SKILL.md' || skillPath.startsWith('opensuper-')),
+      );
+
+      for (const languageDir of ['skills', 'skills-zh']) {
+        for (const skillPath of skillPaths) {
+          const content = await fs.readFile(
+            path.resolve('assets', languageDir, skillPath),
+            'utf-8',
+          );
+
+          expect(
+            content,
+            `${languageDir}/${skillPath} should avoid raw bash for OpenSuper scripts`,
+          ).not.toMatch(/(^|[` \t])bash[ \t]+"?\$OPENSUPER_/m);
+        }
+      }
+    });
+
+    it('keeps the OPENSUPER_ENV locator block identical across shipped skills', async () => {
+      const manifest = await readManifest();
+      const skillPaths = manifest.skills.filter(
+        (skillPath) =>
+          skillPath.endsWith('SKILL.md') &&
+          (skillPath === 'opensuper/SKILL.md' || skillPath.startsWith('opensuper-')),
+      );
+
+      const extractLocatorBlock = (content: string) => {
+        const start = content.indexOf('OPENSUPER_ENV="${OPENSUPER_ENV:-$(find .');
+        const end = content.indexOf('node "$OPENSUPER_ENV"');
+
+        expect(start).toBeGreaterThanOrEqual(0);
+        expect(end).toBeGreaterThan(start);
+
+        return content.slice(start, end + 'node "$OPENSUPER_ENV"'.length);
+      };
+
+      for (const languageDir of ['skills', 'skills-zh']) {
+        let baseline: string | null = null;
+
+        for (const skillPath of skillPaths) {
+          const content = await fs.readFile(
+            path.resolve('assets', languageDir, skillPath),
+            'utf-8',
+          );
+          if (!content.includes('OPENSUPER_ENV="${OPENSUPER_ENV:-$(find .')) continue;
+
+          const locatorBlock = extractLocatorBlock(content);
+          if (baseline === null) {
+            baseline = locatorBlock;
+            continue;
+          }
+
+          expect(
+            locatorBlock,
+            `${languageDir}/${skillPath} should reuse the shared locator block`,
+          ).toBe(baseline);
+        }
+      }
+    });
+
+    it('ships every opensuper reference doc that skill prose points to', async () => {
+      const manifest = await readManifest();
+      const manifestSkills = new Set(manifest.skills);
+      const skillPaths = manifest.skills.filter(
+        (skillPath) =>
+          skillPath.endsWith('SKILL.md') &&
+          (skillPath === 'opensuper/SKILL.md' || skillPath.startsWith('opensuper-')),
+      );
+
+      for (const languageDir of ['skills', 'skills-zh']) {
+        for (const skillPath of skillPaths) {
+          const content = await fs.readFile(
+            path.resolve('assets', languageDir, skillPath),
+            'utf-8',
+          );
+          const references =
+            content.match(
+              /(?:opensuper|opensuper-classic|opensuper-any)\/reference\/(?:subagents\/)?[a-z-]+\.md/g,
+            ) ?? [];
+
+          for (const referencePath of new Set(references)) {
+            expect(
+              manifestSkills.has(referencePath),
+              `${languageDir}/${skillPath} references ${referencePath} but manifest.json does not ship it`,
+            ).toBe(true);
+          }
+        }
+      }
+    });
+  });
+
+  describe('parseProjectConfigOverrides', () => {
+    it('returns empty object for empty or whitespace-only input', () => {
+      expect(parseProjectConfigOverrides('')).toEqual({});
+      expect(parseProjectConfigOverrides('   \n  ')).toEqual({});
+    });
+
+    it('fails closed for malformed YAML', () => {
+      expect(() => parseProjectConfigOverrides('{{invalid')).toThrow(
+        'Invalid .opensuper/config.yaml',
+      );
+    });
+
+    it('parses valid YAML into string-keyed record', () => {
+      const result = parseProjectConfigOverrides(
+        'context_compression: beta\nreview_mode: thorough\n',
+      );
+      expect(result).toEqual({ context_compression: 'beta', review_mode: 'thorough' });
+    });
+
+    it('converts booleans and numbers to strings', () => {
+      const result = parseProjectConfigOverrides('auto_transition: true\ncount: 42\n');
+      expect(result.auto_transition).toBe('true');
+      expect(result.count).toBe('42');
+    });
+
+    it('skips null values', () => {
+      const result = parseProjectConfigOverrides('context_compression: null\n');
+      expect(result).toEqual({});
+    });
+  });
+
+  describe('renderProjectConfig', () => {
+    it('renders all managed fields with defaults when no existing values', () => {
+      const output = renderProjectConfig({});
+      expect(output).toContain('# Artifact language used by Classic workflow documents');
+      expect(output).toContain('language: en');
+      expect(output).toContain('# Controls beta context compression');
+      expect(output).toContain('context_compression: off');
+      expect(output).toContain('# Sets the default review depth');
+      expect(output).toContain('review_mode: standard');
+      expect(output).toContain('# Automatically enters the next Classic phase');
+      expect(output).toContain('auto_transition: true');
+      expect(output).toContain(
+        '# Enables automatic recovery through the read-only Ambient Resume probe',
+      );
+      expect(output).toContain('ambient_resume: true');
+    });
+
+    it('preserves existing managed field values', () => {
+      const output = renderProjectConfig({
+        language: 'zh-CN',
+        context_compression: 'beta',
+        review_mode: 'thorough',
+        auto_transition: 'false',
+      });
+      expect(output).toContain('language: zh-CN');
+      expect(output).toContain('context_compression: beta');
+      expect(output).toContain('review_mode: thorough');
+      expect(output).toContain('auto_transition: false');
+    });
+
+    it('uses the selected artifact language as the default language value', () => {
+      const output = renderProjectConfig({}, 'zh-CN');
+      expect(output).toContain('language: zh-CN');
+      expect(output).toContain('# Classic 工作流文档使用的产物语言');
+      expect(output).toContain('# 是否启用只读的环境感知恢复探针');
+      expect(output).not.toContain('# Artifact language used for workflow documents');
+    });
+
+    it('forces the language field to the passed value even when an existing value differs', () => {
+      const output = renderProjectConfig({ language: 'en' }, 'zh-CN');
+      expect(output).toContain('language: zh-CN');
+    });
+
+    it('preserves the existing language when no language override is passed', () => {
+      const output = renderProjectConfig({ language: 'zh-CN' }, null);
+      expect(output).toContain('language: zh-CN');
+    });
+
+    it('preserves extra user fields after managed fields', () => {
+      const output = renderProjectConfig({ custom_key: 'custom_value' });
+      expect(output).toContain('custom_key: custom_value');
+    });
+
+    it('trailing newline', () => {
+      const output = renderProjectConfig({});
+      expect(output.endsWith('\n')).toBe(true);
+    });
+  });
+
+  describe('mergeProjectConfig', () => {
+    it('creates config with defaults when no file exists', async () => {
+      await mergeProjectConfig(tmpDir);
+      const content = await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf-8');
+      expect(parse(content)).toMatchObject({
+        ambient_resume: true,
+        classic: {
+          artifact_layout: 'docs',
+          language: 'en',
+          context_compression: 'off',
+          review_mode: 'standard',
+          auto_transition: true,
+        },
+      });
+      expect(parse(content)).not.toHaveProperty('native');
+      expect(content).not.toMatch(/^(language|context_compression|review_mode|auto_transition):/mu);
+    });
+
+    it('adds active Native defaults without writing legacy snapshot settings', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        [
+          'schema: opensuper.project.v1',
+          'default_workflow: native',
+          'native:',
+          '  artifact_root: docs',
+          '  language: en',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      await mergeProjectConfig(tmpDir);
+
+      expect(parse(await fs.readFile(configPath, 'utf-8'))).toMatchObject({
+        native: {
+          artifact_root: 'docs',
+          language: 'en',
+          clarification_mode: 'batch',
+          archive_confirmation: 'automatic',
+          max_verify_failures: 5,
+        },
+      });
+      const source = await fs.readFile(configPath, 'utf-8');
+      expect(source).not.toMatch(/^\s+snapshot:/mu);
+    });
+
+    it('preserves batch clarification mode across idempotent config updates', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        [
+          'schema: opensuper.project.v1',
+          'default_workflow: native',
+          'native:',
+          '  artifact_root: docs',
+          '  language: en',
+          '  clarification_mode: batch',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      await mergeProjectConfig(tmpDir);
+      const first = await fs.readFile(configPath, 'utf-8');
+      await mergeProjectConfig(tmpDir);
+      const second = await fs.readFile(configPath, 'utf-8');
+
+      expect(parse(second)).toMatchObject({
+        native: { clarification_mode: 'batch' },
+      });
+      expect(second).toBe(first);
+    });
+
+    it('fails closed when updating an invalid Native clarification mode', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, 'config.yaml'),
+        'native:\n  artifact_root: docs\n  clarification_mode: sometimes\n',
+        'utf-8',
+      );
+
+      await expect(mergeProjectConfig(tmpDir)).rejects.toThrow(
+        'native.clarification_mode must be sequential or batch',
+      );
+    });
+
+    it('preserves existing user values and fills missing managed fields', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, 'config.yaml'),
+        'context_compression: beta\n',
+        'utf-8',
+      );
+
+      await mergeProjectConfig(tmpDir);
+      const content = await fs.readFile(path.join(configDir, 'config.yaml'), 'utf-8');
+      expect(parse(content)).toMatchObject({
+        classic: {
+          artifact_layout: 'docs',
+          language: 'en',
+          context_compression: 'beta',
+          review_mode: 'standard',
+          auto_transition: true,
+        },
+      });
+      expect(content).not.toMatch(/^(language|context_compression|review_mode|auto_transition):/mu);
+    });
+
+    it('preserves extra user fields', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, 'config.yaml'),
+        'context_compression: beta\ncustom_setting: hello\n',
+        'utf-8',
+      );
+
+      await mergeProjectConfig(tmpDir);
+      const content = await fs.readFile(path.join(configDir, 'config.yaml'), 'utf-8');
+      expect(content).toContain('custom_setting: hello');
+    });
+
+    it.each([
+      ['malformed YAML', 'classic:\n  language: en\nextension: [unterminated\n'],
+      [
+        'duplicate keys',
+        'classic:\n  language: en\n  review_mode: standard\n  review_mode: thorough\n',
+      ],
+    ])('fails closed without overwriting an existing config with %s', async (_label, source) => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, source, 'utf-8');
+
+      await expect(mergeProjectConfig(tmpDir)).rejects.toThrow('Invalid .opensuper/config.yaml');
+      await expect(fs.readFile(configPath, 'utf-8')).resolves.toBe(source);
+    });
+
+    it('preserves unknown fields inside the Classic block', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        [
+          'schema: opensuper.project.v1',
+          'default_workflow: classic',
+          'workflows: [classic]',
+          'classic:',
+          '  artifact_layout: legacy',
+          '  language: en',
+          '  custom_extension:',
+          '    owner: user',
+          '    enabled: true',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      await mergeProjectConfig(tmpDir, null);
+
+      expect(parse(await fs.readFile(configPath, 'utf-8'))).toMatchObject({
+        classic: {
+          artifact_layout: 'legacy',
+          language: 'en',
+          custom_extension: {
+            owner: 'user',
+            enabled: true,
+          },
+        },
+      });
+    });
+
+    it('overwrites review_mode default from off to standard on re-init', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(path.join(configDir, 'config.yaml'), 'review_mode: off\n', 'utf-8');
+
+      await mergeProjectConfig(tmpDir);
+      const content = await fs.readFile(path.join(configDir, 'config.yaml'), 'utf-8');
+      expect(content).toContain('review_mode: off');
+    });
+
+    it('overwrites an existing language when a new language is explicitly passed', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(path.join(configDir, 'config.yaml'), 'language: en\n', 'utf-8');
+
+      await mergeProjectConfig(tmpDir, 'zh-CN');
+      const content = await fs.readFile(path.join(configDir, 'config.yaml'), 'utf-8');
+      expect(content).toContain('language: zh-CN');
+    });
+
+    it('preserves the existing language when no language is passed', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(path.join(configDir, 'config.yaml'), 'language: zh-CN\n', 'utf-8');
+
+      await mergeProjectConfig(tmpDir, null);
+      const content = await fs.readFile(path.join(configDir, 'config.yaml'), 'utf-8');
+      expect(content).toContain('language: zh-CN');
+    });
+
+    it('preserves new-format values when legacy top-level fields conflict', async () => {
+      const configDir = path.join(tmpDir, '.opensuper');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        [
+          'language: en',
+          'review_mode: off',
+          'classic:',
+          '  language: zh-CN',
+          '  context_compression: beta',
+          '  review_mode: thorough',
+          '  auto_transition: false',
+          'native:',
+          '  artifact_root: docs',
+          '  language: en',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      await mergeProjectConfig(tmpDir, null);
+      const first = await fs.readFile(configPath, 'utf-8');
+      await mergeProjectConfig(tmpDir, null);
+      const second = await fs.readFile(configPath, 'utf-8');
+
+      expect(parse(second)).toMatchObject({
+        classic: {
+          artifact_layout: 'docs',
+          language: 'zh-CN',
+          context_compression: 'beta',
+          review_mode: 'thorough',
+          auto_transition: false,
+        },
+        native: { artifact_root: 'docs', language: 'en' },
+      });
+      expect(second).not.toMatch(/^(language|context_compression|review_mode|auto_transition):/mu);
+      expect(second).toBe(first);
+    });
+  });
+
+  describe('createWorkingDirs config boundary', () => {
+    it('does not activate a workflow or write project config', async () => {
+      await createWorkingDirs(tmpDir);
+      const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+
+      await expect(fs.access(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  describe('Superpowers skill invocation names', () => {
+    it('uses installed bare Superpowers skill names instead of plugin-prefixed aliases', async () => {
+      const manifest = await readManifest();
+      const skillPaths = manifest.skills.filter(
+        (skillPath) =>
+          skillPath.endsWith('SKILL.md') &&
+          (skillPath === 'opensuper/SKILL.md' || skillPath.startsWith('opensuper-')),
+      );
+
+      for (const languageDir of ['skills', 'skills-zh']) {
+        for (const skillPath of skillPaths) {
+          const content = await fs.readFile(
+            path.resolve('assets', languageDir, skillPath),
+            'utf-8',
+          );
+          expect(content, `${languageDir}/${skillPath} should use bare skill names`).not.toContain(
+            'superpowers:',
+          );
+        }
+      }
+    });
+  });
+});
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}

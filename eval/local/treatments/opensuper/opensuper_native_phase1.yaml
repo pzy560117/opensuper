@@ -1,0 +1,69 @@
+# Self-contained OpenSuper Native treatment. It loads only the current repository's
+# Native Skill package; no Classic, OpenSpec, Superpowers, or dependency snapshot
+# is injected.
+OPENSUPER_NATIVE_PHASE1:
+  description: 'Self-contained OpenSuper Native Phase 1 workflow for strong coding models'
+  claude_md: |
+    Begin by invoking the /opensuper-native Skill and use only its bundled runtime.
+    Never invoke /opensuper or any Skill other than /opensuper-native, even when the task
+    text says "use the opensuper workflow" or names legacy OpenSuper phases.
+    When the task describes the legacy OpenSuper Open, Design, Build, Verify, and
+    Archive phases, preserve the business requirements but execute them as the
+    Native Shape, Build, Verify, and Archive workflow. Initialize Native with
+    artifact_root `docs`, continue automatically while no user decision
+    is unresolved, and leave a terminal verified Native archive. An explicit
+    execution boundary in the task, including a request to stop at a phase or
+    switch sessions, takes priority over automatic progression: persist the
+    requested boundary, stop there, and continue toward the terminal archive
+    only in the resumed session. Do not create OpenSpec, Classic, Superpowers,
+    or change-local machine artifacts. The Native Runtime owns `.opensuper/config.yaml`,
+    `.opensuper/runtime/native/`, and `.opensuper/current-change.json`.
+  skills:
+    - name: opensuper-native
+      source: path
+      path: ../assets/skills/opensuper-native
+      profile: generic
+      required_skills:
+        - opensuper-native
+      require_skill_invocation: true
+
+OPENSUPER_NATIVE_SEQUENTIAL:
+  description: 'Self-contained OpenSuper Native workflow with sequential clarification'
+  claude_md: |
+    Begin by invoking the /opensuper-native Skill and use only its bundled runtime.
+    Initialize Native under `docs/opensuper/`, then set native.clarification_mode `sequential`
+    in `.opensuper/config.yaml` before asking any product question.
+    Do not change the configured clarification mode. Ask one most-upstream user
+    decision per round, persist every answer, and continue through Shape, Build,
+    Verify, and Archive. Do not create OpenSpec, Classic, Superpowers, or change-local
+    machine artifacts. The Native Runtime owns `.opensuper/config.yaml`,
+    `.opensuper/runtime/native/`, and `.opensuper/current-change.json`.
+  skills:
+    - name: opensuper-native
+      source: path
+      path: ../assets/skills/opensuper-native
+      profile: generic
+      required_skills:
+        - opensuper-native
+      require_skill_invocation: true
+
+OPENSUPER_NATIVE_BATCH:
+  description: 'Self-contained OpenSuper Native workflow with batch clarification'
+  claude_md: |
+    Begin by invoking the /opensuper-native Skill and use only its bundled runtime.
+    Initialize Native under `docs/opensuper/`, then set native.clarification_mode `batch`
+    in `.opensuper/config.yaml` before asking any product question.
+    Do not change the configured clarification mode. Ask every currently answerable
+    independent user decision in one numbered round, persist every answer, then
+    present and persist the required final shared-understanding confirmation
+    before continuing through Build, Verify, and Archive. Do not create OpenSpec,
+    Classic, Superpowers, or change-local machine artifacts. The Native Runtime owns
+    `.opensuper/config.yaml`, `.opensuper/runtime/native/`, and `.opensuper/current-change.json`.
+  skills:
+    - name: opensuper-native
+      source: path
+      path: ../assets/skills/opensuper-native
+      profile: generic
+      required_skills:
+        - opensuper-native
+      require_skill_invocation: true

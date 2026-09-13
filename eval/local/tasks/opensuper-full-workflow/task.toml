@@ -1,0 +1,24 @@
+[metadata]
+name = "opensuper-full-workflow"
+description = "Test Claude's ability to follow the full opensuper workflow (open → design → build → verify → archive)"
+difficulty = "hard"
+category = "opensuper"
+tags = ["opensuper", "workflow", "openspec", "full-cycle"]
+default_treatments = [
+    "CONTROL",
+    "OPENSUPER_FULL_040_BETA",
+    "OPENSUPER_FULL_039",
+]
+
+[template]
+required = []
+
+[environment]
+description = "Python workspace with openspec CLI and opensuper scripts pre-installed. Claude must execute a full opensuper workflow for a sample feature request."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_full_workflow.py"
+target_artifacts = []
+timeout = 120

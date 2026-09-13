@@ -1,211 +1,235 @@
 ---
 name: opensuper-hotfix
-description: "opensuper preset path: Bug fix / hotfix. Skip brainstorming, directly open → build → verify → archive. Applicable for behavior fixes, scenarios not involving new capability design."
+description: 'Use the Classic preset to repair a localized defect. Use when the user explicitly invokes /opensuper-hotfix, selects hotfix, or resumes workflow: hotfix.'
 ---
 
-# opensuper Preset Path: Hotfix
+# OpenSuper Preset: Hotfix
 
-## Output Language Contract
+Before starting or resuming, read and follow `opensuper-classic/reference/classic-layout.md`. All OpenSpec CLI calls must use the adapter, and all paths must use the bound `<classic-*>` logical roots.
 
-- Output language: English.
-- This skill writes all user-facing responses and generated documents in English by default, including `proposal.md`, `design.md`, `tasks.md`, delta specs, Design Docs, Plans, verification reports, and archive notes.
-- Keep commands, paths, frontmatter keys, code identifiers, package names, and API names in their original form.
-- Use another prose language only when the user explicitly requests it.
+A short defect-repair flow: open → build → root-cause elimination check → verify → archive. It skips brainstorming and a full implementation plan, and applies to repairing existing behavior without designing new features.
 
-Quick bug fix workflow: open → build → verify → archive. Skip brainstorming and full plan, applicable for behavior fixes not involving new capability design.
+**All applicability conditions must hold:**
 
-**Applicable conditions** (all must be met):
-1. Fix bugs in existing functionality, no new capability
-2. No interface changes or architecture adjustments
-3. Change scope is predictable (usually ≤ 2 files)
+1. Repair an existing feature's defect without adding a feature.
+2. No interface changes or architectural redesign.
+3. The scope can be estimated. File counts are only a prompt for review, not an automatic escalation rule; see “Escalation decisions.”
 
-**Not applicable**: If fix process discovers need for architecture adjustments, should upgrade to full `/opensuper` workflow.
+**When the preset may no longer fit:** If the repair encounters changes listed under “Escalation decisions,” let the user decide whether to use the full `/opensuper-classic` flow.
 
 ---
 
-## Process (preset workflow, 6 steps)
+## Preset flow: 6 steps
 
-### 0. Output Language Constraint
+### 0. Set the output language
 
-Streamlined OpenSpec artifacts must use the language of the user request that triggered this workflow.
+Use OpenSuper's configured artifact language for the reduced OpenSpec artifacts. Before `.opensuper.yaml` exists, read `classic.language` from project `.opensuper/config.yaml`, then global `~/.opensuper/config.yaml`. After initialization, read it with `opensuper state get <name> language`.
 
-Execution chain: open → build → root cause check → verify → archive. Hotfix provides default decisions for each phase: streamlined open, direct build, root cause confirmation, scale-based verification, and final archive confirmation after verification passes.
+Execution order: open → build → root-cause elimination check → verify → archive. Hotfix presets how each stage runs: prepare the necessary artifacts, implement directly, check that the root cause is eliminated, choose verification based on size, then request final archive confirmation after verification passes.
 
-Locate opensuper scripts before starting:
+Use the supported OpenSuper CLI described in `opensuper-classic/reference/scripts.md`. On recovery from any entry, first check phase/workflow under `opensuper-classic/reference/context-recovery.md`.
+
+For an existing hotfix, the first state operation must be `opensuper state select <change-name>`. For a new change, run it immediately after `.opensuper.yaml` initializes successfully and before source edits.
+
+After entering the hotfix workspace and reading current `phase`, run `opensuper task <project-root> --task "<original-user-request>" --phase "<phase>" --session "<stable-task-session-id>" --json`. Use the returned context as follows:
+
+- Add only returned `text` to the current context. Context Manifest (`manifest` / `<context_manifest>`) contains only summaries, application reasons, and stable IDs. Add `--expand-context "<id>"` when source text, provenance, or validation details are needed. When path, operation, or phase changes, select applicable entries again using the same `--session`.
+- Use `opensuper memory remember ... --scope global|project` when the user explicitly asks for long-term memory. Use `opensuper memory observe` only for implicit, reusable, stable collaboration patterns. Do not save task summaries, progress, command output, or test results.
+- After actually using an entry and determining its outcome, take `applications[].applicationId` (`application_id` in Hook text) and run `opensuper task <project-root> --task "<original-user-request>" --application "<application-id>" --outcome used-successfully|ignored|overridden|corrected|contributed-to-failure --json` to record the result.
+- At task completion, still run `opensuper task` with `--complete --workflow <workflow> --change <change-id>`. Without Hooks, this Skill uses the same interface. `opensuper memory context` is a compatibility entry only. Plugin failures do not block the repair.
+
+### 1. Open a minimal change
+
+Reuse OpenSuper Open with hotfix defaults. Skip the full `openspec-explore` exploration and create only the artifacts needed for the repair.
+
+**Required now:** Load `openspec-new-change` using the Skill tool. Do not skip this step.
+
+<!-- external-openspec-skill-override -->
+
+**Adapt external OpenSpec instructions:** Do not directly invoke the official CLI, adopt a fixed cwd, or read/write fixed physical OpenSpec paths. Use `opensuper classic openspec -- <args...>` for every OpenSpec command and this invocation's `<classic-*>` logical roots for all change and artifact paths.
+
+Create the initial change structure, then immediately initialize state and select the change so interrupted work can resume:
 
 ```bash
-opensuper_ENV="${opensuper_ENV:-$(find . "$HOME"/.*/skills "$HOME/.config" "$HOME/.gemini" -path '*/opensuper/scripts/opensuper-env.sh' -type f -print -quit 2>/dev/null)}"
-if [ -z "$opensuper_ENV" ]; then
-  echo "ERROR: opensuper-env.sh not found. Ensure the opensuper skill is installed." >&2
-  return 1
-fi
-. "$opensuper_ENV"
+opensuper state init <name> hotfix
+opensuper state select <name>
+opensuper state check <name> open
 ```
 
-### 1. Quick Open (preset open)
+If select/check returns `BLOCKED` because `bound_branch` differs from the current branch, pause under `opensuper-classic/reference/decision-point.md`. Offer a single choice: return to the bound branch and rerun entry checks, or, after the user explicitly confirms that the current branch should take over this change, run `opensuper state rebind <change-name>` and rerun entry checks. Do not switch or rebind branches yourself.
 
-Reuse opensuper open capability to create change, but use hotfix defaults: do not execute `openspec-explore` long exploration, directly enter streamlined change creation.
+Workspace isolation is a user choice at entry; do not write `current` as an assumed default. Pause under `opensuper-classic/reference/decision-point.md` and present:
 
-**Immediately execute:** Use the Skill tool to load the `openspec-new-change` skill and pass this requirement: `Output language: English`. Skipping this step is prohibited.
+- A. Work on the current branch: run `opensuper state set <name> isolation current`, binding the actual branch.
+- B. Create a branch: create and switch to `hotfix/YYYYMMDD/<change-name>`, then run `opensuper state set <name> isolation branch`.
+- C. Create a worktree: first load Superpowers `using-git-worktrees` with the Skill tool and let it create the isolated workspace. Enter it, then run `opensuper state set <name> isolation worktree`.
 
-After the skill loads, follow its guidance to create streamlined artifacts:
-  - `proposal.md` — problem description + root cause analysis + fix goal (no solution comparison needed)
-  - `design.md` — fix solution (one is enough, no multi-solution comparison needed)
-  - `tasks.md` — fix task list
-- **No delta spec needed** (unless fix changes existing spec acceptance scenarios)
-
-Initialize opensuper state file:
+After B or C, run this again in the actual execution branch/worktree:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" init <name> hotfix
+opensuper state select <name>
 ```
 
-Verify initialized state:
+Then create the reduced artifacts:
+
+- `proposal.md`: problem, root cause, and repair goal; no solution comparison required.
+- `design.md`: the repair approach; one approach is enough.
+- `tasks.md`: repair tasks.
+- **No delta spec is required** unless the fix changes acceptance scenarios in an existing spec.
+
+Apply the phase guard to move from open to build:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" check <name> open
-```
-
-Run phase guard to transition open → build:
-
-```bash
-"$opensuper_BASH" "$opensuper_GUARD" <change-name> open --apply
+opensuper guard <change-name> open --apply
 ```
 
 Check `auto_transition` to decide whether to continue:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" next <name>
+opensuper state next <name>
 ```
 
-- `NEXT: auto` → continue to Step 2
-- `NEXT: manual` → pause, follow `HINT` to prompt user to run `/<SKILL>` manually
+- `NEXT: auto`: continue to Step 2.
+- `NEXT: manual`: follow `HINT`, return control, and end this invocation. Do not ask for another continuation approval.
 
-### 2. Direct Build (preset build)
+### 2. Implement directly
 
-Use hotfix defaults: `build_mode: direct`. Skip Superpowers `brainstorming` and `writing-plans` (unless tasks > 3; if exceeds 3 tasks, transfer to `/opensuper-build`'s plan and execution method selection — note this does NOT trigger full workflow upgrade, only switches execution method).
+Use hotfix defaults: `build_mode: direct`, `tdd_mode: direct`, `review_mode: off`. Preserve the isolation confirmed in Step 1; do not change it back to `current`.
 
-Before continuing or starting changes, handle uncommitted changes through `opensuper/reference/dirty-worktree.md`. If attribution shows the fix scope exceeds hotfix, handle it through this file's "Upgrade Conditions".
+`direct` skips full planning and per-task TDD orchestration; it still requires reproduction, regression tests, and verification. Skip Superpowers `brainstorming` and `writing-plans`. **Task count alone does not trigger `/opensuper-build`.** Execute even a longer tasks.md in order within the current hotfix. Ask whether to escalate to full only when the later escalation conditions or scope prompts apply.
 
-**Immediately execute:** Execute tasks one by one according to tasks.md:
+Before starting or resuming edits, handle uncommitted changes under `opensuper-classic/reference/dirty-worktree.md`. After establishing ownership, apply “Escalation decisions” if the repair meets an escalation condition or exceeds the file-count prompt.
 
-1. Read `openspec/changes/<name>/tasks.md`, get incomplete task list
-2. For each incomplete task:
-   - Modify code according to task description
-   - Run project formatter (e.g., `mvn spotless:apply`, `npm run format`)
-   - Run related tests to confirm pass
-   - Check corresponding `- [ ]` to `- [x]` in tasks.md
-   - Commit code, commit message format: `fix: <brief fix description>`
-3. After all tasks complete, explicitly run relevant project tests and build commands
+Before changing implementation, **reproduce the issue and record the failure**:
 
-**If fix affects existing spec acceptance scenarios**:
-- Create delta spec in `openspec/changes/<name>/specs/<capability>/spec.md`
-- Only include `## MODIFIED Requirements` section
+1. Confirm the reported old behavior actually fails with minimal repeatable steps. Record the command, input, and actual result.
+2. Where automation is possible, add and run a failing regression test first. Confirm that it fails for this defect, not an environment or test error.
+3. Where automation is not currently possible, record why and provide repeatable manual failure evidence in the proposal/verification report. Do not edit code without failure evidence.
 
-During hotfix execution, whenever a crash, unexpected behavior, test failure, or build failure appears while running the program, tests, build, or manual verification, must use the Skill tool to load the Superpowers `systematic-debugging` skill. Before root-cause investigation is complete, must not propose or implement source-code fixes.
+After obtaining RED evidence, execute tasks.md in order:
 
-For specific investigation, minimal failing test, fix verification, and keeping the current change verification loop, follow `opensuper/reference/debug-gate.md`.
+1. Read `<classic-change-dir>/tasks.md` for unfinished tasks.
+2. For each task:
+   - Implement the described repair.
+   - Run the project's formatter, such as `mvn spotless:apply` or `npm run format`.
+   - Run the new regression test until it passes, then run relevant tests.
+   - Change its tasks.md `- [ ]` to `- [x]`.
+   - Commit using `fix: <repair-summary>`.
+3. Explicitly run the relevant project tests and build after all tasks are complete.
 
-### 3. Root Cause Elimination Check
+During hotfix, a crash, unexpected behavior, failing test, or failing build encountered while running the program, tests, build, or manual verification requires loading Superpowers `systematic-debugging` through the Skill tool. Do not propose or implement source repairs before completing root-cause investigation.
 
-**Execute before running build guard**, ensuring the fix actually eliminates the root cause:
+Follow `opensuper-classic/reference/debug-gate.md` for investigation, the minimal failing test, verification after repair, and completing those steps in the current change.
 
-1. Read bug description and root cause in proposal.md
-2. Search and verify problem code no longer exists
-3. If root cause not eliminated, return to Step 2 to continue fix (still in build phase, no state transition needed)
+**If the fix affects existing spec acceptance scenarios:**
 
-**Upgrade conditions**:
-- Root cause check reveals deep architecture issues → Stop hotfix, handle per "Upgrade Conditions" section
-- Fix requires additional interface changes → Stop hotfix, handle per "Upgrade Conditions" section
+- Create `<classic-change-dir>/specs/<capability>/spec.md` as a delta spec.
+- Include only `## MODIFIED Requirements`.
 
-After root cause is confirmed eliminated, run phase guard to transition build → verify:
+### 3. Confirm the root cause is eliminated
+
+**Do this before the build guard** to confirm that the repair actually removes the cause:
+
+1. Read the bug description and root cause in proposal.md.
+2. Search the relevant code and confirm the faulty implementation has been removed or corrected.
+3. If the cause remains, return to Step 2. Phase is still build, so no state rollback is needed.
+
+**Escalation prompts:**
+
+- The check reveals a deeper architecture issue: pause under “Escalation decisions” and let the user choose whether to use the full flow.
+- The repair needs another interface change, such as a new public API: pause under the same section for the user's decision.
+
+After confirming elimination, advance from build to verify:
 
 ```bash
-"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply
+opensuper guard <change-name> build --apply
 ```
 
-State automatically updates to `phase: verify`, `verify_result: pending`, then enter verification.
+State becomes `phase: verify`, `verify_result: pending`; continue to verification.
 
-### 4. Verification (preset verify)
+### 4. Verify
 
-Reuse `/opensuper-verify`, with opensuper-verify's scale assessment deciding lightweight or full verification.
+Reuse `/opensuper-verify`, whose size assessment chooses light or full verification.
 
-**Immediately execute:** Use the Skill tool to load the `opensuper-verify` skill. Skipping this step is prohibited.
+**Required now:** Load `opensuper-verify` using the Skill tool. Do not skip this step.
 
-Small-scale hotfixes without delta spec usually meet lightweight verification conditions (≤ 3 tasks, ≤ 2 files), opensuper-verify's scale assessment will select the lightweight verification path (6 quick checks, including lightweight code review). If hotfix created delta spec, enter full verification path according to opensuper-verify's scale assessment rules.
+A small hotfix without delta spec usually meets light conditions (≤ 3 tasks and changed files below the scale threshold). Follow opensuper-verify's light-verification checklist. Default `review_mode: off` does not dispatch automatic code review. If the user wants review, they can set `opensuper state set <name> review_mode standard` or `thorough` before verification. If the hotfix creates delta spec, follow opensuper-verify's scale rules into full verification.
 
-After verification passes, record `.opensuper.yaml` `verify_result` as `pass` according to `/opensuper-verify` rules, must not skip this status before archiving. After verification passes, still enter `/opensuper-archive`'s final archive confirmation; do not automatically run the archive script.
+After verification passes, record `.opensuper.yaml` `verify_result: pass` under `/opensuper-verify` rules. Do not omit that state before archive. Passing verification still leads to `/opensuper-archive` for final confirmation; never run archive automatically without it.
 
-### 5. Archive (preset archive)
+### 5. Archive
 
-Reuse `/opensuper-archive`. Must satisfy `verify_result: pass` in `.opensuper.yaml` before archiving, and wait for `/opensuper-archive`'s final archive confirmation.
+Reuse `/opensuper-archive`. Require `.opensuper.yaml` `verify_result: pass` and wait for its final archive confirmation.
 
-**Immediately execute:** Use the Skill tool to load the `opensuper-archive` skill to archive. Skipping this step is prohibited.
-If there is delta spec, sync to main spec according to opensuper-archive rules, and handle associated Design Doc and Plan archiving annotations.
+**Required now:** Load `opensuper-archive` using the Skill tool. Do not skip this step.
+
+If there is delta spec, sync it to main spec under opensuper-archive rules and apply archive annotations to the linked Design Doc and Plan.
 
 ---
 
-## Continuous Execution Mode
+## Continue through the preset
 
 <IMPORTANT>
-Hotfix workflow is **one-time continuous execution**. After invoking `/opensuper-hotfix`, agent must automatically advance through hotfix steps, without pausing to wait for user input mid-way.
+Hotfix runs continuously by default. After `/opensuper-hotfix`, automatically move through its own steps without extra pauses. If `auto_transition: false`, end the invocation between build/verify/archive phases and use `HINT` to tell the user how to invoke the next phase later. Do not add another confirmation question. Regardless of auto_transition, pause for these user decisions:
 
-Exception: when `.opensuper.yaml` has `auto_transition: false`, after each phase guard advances `phase`, do not auto-invoke the next skill. In this case, use `"$opensuper_BASH" "$opensuper_STATE" next <name>` output and pause for manual continuation as instructed.
+1. An escalation condition appears: **pause, present choices, and wait for an explicit decision** to continue hotfix or move to the full `/opensuper-classic` flow.
+2. Verify needs acceptance of a WARNING/SUGGESTION deviation, a spec-divergence decision, or a strategy after the automatic repair limit. The first 3 clearly repairable failures are repaired and reverified automatically.
+3. The final pre-archive choice of whether to archive and how to deliver the archive commit.
 
-The following situations must also pause and wait for user confirmation:
+Order: quick Open → direct Build → root-cause elimination check → Verify → Archive → done.
 
-1. Encountering upgrade conditions (see "Upgrade Conditions" section). **Must use the current platform's available user input/confirmation mechanism to pause and wait for the user to explicitly confirm** upgrading to full workflow
-2. workspace isolation and execution-method selection when tasks exceed 3 and transfer to `/opensuper-build`
-3. verify phase (opensuper-verify) verification-failure and branch-handling decisions
-4. Final archive confirmation (before opensuper-archive runs the archive script)
-
-Execution order: quick open → direct build → root cause check → verification → archive → complete
-
-After each step completes, immediately enter next step. Within each phase, must still call corresponding opensuper/OpenSpec/Superpowers skill according to above requirements; if the called skill has its own user decision points, follow that skill's rules.
+Continue to the next phase as soon as the current one finishes, subject to the rules above. Still invoke the required OpenSuper/OpenSpec/Superpowers skills within each phase. If a called skill has a user decision, follow its rules.
 </IMPORTANT>
 
 ---
 
-## Upgrade Conditions
+## Escalation decisions
 
-Upgrade to full `/opensuper` when **any** of the following conditions are met:
+Escalation decides only whether to replace the preset with full. File count does not automatically upgrade the workflow. `opensuper state scale` recommends light/full verification without writing configuration; Verify chooses based on actual risk.
 
-| Condition | Explanation |
-|-----------|-------------|
-| Change involves **3+ files** | Exceeds single-point fix scope |
-| Architecture changes | New modules, new interfaces, new dependencies |
-| Database schema changes | Structural adjustments |
-| Introduces new public API | Fix creates new external interface |
-| Fix scope exceeds single function/module | Requires coordinated changes |
+If `/opensuper-classic` passes an intent frame, before Build recheck only `risk_signal` and whether work adds a feature or public API, changes a structured-data schema, needs cross-module coordination, or exposes a deeper architecture issue. Follow this section when these arise; do not repeat entry intent classification.
 
-When upgrade conditions are met, **must follow the `opensuper/reference/decision-point.md` protocol to pause and wait for the user to explicitly confirm** upgrading to the full `/opensuper` workflow. Do not directly enter `/opensuper-design`, and do not automatically supplement Design Doc.
+During repair, watch for:
 
-After user confirms upgrade, **must first update the workflow and phase fields** before entering full flow:
+- Coordinated edits across modules.
+- A new feature.
+- Database schema changes.
+- A new public API.
+- A deeper architecture issue, often discovered by the root-cause elimination check.
+
+For any of these, the Agent **must neither escalate nor decide to stay on hotfix without the user**.
+
+File count prompts a scope review only. Above the prompt threshold, such as > 4 files, also let the user choose hotfix or full. More files do not necessarily require the full flow. Defect repairs usually involve 1–3 files; exceeding the threshold warrants checking whether the preset still fits.
+
+When a condition or file-count prompt applies, **pause under `opensuper-classic/reference/decision-point.md` and wait for an explicit choice**. Do not enter `/opensuper-design` or create a Design Doc automatically.
+
+After the user chooses escalation (B), run the supported state-machine transition to full and return to design:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" set <name> workflow full
-"$opensuper_BASH" "$opensuper_STATE" set <name> phase design
+opensuper state transition <name> preset-escalate
 ```
 
-Then on current change basis, supplement Design Doc: **Immediately use the Skill tool to load the `opensuper-design` skill**, proceed normally with full workflow. If user does not confirm upgrade, stop hotfix and report that current change has exceeded hotfix scope.
+It atomically sets `workflow`/`classic_profile` to `full`, moves `phase` to `design`, clears `design_doc`, and clears preset-specific `build_mode`, `tdd_mode`, `review_mode`, `isolation`, and `verify_mode`. **Immediately load `opensuper-design` using the Skill tool** to complete the design within the existing change. On entering Build, jointly reconfirm the complete working configuration.
+
+If the user chooses to continue (A), continue hotfix and record the reason they accepted doing so.
 
 ---
 
-## Exit Conditions
+## Exit conditions
 
-- Bug fixed, tests pass
-- Change archived
-- If spec changes, synced to main spec
-- **Phase guard**: Before build → verify run `"$opensuper_BASH" "$opensuper_GUARD" <change-name> build --apply`; before verify → archive follow `/opensuper-verify` and run `"$opensuper_BASH" "$opensuper_GUARD" <change-name> verify --apply`
+- The defect is fixed and tests pass.
+- The change is archived.
+- Any spec changes are synced to main spec.
+- **Phase guards:** use `opensuper guard <change-name> build --apply` before build → verify, and follow `/opensuper-verify` to run `opensuper guard <change-name> verify --apply` before verify → archive.
 
-## Automatic Handoff to Next Phase
+## Continue to the next phase
 
-Follow `opensuper/reference/auto-transition.md`. Key command:
+Follow `opensuper-classic/reference/auto-transition.md` and `agent.continuation` from the successful result. Do not repeat next, select, or check while valid state information is available. Run this only after context loss, external state changes, or when an older result lacks that information:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" next <name>
+opensuper state next <name>
 ```
 
-- `NEXT: auto` → invoke the skill pointed to by `SKILL` to continue hotfix workflow (`phase: build` returns `opensuper-hotfix`, `verify` returns `opensuper-verify`, `archive` returns `opensuper-archive`)
-- `NEXT: manual` → do not invoke the next skill; prompt user to manually run `/<SKILL>` per `HINT`
-- `NEXT: done` → workflow is complete, no further action needed
+- `NEXT: auto`: invoke the skill named by `SKILL`: build returns `opensuper-hotfix`, verify returns `opensuper-verify`, and archive returns `opensuper-archive`.
+- `NEXT: manual`: do not invoke the next skill. Follow `HINT`, return control, and end this invocation without another confirmation question.
+- `NEXT: done`: the workflow is complete.

@@ -1,0 +1,5 @@
+interface:
+  display_name: 'OpenSuper Classic Preset: Tweak'
+  short_description: 'Complete a light or moderate change with matching specs'
+policy:
+  allow_implicit_invocation: true

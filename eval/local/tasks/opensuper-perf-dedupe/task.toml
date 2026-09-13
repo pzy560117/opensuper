@@ -1,0 +1,24 @@
+[metadata]
+name = "opensuper-perf-dedupe"
+description = "Optimize an O(n^2) deduplication function to O(n) using a set/dict while preserving order"
+difficulty = "medium"
+category = "opensuper"
+tags = ["opensuper", "workflow", "performance", "algorithm"]
+default_treatments = [
+    "CONTROL",
+    "OPENSUPER_FULL_040_BETA",
+    "OPENSUPER_FULL_039",
+]
+
+[template]
+required = []
+
+[environment]
+description = "Python dedupe tool with an O(n^2) implementation. Claude must optimize to O(n)."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_perf_dedupe.py"
+target_artifacts = []
+timeout = 120

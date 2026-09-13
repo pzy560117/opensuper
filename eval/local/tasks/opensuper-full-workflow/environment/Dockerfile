@@ -1,0 +1,49 @@
+FROM python:3.12-slim
+
+WORKDIR /workspace
+
+# Runtime tools for both opensuper baselines:
+# - bash: 0.3.9 classic shell scripts (bash 4+ arrays, [[ ]]; python:3.12-slim ships only dash)
+# - nodejs npm: 0.4.0-beta.1 opensuper (independent .mjs command scripts) and OpenSpec CLI
+# - git curl jq: opensuper scripts and state inspection
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash git curl jq ca-certificates \
+    nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir pyyaml
+
+# OpenSpec CLI (opensuper drives openspec new/list/status/archive).
+# Use npmmirror for reproducible builds behind GFW.
+RUN npm install -g @fission-ai/openspec@1.3.1
+
+# Claude Code CLI (the agent runtime; version overridable via BENCH_CC_VERSION).
+ARG CLAUDE_CODE_VERSION=latest
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
+# Sample project structure
+RUN mkdir -p wordcount-cli && \
+    echo '# Word Count CLI\nA simple word counting tool.' > wordcount-cli/README.md
+
+# Existing wordcount code (extended during the task)
+COPY wordcount.py /workspace/wordcount.py
+COPY test_wordcount.py /workspace/test_wordcount.py
+
+# OpenSpec working tree (opensuper-open writes under openspec/changes/)
+RUN mkdir -p openspec/changes
+
+# Create a non-root user: claude --dangerously-skip-permissions refuses to run
+# as root, and most opensuper scripts also expect a normal HOME for git config etc.
+RUN useradd --create-home --shell /bin/bash agent && \
+    chown -R agent:agent /workspace
+USER agent
+ENV HOME=/home/agent
+# Validator scripts import scaffold.*; bake PYTHONPATH so it never crosses the
+# MSYS path-conversion boundary on the docker run command line.
+ENV PYTHONPATH=/workspace
+# Minimal git identity so opensuper commits don't fail.
+RUN git config --global user.email "agent@eval.local" && \
+    git config --global user.name "OpenSuper Eval Agent" && \
+    git config --global init.defaultBranch master
+
+CMD ["bash"]

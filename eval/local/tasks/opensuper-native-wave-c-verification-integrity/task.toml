@@ -1,0 +1,36 @@
+[metadata]
+name = "opensuper-native-wave-c-verification-integrity"
+description = "Test beta17 Runtime checks, complete Verifier coverage, and the repair loop"
+difficulty = "hard"
+category = "opensuper-native"
+tags = ["opensuper-native", "verification", "freshness", "acceptance-trace", "wave-c"]
+default_treatments = ["OPENSUPER_NATIVE_PHASE1"]
+
+[template]
+required = []
+
+[environment]
+description = "Python word-count workspace for exercising beta17 Native verification and repair."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_native_wave_c_verification_integrity.py"
+target_artifacts = [".cache/opensuper-native-eval/verifier-missing.json", ".cache/opensuper-native-eval/verifier-failed.json", ".cache/opensuper-native-eval/final-status.json", "docs/opensuper/archive", "docs/opensuper/specs/longest-word/spec.md"]
+timeout = 120
+
+[evaluation]
+profile = "generic"
+required_skills = ["opensuper-native"]
+expected_artifacts = [".cache/opensuper-native-eval/verifier-missing.json", ".cache/opensuper-native-eval/verifier-failed.json", ".cache/opensuper-native-eval/final-status.json", "docs/opensuper/archive", "docs/opensuper/specs/longest-word/spec.md"]
+require_skill_invocation = true
+rubric_criteria = [
+  "Rejects a Verifier response that omits an acceptance item",
+  "Returns a failed candidate to Build and uses a new Verifier attempt after repair",
+  "Archives only a complete v4 state with readable verification.md",
+  "Does not rerun Runtime checks during Archive",
+]
+
+[interaction]
+mode = "none"
+max_turns = 1

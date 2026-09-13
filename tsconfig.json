@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "lib": ["ES2022"],
     "moduleResolution": "NodeNext",
-    "rootDir": "./src",
+    "rootDir": ".",
     "outDir": "./dist",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -14,8 +14,9 @@
     "declarationMap": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "types": ["node"]
   },
-  "include": ["src/**/*"],
+  "include": ["app/**/*", "domains/**/*", "platform/**/*"],
   "exclude": ["node_modules", "dist", "test"]
 }

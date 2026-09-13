@@ -1,14 +1,23 @@
-# opensuper Phase Awareness (Anti-Drift Rules)
+# OpenSuper Phase Awareness (Anti-Drift Rules)
 
-> This rule is injected every round to prevent forgetting opensuper workflow state during long context.
-> The Hook platform additionally executes `opensuper-hook-guard.sh` for hard interception;
-> this Rule is a universal soft defense line for all platforms.
+> Internal Classic authoring reference; it is not installed by the current manifest. User environments use `opensuper-workflow-guard.en.md`.
+>
+> This reference maintains Classic Skill, Runtime, and old-install cleanup contracts; it is not injected as a persistent Rule.
+> Current platforms install `opensuper-workflow-guard.en.md`, and Hook platforms route the Classic Guard through the Hook Router.
 
 ## Global Rules
 
 ### Phase Awareness (Highest Priority)
 
-When there is an active opensuper change (`openspec/changes/<name>/.opensuper.yaml` exists), **before starting any operation** you must read the `phase` field to confirm the current phase.
+When there is an active opensuper change (`<classic-change-dir>/.opensuper.yaml` bound by the Classic layout resolver exists), **before starting any operation** you must read the `phase` field to confirm the current phase.
+
+When multiple active changes exist, resolve the current change first, then run:
+
+```bash
+opensuper state select <change-name>
+```
+
+Ordinary source writes are governed only by the selected change phase. With multiple active changes and no valid selection, the Hook must block and ask for a choice; it must not guess alphabetically or let an unrelated open, design, or archive change globally block a legal build. A single active change may retain automatic routing.
 
 **Phases and allowed operations:**
 
@@ -17,8 +26,27 @@ When there is an active opensuper change (`openspec/changes/<name>/.opensuper.ya
 | `open` | Create proposal/design/tasks, run guard | Write source code |
 | `design` | brainstorming, create Design Doc, run guard | Write source code |
 | `build` | Write source code, tests, execute plans | Skip user confirmation points |
-| `verify` | Verification, branch handling | Skip failure handling |
-| `archive` | Confirm archive, run archive script | Write source code |
+| `verify` | Verification, record verification report | Skip failure handling, handle the branch early |
+| `archive` | Confirm archive, run archive script, commit archive changes, handle the branch | Write source code |
+
+The hook hard-interception allowlist exempts only artifacts legal in the current phase as returned by the Classic layout resolver, plus OpenSuper-owned `.opensuper/*` and `.superpowers/*` control workspaces and root-level Markdown files. Configuration directories and any worktree/source files inside them are not generally exempt and must obey the current change's phase restrictions.
+
+### Phase-Entry Self-Consistency Check (Before Writing Source Code)
+
+Reading the `phase` field alone is not enough — you must also confirm **how** that phase was reached. Before writing any source code, self-check whether `.opensuper.yaml` is in an **illegal jump** state (a prior phase was skipped) using the table below. If any row matches, immediately stop writing source code, go back to the corresponding phase to fill the missing artifact, and do not trust the `phase` field to keep going.
+
+| Detected | Verdict | Action |
+|----------|---------|--------|
+| `phase: build` + `workflow: full` + `design_doc` empty/null | Skipped design | Stop writing source; run `/opensuper-design` to create the Design Doc and pass guard |
+| `phase: build` + `workflow: full` + `plan` empty/null or its recorded path is invalid | Skipped implementation plan | Stop writing source; return to `/opensuper-build` Step 1 to create or restore the plan, record its path, and verify with `opensuper state check <name> build --recover` |
+| `phase: build` + any of proposal/design/tasks missing or empty | Skipped open | Return to `/opensuper-open` to fill the three artifacts |
+| `phase: archive` + `verify_result` ≠ `pass` | Skipped verify | Return to `/opensuper-verify` to complete verification |
+
+> Note: the table above only covers what the hook hard interception actually detects (`design_doc` and `plan` state during build; proposal/design/tasks completeness is validated at the open→build guard exit). The Hook's `RECOVERY`, `SUCCESS`, and `RETRY` fields define the recovery loop; do not retry the blocked source write before `SUCCESS`. The `verify` phase is not covered by this source-write self-consistency check — if artifacts are found missing during verify, follow the verify-fail rewind handling under "Verify Phase Specifics" below.
+
+Exception: `workflow: hotfix/tweak` intentionally skips design and the Superpowers implementation plan, so empty `design_doc` and `plan` values are normal and not illegal jumps.
+
+Upgrade state note: after a preset (hotfix/tweak) hits an upgrade signal and the user confirms upgrading, `opensuper state transition <name> preset-escalate` legally converts it to `workflow: full` + `phase: design` + `design_doc: null` and clears preset-only build settings. At this point `phase: design` with an empty `design_doc` **is a normal upgrade pre-state**, not an illegal jump — the agent should enter `/opensuper-design` to supplement the Design Doc, then choose the full workflow configuration again in build. This terminal state does not match the "skipped design" row above (that row only detects `phase: build`).
 
 ### Skill Invocation (Cannot Replace with Normal Conversation)
 
@@ -34,66 +62,75 @@ The following operations must be loaded through the Skill tool. When Skill is un
 
 ### Script Execution (Cannot Skip)
 
-- **Phase exit**: `opensuper-guard <name> <phase> --apply` (must see ALL CHECKS PASSED)
-- **Compression recovery**: `opensuper-state check <name> <phase> --recover`
-- **State update**: After key operations, update fields through `opensuper-state set`; manually editing .opensuper.yaml is prohibited
-- **handoff generation**: `opensuper-handoff <name> design --write` (handwriting summaries is prohibited)
+- **Phase exit**: `opensuper guard <name> <phase> --apply` (must see ALL CHECKS PASSED)
+- **Compression recovery**: `opensuper state check <name> <phase> --recover`
+- **State update**: After key operations, update fields through `opensuper state set`; manually editing .opensuper.yaml is prohibited
+- **Phase advancement only via guard/transition**: directly running `opensuper state set <name> phase <value>` to jump phases is prohibited. A preset (hotfix/tweak) upgrade to full must use `opensuper state transition <name> preset-escalate`
+- **handoff generation**: `opensuper handoff <name> design --write` (handwriting summaries is prohibited)
 
 ### User Confirmation (Cannot Auto-Skip)
 
 The following decision points must pause to wait for explicit user selection; do not auto-fill based on recommendation rules:
 
-- **open**: Requirements clarification completion confirmation, artifact review confirmation
+- **open**: Final artifact review, which also confirms the change name and scope. Add an earlier decision only for unresolved target/scope alternatives or a large-PRD split
 - **design**: brainstorming proposal confirmation (Design Doc cannot be created before confirmation)
-- **build**: plan-ready pause, isolation/build_mode/tdd_mode selection, spec large-scale change confirmation
-- **verify**: Verification failure handling strategy, branch handling selection
-- **archive**: Final confirmation before archiving
+- **build**: After the plan is written, provide one joint decision that collects whether to continue, the execution method, TDD mode, and code-review mode; the workspace was prepared and bound by Open, and missing isolation returns to Open. Scope expansion requiring redesign/splitting and preset upgrades remain separate user decisions
+- **verify**: Accepting WARNING/SUGGESTION deviations, handling Spec drift, or choosing continue/stop after the automatic repair limit
+- **archive**: One final pre-archive confirmation that chooses both whether to archive and how to deliver the archive commit
 
 ## Design Phase Specifics
 
-1. First script operation = `opensuper-handoff <name> design --write` (loading brainstorming before generating handoff is prohibited)
+1. First script operation = `opensuper handoff <name> design --write` (loading brainstorming before generating handoff is prohibited)
 2. brainstorming in progress: incrementally update brainstorm-summary.md (update recovery checkpoint after each clarification round or proposal iteration; unconfirmed content marked as pending/candidate)
 3. After brainstorming completes, next step = brainstorm-summary.md finalization → Design Doc → guard
-4. active compaction gate: after brainstorm-summary.md is finalized and before creating Design Doc, prioritize triggering host platform's native context compression; when programmatic triggering is unavailable, pause to prompt user to manually compress or confirm continuing
+4. Active context compaction is optional only after the Design Doc, state evidence, and latest handoff are persisted; when programmatic triggering is unavailable, provide a non-blocking suggestion and continue
 5. **Absolutely cannot start writing implementation code directly** — must first create Design Doc and pass guard
 
 ## Build Phase Specifics
 
-1. After plan creation, must ask user to choose continue or pause (`build_pause` mechanism)
-2. After each task acceptance, must: tasks.md checkmark → git commit (do not accumulate). `subagent-driven-development` must wait for both spec compliance and code quality reviews to pass, then the coordinator performs targeted verification by unique task text; do not use an incomplete task summary table to replace current task verification
+1. After plan creation, use `opensuper-build`'s joint-decision protocol to present the pause option, execution method, TDD mode, and code-review mode together. Write `build_mode`, `tdd_mode`, and `review_mode` only after the user chooses to continue with a complete configuration; write `build_pause: plan-ready` when the user chooses to pause
+2. After each task acceptance, must: tasks.md checkmark → git commit (do not accumulate). `subagent-driven-development` must complete acceptance according to the current `review_mode`, then the coordinator performs targeted verification by unique task text; do not use an incomplete task summary table to replace current task verification
 3. When encountering failures, must load **systematic-debugging** skill; do not propose source code fixes before root cause is located
 4. spec change grading: small changes edit directly | medium changes load brainstorming | large changes pause and wait for user confirmation to split
 
 ## Verify Phase Specifics
 
-1. First step run `opensuper-state scale <name>` to determine verification level
-2. After verification fails, list failed items and wait for user selection; CRITICAL must be fixed
-3. After 3 consecutive failures, must let user choose to accept deviation or continue fixing
+1. First step run `opensuper state scale <name>` to determine verification level
+2. For the first 3 clearly repairable failures, automatically run `opensuper state transition <name> verify-fail`, return to build, and enter `/opensuper-build`. CRITICAL/IMPORTANT failures cannot be accepted as deviations
+3. The state machine owns `verify_failures`. After it reaches `3`, the next failure must ask whether to continue fixing or stop the workflow for an external decision
+4. Ask whether to fix or accept WARNING/SUGGESTION only when repair introduces a behavior, scope, or risk tradeoff. Safe, local, tradeoff-free repairs close automatically
 
 ## Context Compression Recovery
 
 If context compression is suspected (previous conversation was summarized, previous discussion cannot be found), immediately run:
 
 ```bash
-"$opensuper_BASH" "$opensuper_STATE" check <name> <phase> --recover
+opensuper state check <name> <phase> --recover
 ```
 
 Decide next step according to the script's **Recovery action** output.
 
+After recovery, first re-run the "Phase-Entry Self-Consistency Check" table: if `phase` is inconsistent with the artifacts (design_doc / plan / three artifacts / verify_result mismatch), treat it as an illegal jump, follow the recovery steps emitted by the script or Hook, and retry the original operation only after `SUCCESS`; do not trust the `phase` field to keep going.
+
 **Special attention to `build_mode`**: If recovery script outputs `build_mode: subagent-driven-development`, you are the coordinator, not the executor. Must:
 1. Use the Skill tool to reload the Superpowers `subagent-driven-development` skill
-2. Re-read `opensuper/reference/subagent-dispatch.md` for opensuper-specific extensions
-3. Read `openspec/changes/<name>/.opensuper/subagent-progress.md` to recover the exact stage, evidence, and review-fix round
+2. Re-read `opensuper-classic/reference/subagent-dispatch.md` for OpenSuper-specific extensions
+3. Read `<classic-change-dir>/.opensuper/subagent-progress.md` to recover the exact stage, evidence, and review-fix round
 4. Do not execute tasks directly in the main session
 5. Resume from the checkpoint; start from the first unchecked task only when it is missing or mismatched
-6. Already committed but not yet passed both reviews tasks remain unchecked; continue review/fix loop
-7. After dual review and targeted checkoff verification pass, immediately continue to the next task without summarizing or asking whether to continue
+6. Tasks already committed but not yet validated according to `review_mode` remain unchecked; continue the corresponding validation/review/fix loop
+7. After a task passes `review_mode` validation and targeted checkoff verification, immediately continue to the next task without summarizing or asking whether to continue
 
 ## Automatic Transition After Phase Exit
 
-After guard `--apply` succeeds, must invoke the next phase's skill:
+After guard `--apply` succeeds, do not hardcode the next skill in this rule. First run:
 
-- open → `opensuper-design` (full) / `opensuper-build` (hotfix/tweak)
-- design → `opensuper-build`
-- build → `opensuper-verify`
-- verify → `opensuper-archive`
+```bash
+opensuper state next <change-name>
+```
+
+Decide the next step from the script output:
+
+- `NEXT: auto` → use the Skill tool to load the skill named by `SKILL`
+- `NEXT: manual` → do not load the next skill; return control with `HINT`, end the invocation, and do not create another confirmation point
+- `NEXT: done` → the workflow is complete; no further action is needed

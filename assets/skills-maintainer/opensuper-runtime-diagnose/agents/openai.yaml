@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenSuper Runtime 诊断"
+  short_description: "诊断 Hook 和生成 Runtime"
+  default_prompt: "使用 $opensuper-runtime-diagnose 诊断 OpenSuper Hook、安装、路由或生成 Runtime 行为。"
+policy:
+  allow_implicit_invocation: false

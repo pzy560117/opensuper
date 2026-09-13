@@ -1,0 +1,229 @@
+tasks:
+  - name: opensuper-native-clarification
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Interactive Native workflow that must clarify one high-impact requirement before confirmed execution.
+
+  - name: opensuper-native-clarification-depth
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_SEQUENTIAL
+    description: Sequential Native benchmark for discovering hidden user-owned decisions before confirmed execution.
+
+  - name: opensuper-native-clarification-modes
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_SEQUENTIAL
+      - OPENSUPER_NATIVE_BATCH
+    description: Paired Native clarification benchmark with three independent decisions for Sequential versus Batch comparison.
+
+  - name: opensuper-native-workflow
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Self-contained Shape-Build-Verify-Archive workflow using only the OpenSuper Native Skill and its bundled runtime.
+
+  - name: opensuper-native-repository-fact
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native workflow that must investigate a repository-owned product rule instead of asking the user.
+
+  - name: opensuper-native-interrupted-transition
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native workflow that must recover a prepared phase transition before implementing and archiving.
+
+  - name: opensuper-native-wave-b-decision-resume
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native beta17 task for one product decision and a context-cleared v4 resume from disk.
+
+  - name: opensuper-native-wave-c-verification-integrity
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native beta17 task for complete Verifier coverage, repair loop, and no Archive recheck.
+
+  - name: opensuper-native-wave-d-stagnation-stop
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native beta17 task for bounded no-progress and execution-error loop stopping.
+
+  - name: opensuper-native-wave-e-parallel-safety
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native beta17 task for Runtime lock, stateVersion, and single-winner concurrent mutation.
+
+  - name: opensuper-native-wave-f-dashboard-readonly
+    category: opensuper-native
+    default_treatments:
+      - OPENSUPER_NATIVE_PHASE1
+    description: Native beta17 task for Dashboard v2 projection parity and read-only collection.
+
+  # ── Default / canonical full-workflow task ──────────────────────────────
+  - name: opensuper-full-workflow
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Full open-design-build-verify-archive workflow on a sentence-counting feature. The canonical 5-phase task.
+
+  - name: opensuper-classic-layout-lifecycle
+    category: opensuper
+    default_treatments:
+      - OPENSUPER_CLASSIC_DOCS_LAYOUT
+      - OPENSUPER_CLASSIC_LEGACY_LAYOUT
+    description: Current-checkout Classic lifecycle across the docs and explicit legacy artifact layouts.
+
+  # ── Dimension coverage tasks (bug fix / refactor / perf / api / robustness) ──
+  - name: opensuper-fix-median
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Bug-fix dimension. Fix median() for even-length lists in a stats library; diagnose, fix, verify no regressions.
+
+  - name: opensuper-refactor-counter
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Refactor dimension. Collapse three duplicated count_* functions into a count(text, unit) dispatcher while preserving behavior.
+
+  - name: opensuper-perf-dedupe
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Performance dimension. Optimize an O(n^2) dedupe function to O(n) using a set while preserving first-occurrence order.
+
+  - name: opensuper-api-cache-ttl
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: API-design dimension. Add optional TTL expiration to an in-memory cache while keeping the existing API backward compatible.
+
+  - name: opensuper-robust-config
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Robustness dimension. Add structured ConfigError handling to a brittle INI config loader so malformed input raises clear errors.
+
+  # ── Expanded workflow pressure tasks inspired by skills-benchmarks ──────
+  - name: opensuper-dependency-confusion
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/lc-deps-tavily. Repair stale module names and compatibility imports in a small settings loader without changing the public API.
+
+  - name: opensuper-layered-streaming-fix
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/oss-fix-lc-streaming. Fix streaming chunk behavior and tool-result handling in a chat application.
+
+  - name: opensuper-persistence-threading
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/oss-fix-lg-persistence. Make session state isolate by thread_id and survive a new store instance.
+
+  - name: opensuper-human-approval-flow
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/oss-fix-lc-hitl. Add a pending approval flow before dangerous document operations can execute.
+
+  - name: opensuper-noise-distractor
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/lc-basic-noise. Fix invoice tax calculation while leaving an unrelated distracting file untouched.
+
+  - name: opensuper-cross-file-refactor
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/lc-basic. Add a shared count(text, unit) dispatcher while keeping wrappers and CLI behavior compatible.
+
+  - name: opensuper-observability-env-template
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/ls-lang-tracing. Generate a LangSmith-ready .env.example with the simplified LANGSMITH_* configuration.
+
+  - name: opensuper-graph-execution-review
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/oss-fix-lg-execution. Fix parallel task fan-out, review interruption, and resume behavior in a graph-style pipeline.
+
+  - name: opensuper-agent-memory-routing
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/oss-fix-da-memory. Fix persistent preference routing, subagent skill access, and deployment approval checkpoints.
+
+  - name: opensuper-framework-selection
+    category: opensuper
+    default_treatments:
+      - CONTROL
+      - OPENSUPER_FULL_040_BETA
+      - OPENSUPER_FULL_039
+    description: Inspired by skills-benchmarks/lc-framework-hybrid-pipeline. Select a hybrid deep-agent plus deterministic sub-workflow architecture for long-session document editing.
+
+  - name: generic-skill-smoke
+    category: generic
+    default_treatments:
+      - CONTROL
+    description: Generic smoke task for arbitrary Skill eval; creates and validates result.md.
+
+  - name: authoring-skill-smoke
+    category: generic
+    default_treatments:
+      - CONTROL
+    description: Smoke task for generated OpenSuper-native Skill packages.
+
+  - name: workflow-route-conformance
+    category: generic
+    default_treatments:
+      - CONTROL
+    description: Validates generated Skill route metadata against the workflow protocol and internal Node Skills.
+
+  - name: workflow-overlay-contract
+    category: generic
+    default_treatments:
+      - CONTROL
+    description: Validates generated overlay eval manifests for baselines, gates, schemas, and expected evidence.

@@ -1,0 +1,5 @@
+interface:
+  display_name: 'OpenSuper Classic Preset: Hotfix'
+  short_description: 'Reproduce, fix, and verify a localized defect'
+policy:
+  allow_implicit_invocation: true

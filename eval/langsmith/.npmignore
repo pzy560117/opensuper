@@ -1,0 +1,12 @@
+# Eval runs and caches are local artifacts, not package inputs.
+logs/
+.cache/
+.tmp/
+.opensuper/
+.pytest*/
+_pytest*/
+**/.pytest*/
+**/.pytest_*/
+**/.cache/
+**/.opensuper/
+**/__pycache__/

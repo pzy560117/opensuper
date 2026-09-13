@@ -1,0 +1,5 @@
+interface:
+  display_name: 'OpenSuper Classic Phase 3: Plan and Build'
+  short_description: 'Plan or resume implementation and verify completed tasks'
+policy:
+  allow_implicit_invocation: true

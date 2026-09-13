@@ -1,0 +1,9 @@
+{
+  "comet-archive.sh": "2d01bbac0d5e7100b9d30a78cfbdf9ed0867c2d7a15c08b9f769eeb6683c9eb1",
+  "comet-env.sh": "439f181df4489e598cd0668a269932dd56767858b6dc34a65d01bbfb490d9c72",
+  "comet-guard.sh": "29e6e3205008c3b578dd2bde3492a9ca2d019828b74b09f0bb8fe3558f1aaaa2",
+  "comet-handoff.sh": "dbcd21e4c3365cd16ce5dd3bb1af41941097ec87bc48f1fb3a440ab022d7a01e",
+  "comet-hook-guard.sh": "58a3a22085ca52d63289122bba97e97344cc0c4eefee7734b153e24364b4c19a",
+  "comet-state.sh": "2e641e56e7c460dda3c34e1bc60dfd01b24f4e9a9973d9949e407fb25511f25a",
+  "comet-yaml-validate.sh": "df8826967214db7ade4b6f17166b9565951d61d9d762a94a4bab0655bb59b136"
+}

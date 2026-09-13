@@ -1,0 +1,691 @@
+import path from 'node:path';
+
+import { canonicalizePath, sameCanonicalPath } from '../../platform/paths/canonical-path.js';
+
+import {
+  gitWorktreeContextFromEntries,
+  inspectGitWorktree,
+  listGitWorktrees,
+  type GitWorktreeContext,
+} from '../../platform/paths/git-worktree.js';
+
+import { canonicalHash } from './native-canonical-hash.js';
+import { inspectNativeChangeStateDocument } from './native-change.js';
+import { readProjectConfig } from './native-config.js';
+import {
+  inspectNativeStatus,
+  listNativeChangeNames,
+  NATIVE_STATUS_PAGE_LIMITS,
+} from './native-diagnostics.js';
+import { nativeProjectPaths } from './native-paths.js';
+import {
+  listNativeArchivedStatusRecords,
+  nativeArchiveSupersedes,
+  readNativeStatusRecord,
+  sameNativeArchivedRecord,
+  type NativeStatusRecord,
+} from './native-archived-status.js';
+import {
+  inspectNativePortableStatus,
+  projectNativePortableWorkspace,
+  projectNativeArchivedStatus,
+  type NativePortableStatusProjection,
+} from './native-portable-status.js';
+import { isNativePortableChange, readNativePortableChange } from './native-portable-runtime.js';
+import { projectNativeWorkspace } from './native-workspace.js';
+import type {
+  OpenSuperProjectConfig,
+  NativeProjectPaths,
+  NativeStatusProjection,
+  NativeWorkspaceProjection,
+} from './native-types.js';
+
+const DISCOVERY_CURSOR_PATTERN =
+  /^native-workspaces-v1\.([a-f0-9]{64})\.([0-9a-z]+)\.([a-f0-9]{64})$/u;
+
+interface NativeWorkspaceSource {
+  projectRoot: string;
+  config: OpenSuperProjectConfig;
+  paths: NativeProjectPaths;
+  gitContext: GitWorktreeContext;
+  changes: Array<{ name: string; kind: 'portable' | 'legacy' }>;
+  archives?: NativeStatusRecord[];
+  archiveErrors?: Array<{ name: string; message: string }>;
+}
+
+interface NativeStatusCandidate {
+  source: NativeWorkspaceSource;
+  name: string;
+  kind: 'portable' | 'legacy';
+  workspace: NativeWorkspaceProjection | NativePortableStatusProjection['workspace'];
+  portableStatus: NativePortableStatusProjection | null;
+  inspectionError: string | null;
+  record?: NativeStatusRecord;
+}
+
+export type NativeDiscoveredStatusProjection =
+  | NativeStatusProjection
+  | NativePortableStatusProjection
+  | NativeLegacyMigrationStatusProjection
+  | NativeInspectionErrorStatusProjection;
+
+/**
+ * A portable change copy whose state could not be projected (for example a stale
+ * worktree copy of a supervisor parent). Discovery keeps the entry visible so a
+ * single unreadable copy never blanks the cross-worktree status page.
+ */
+export interface NativeInspectionErrorStatusProjection {
+  schema: 'opensuper.native.status.v2';
+  name: string;
+  phase: 'invalid';
+  status: 'blocked';
+  inspectionError: string;
+  workspace: NativeWorkspaceProjection | NativePortableStatusProjection['workspace'];
+  continuation: {
+    schema: 'opensuper.native.continuation.v2';
+    skill: 'opensuper-native';
+    change: string;
+    phase: 'invalid';
+    status: 'blocked';
+    disposition: 'blocked';
+    action: 'none';
+    commandArgs: string[];
+    requiredInputs: [];
+    runnerAction: {
+      kind: 'none';
+      candidateId: null;
+      iteration: 0;
+      attempt: 0;
+    };
+  };
+}
+
+export interface NativeLegacyMigrationStatusProjection {
+  schema: 'opensuper.native.status.v2';
+  name: string;
+  phase: string;
+  status: 'blocked';
+  migrationRequired: true;
+  legacySchema: string;
+  workspace: NativeWorkspaceProjection;
+  continuation: {
+    schema: 'opensuper.native.continuation.v2';
+    skill: 'opensuper-native';
+    change: string;
+    phase: string;
+    status: 'blocked';
+    disposition: 'blocked';
+    action: 'none';
+    commandArgs: string[];
+    requiredInputs: [];
+    runnerAction: {
+      kind: 'none';
+      candidateId: null;
+      iteration: 0;
+      attempt: 0;
+    };
+  };
+}
+
+export interface NativeDiscoveredStatusPageProjection {
+  schema: 'opensuper.native.status-page.v1' | 'opensuper.native.status-page.v2';
+  total: number;
+  offset: number;
+  items: NativeDiscoveredStatusProjection[];
+  nextCursor: string | null;
+  nextPageCommand: string | null;
+  nextPageArgs: string[] | null;
+  limits: typeof NATIVE_STATUS_PAGE_LIMITS;
+}
+
+function samePath(left: string, right: string): boolean {
+  return sameCanonicalPath(left, right);
+}
+
+function pathIdentity(value: string): string {
+  return canonicalizePath(value);
+}
+
+function displayCommandArgs(args: readonly string[]): string {
+  return args
+    .map((value) => (/^[A-Za-z0-9_./:=+@-]+$/u.test(value) ? value : JSON.stringify(value)))
+    .join(' ');
+}
+
+async function discoverChanges(
+  paths: NativeProjectPaths,
+  targetName?: string,
+): Promise<NativeWorkspaceSource['changes']> {
+  const changes: NativeWorkspaceSource['changes'] = [];
+  for (const name of await listNativeChangeNames(paths)) {
+    if (targetName !== undefined && name !== targetName) continue;
+    changes.push({
+      name,
+      kind: (await isNativePortableChange(paths, name)) ? 'portable' : 'legacy',
+    });
+  }
+  return changes;
+}
+
+async function discoverSources(
+  projectRoot: string,
+  targetName?: string,
+): Promise<NativeWorkspaceSource[]> {
+  const requestedRoot = path.resolve(projectRoot);
+  const worktrees = listGitWorktrees(projectRoot);
+  const roots = worktrees.map(({ root }) => root);
+  const candidates = roots.length > 0 ? roots : [requestedRoot];
+  if (!candidates.some((candidate) => samePath(candidate, requestedRoot))) {
+    candidates.push(requestedRoot);
+  }
+  const sources: NativeWorkspaceSource[] = [];
+  const seen = new Set<string>();
+  for (const candidatePath of candidates.map((value) => path.resolve(value)).sort()) {
+    const candidate = samePath(candidatePath, requestedRoot) ? requestedRoot : candidatePath;
+    const identity = pathIdentity(candidate);
+    const key = process.platform === 'win32' ? identity.toLowerCase() : identity;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const config = await readProjectConfig(candidate);
+    if (!config) continue;
+    const paths = await nativeProjectPaths(candidate, config.native.artifact_root);
+    sources.push({
+      projectRoot: candidate,
+      config,
+      paths,
+      gitContext:
+        gitWorktreeContextFromEntries(candidate, worktrees) ?? inspectGitWorktree(candidate),
+      changes: await discoverChanges(paths, targetName),
+    });
+  }
+  if (sources.length === 0) {
+    const config = await readProjectConfig(projectRoot);
+    if (!config) throw new Error('.opensuper/config.yaml was not found in any registered worktree');
+    const paths = await nativeProjectPaths(projectRoot, config.native.artifact_root);
+    sources.push({
+      projectRoot: path.resolve(projectRoot),
+      config,
+      paths,
+      gitContext:
+        gitWorktreeContextFromEntries(projectRoot, worktrees) ?? inspectGitWorktree(projectRoot),
+      changes: await discoverChanges(paths, targetName),
+    });
+  }
+  for (const source of sources) {
+    source.archiveErrors = [];
+    source.archives = await listNativeArchivedStatusRecords(
+      source.paths,
+      (name, message) => source.archiveErrors!.push({ name, message }),
+      targetName,
+    );
+    if (targetName !== undefined) {
+      source.archives = source.archives.filter(({ state }) => state.name === targetName);
+      source.archiveErrors = source.archiveErrors.filter(({ name }) => name === targetName);
+    }
+  }
+  return sources;
+}
+
+function candidateRank(candidate: NativeStatusCandidate, requestedRoot: string): number {
+  if (candidate.workspace.bindingState === 'aligned') return 0;
+  if (samePath(candidate.source.projectRoot, requestedRoot)) return 1;
+  if (candidate.workspace.bindingState === 'legacy') return 2;
+  if (candidate.workspace.bindingState === 'missing') return 3;
+  if (candidate.workspace.bindingState === 'drifted') return 4;
+  return 5;
+}
+
+async function discoverCandidates(
+  projectRoot: string,
+  sources: readonly NativeWorkspaceSource[],
+): Promise<NativeStatusCandidate[]> {
+  const grouped = new Map<
+    string,
+    Array<{ source: NativeWorkspaceSource; kind: 'portable' | 'legacy' }>
+  >();
+  for (const source of sources) {
+    for (const change of source.changes) {
+      grouped.set(change.name, [
+        ...(grouped.get(change.name) ?? []),
+        { source, kind: change.kind },
+      ]);
+    }
+    for (const archive of source.archives ?? []) {
+      if (!grouped.has(archive.state.name)) grouped.set(archive.state.name, []);
+    }
+    for (const error of source.archiveErrors ?? []) {
+      if (!grouped.has(error.name)) grouped.set(error.name, []);
+    }
+  }
+  const selected: NativeStatusCandidate[] = [];
+  for (const [name, nameSources] of [...grouped.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const candidates = await Promise.all(
+      nameSources.map(async ({ source, kind }): Promise<NativeStatusCandidate> => {
+        if (kind === 'portable') {
+          try {
+            const state = await readNativePortableChange(source.paths, name);
+            return {
+              source,
+              name,
+              kind,
+              workspace: projectNativePortableWorkspace(source.paths, state, source.gitContext),
+              portableStatus: null,
+              inspectionError: null,
+            };
+          } catch (error) {
+            // A stale or partially synced copy in another worktree must not
+            // blank the whole discovery page; report it as a blocked entry.
+            return {
+              source,
+              name,
+              kind,
+              workspace: {
+                projectRoot: source.projectRoot,
+                isolation: 'current',
+                bindingState: 'mismatch',
+                changeBranch: null,
+                targetBranch: null,
+                finish: null,
+                message: 'The portable state could not be inspected.',
+              },
+              portableStatus: null,
+              inspectionError: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }
+        return {
+          source,
+          name,
+          kind,
+          workspace:
+            nameSources.length > 1
+              ? await projectNativeWorkspace(source.paths, name)
+              : {
+                  projectRoot: source.projectRoot,
+                  currentBranch: source.gitContext.currentBranch,
+                  isSecondaryWorktree: source.gitContext.isSecondaryWorktree,
+                  bindingState: 'legacy',
+                  isolation: null,
+                  changeBranch: null,
+                  targetBranch: null,
+                  finish: null,
+                },
+          portableStatus: null,
+          inspectionError: null,
+        };
+      }),
+    );
+    const archives: NativeStatusCandidate[] = sources.flatMap((source) =>
+      (source.archives ?? [])
+        .filter(({ state }) => state.name === name)
+        .map((record) => {
+          const portableStatus = projectNativeArchivedStatus({ paths: source.paths, ...record });
+          return {
+            source,
+            name,
+            kind: 'portable' as const,
+            workspace: portableStatus.workspace,
+            portableStatus,
+            inspectionError: null,
+            record,
+          };
+        }),
+    );
+    const archiveError = sources.flatMap((source) =>
+      (source.archiveErrors ?? [])
+        .filter((error) => error.name === name)
+        .map((error) => ({ source, error })),
+    )[0];
+    if (archiveError) {
+      selected.push({
+        source: archiveError.source,
+        name,
+        kind: 'portable',
+        portableStatus: null,
+        inspectionError: archiveError.error.message,
+        workspace: {
+          projectRoot: archiveError.source.projectRoot,
+          isolation: 'current',
+          bindingState: 'mismatch',
+          changeBranch: null,
+          targetBranch: null,
+          finish: null,
+          message: archiveError.error.message,
+        },
+      });
+      continue;
+    }
+    if (archives.length > 0) {
+      for (const candidate of candidates) {
+        if (candidate.kind === 'portable') {
+          try {
+            candidate.record = await readNativeStatusRecord(
+              candidate.source.paths,
+              path.join(candidate.source.paths.changesDir, name, 'opensuper-state.yaml'),
+            );
+          } catch {
+            /* An unreadable active copy cannot establish a predecessor. */
+          }
+        }
+      }
+      const final = archives.find((archive) =>
+        [
+          ...candidates,
+          ...archives.filter((other) => !sameNativeArchivedRecord(archive.record!, other.record!)),
+        ].every(
+          (previous) =>
+            previous.record && nativeArchiveSupersedes(archive.record!, previous.record),
+        ),
+      );
+      if (final) {
+        selected.push(final);
+        continue;
+      }
+      selected.push({
+        ...archives[0],
+        inspectionError: `Native change ${name} has conflicting active/archive records; identity and committed Git ancestry do not prove supersession. Resolve the records explicitly.`,
+      });
+      continue;
+    }
+    candidates.sort((left, right) => {
+      const rank = candidateRank(left, projectRoot) - candidateRank(right, projectRoot);
+      return rank || left.source.projectRoot.localeCompare(right.source.projectRoot);
+    });
+    const aligned = candidates.filter(
+      (candidate) => candidate.workspace.bindingState === 'aligned',
+    );
+    if (aligned.length > 1) {
+      selected.push(...aligned);
+    } else {
+      if (aligned.length === 0 && candidates.length > 1) {
+        selected.push({
+          ...candidates[0],
+          inspectionError: `Native change ${name} has conflicting workspace records and no aligned binding`,
+        });
+      } else selected.push(aligned[0] ?? candidates[0]);
+    }
+  }
+  if (selected.length > NATIVE_STATUS_PAGE_LIMITS.maxChanges) {
+    throw new Error(
+      `Native status discovery exceeds ${NATIVE_STATUS_PAGE_LIMITS.maxChanges} visible changes`,
+    );
+  }
+  return selected.sort((left, right) =>
+    `${left.name}\0${left.source.projectRoot}`.localeCompare(
+      `${right.name}\0${right.source.projectRoot}`,
+    ),
+  );
+}
+
+function discoveryCursor(candidatesHash: string, offset: number): string {
+  const encodedOffset = offset.toString(36);
+  const integrity = canonicalHash('opensuper.native.workspace-status-cursor.v1', {
+    candidatesHash,
+    offset,
+  });
+  return `native-workspaces-v1.${candidatesHash}.${encodedOffset}.${integrity}`;
+}
+
+function discoveryOffset(options: {
+  candidatesHash: string;
+  total: number;
+  cursor?: string | null;
+}): number {
+  if (options.cursor === undefined || options.cursor === null) return 0;
+  const match = DISCOVERY_CURSOR_PATTERN.exec(options.cursor);
+  if (!match || match[1] !== options.candidatesHash) {
+    throw new Error('Native workspace status cursor is invalid or stale');
+  }
+  const offset = Number.parseInt(match[2], 36);
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset <= 0 ||
+    offset >= options.total ||
+    offset.toString(36) !== match[2]
+  ) {
+    throw new Error('Native workspace status cursor offset is invalid');
+  }
+  const integrity = canonicalHash('opensuper.native.workspace-status-cursor.v1', {
+    candidatesHash: options.candidatesHash,
+    offset,
+  });
+  if (match[3] !== integrity) throw new Error('Native workspace status cursor integrity failed');
+  return offset;
+}
+
+function pageAction(
+  projectRoot: string,
+  cursor: string | null,
+): {
+  nextPageCommand: string | null;
+  nextPageArgs: string[] | null;
+} {
+  const args = cursor
+    ? ['opensuper', 'native', 'status', '--cursor', cursor, '--project-root', projectRoot, '--json']
+    : null;
+  return {
+    nextPageCommand: args ? displayCommandArgs(args) : null,
+    nextPageArgs: args,
+  };
+}
+
+async function inspectLegacyCandidate(
+  candidate: NativeStatusCandidate,
+  details: boolean,
+  acceptanceCursor?: string,
+): Promise<NativeStatusProjection | NativeLegacyMigrationStatusProjection> {
+  const workspace = await projectNativeWorkspace(candidate.source.paths, candidate.name);
+  let inspection: Awaited<ReturnType<typeof inspectNativeChangeStateDocument>> | null = null;
+  try {
+    inspection = await inspectNativeChangeStateDocument(candidate.source.paths, candidate.name);
+  } catch {
+    // The legacy status adapter below owns malformed and missing-state diagnostics.
+  }
+  if (inspection?.state) {
+    return {
+      schema: 'opensuper.native.status.v2',
+      name: candidate.name,
+      phase: inspection.state.phase,
+      status: 'blocked',
+      migrationRequired: true,
+      legacySchema: inspection.schema,
+      workspace,
+      continuation: {
+        schema: 'opensuper.native.continuation.v2',
+        skill: 'opensuper-native',
+        change: candidate.name,
+        phase: inspection.state.phase,
+        status: 'blocked',
+        disposition: 'blocked',
+        action: 'none',
+        commandArgs: ['opensuper', 'native', 'doctor', candidate.name, '--repair'],
+        requiredInputs: [],
+        runnerAction: {
+          kind: 'none',
+          candidateId: null,
+          iteration: 0,
+          attempt: 0,
+        },
+      },
+    };
+  }
+  return inspectNativeStatus(candidate.source.paths, candidate.name, {
+    details,
+    ...(acceptanceCursor ? { acceptanceCursor } : {}),
+    clarificationMode: candidate.source.config.native.clarification_mode,
+    maxVerifyFailures: candidate.source.config.native.max_verify_failures,
+  });
+}
+
+async function inspectCandidate(
+  candidate: NativeStatusCandidate,
+  details: boolean,
+  acceptanceCursor?: string,
+  detailsCursor?: string,
+): Promise<NativeDiscoveredStatusProjection> {
+  if (candidate.inspectionError) {
+    return {
+      schema: 'opensuper.native.status.v2',
+      name: candidate.name,
+      phase: 'invalid',
+      status: 'blocked',
+      inspectionError: candidate.inspectionError,
+      workspace: candidate.workspace,
+      continuation: {
+        schema: 'opensuper.native.continuation.v2',
+        skill: 'opensuper-native',
+        change: candidate.name,
+        phase: 'invalid',
+        status: 'blocked',
+        disposition: 'blocked',
+        action: 'none',
+        commandArgs: ['opensuper', 'native', 'doctor', candidate.name, '--repair'],
+        requiredInputs: [],
+        runnerAction: { kind: 'none', candidateId: null, iteration: 0, attempt: 0 },
+      },
+    };
+  }
+  if (candidate.kind === 'portable') {
+    if (acceptanceCursor) {
+      throw new Error('Portable Native status includes the complete acceptance list');
+    }
+    if (!details && candidate.portableStatus) return candidate.portableStatus;
+    if (candidate.record?.state.archived)
+      return projectNativeArchivedStatus({
+        paths: candidate.source.paths,
+        ...candidate.record,
+        details,
+        cursor: detailsCursor,
+      });
+    try {
+      return await inspectNativePortableStatus({
+        paths: candidate.source.paths,
+        name: candidate.name,
+        details,
+        gitContext: candidate.source.gitContext,
+        ...(detailsCursor ? { cursor: detailsCursor } : {}),
+      });
+    } catch (error) {
+      // A caller-supplied pagination cursor must retain its error contract.
+      if (detailsCursor) throw error;
+      return inspectCandidate(
+        {
+          ...candidate,
+          inspectionError: error instanceof Error ? error.message : String(error),
+        },
+        false,
+      );
+    }
+  }
+  return inspectLegacyCandidate(candidate, details, acceptanceCursor);
+}
+
+export async function inspectDiscoveredNativeStatus(options: {
+  projectRoot: string;
+  name: string;
+  /** Execution context stays separate from the compact, relative display projection. */
+  onSelectedRoot?: (projectRoot: string) => void;
+  details?: boolean;
+  acceptanceCursor?: string;
+  detailsCursor?: string;
+}): Promise<NativeDiscoveredStatusProjection> {
+  const sources = await discoverSources(options.projectRoot, options.name);
+  const candidates = (await discoverCandidates(options.projectRoot, sources)).filter(
+    (candidate) => candidate.name === options.name,
+  );
+  if (candidates.length === 0) {
+    const current =
+      sources.find((source) => samePath(source.projectRoot, options.projectRoot)) ?? sources[0];
+    options.onSelectedRoot?.(current.projectRoot);
+    return inspectNativeStatus(current.paths, options.name, {
+      details: options.details,
+      ...(options.acceptanceCursor ? { acceptanceCursor: options.acceptanceCursor } : {}),
+      clarificationMode: current.config.native.clarification_mode,
+      maxVerifyFailures: current.config.native.max_verify_failures,
+    });
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `Native change ${options.name} has multiple aligned workspace bindings: ${candidates
+        .map((candidate) => candidate.source.projectRoot)
+        .join(', ')}`,
+    );
+  }
+  options.onSelectedRoot?.(candidates[0].source.projectRoot);
+  return inspectCandidate(
+    candidates[0],
+    options.details ?? false,
+    options.acceptanceCursor,
+    options.detailsCursor,
+  );
+}
+
+export async function listDiscoveredNativeStatusPage(options: {
+  projectRoot: string;
+  cursor?: string | null;
+}): Promise<NativeDiscoveredStatusPageProjection> {
+  const sources = await discoverSources(options.projectRoot);
+  const candidates = await discoverCandidates(options.projectRoot, sources);
+  const candidatesHash = canonicalHash(
+    'opensuper.native.workspace-status-candidates.v1',
+    candidates.map((candidate) => ({
+      name: candidate.name,
+      projectRoot: candidate.source.projectRoot,
+      bindingState: candidate.workspace.bindingState,
+      kind: candidate.kind,
+    })),
+  );
+  const offset = discoveryOffset({
+    candidatesHash,
+    total: candidates.length,
+    cursor: options.cursor,
+  });
+  const projected = await Promise.all(
+    candidates
+      .slice(offset, offset + NATIVE_STATUS_PAGE_LIMITS.maxItems)
+      .map((candidate) => inspectCandidate(candidate, false)),
+  );
+  const items: NativeDiscoveredStatusProjection[] = [];
+  const schema = candidates.some(({ kind }) => kind === 'portable')
+    ? ('opensuper.native.status-page.v2' as const)
+    : ('opensuper.native.status-page.v1' as const);
+  for (const candidate of projected) {
+    const trialItems = [...items, candidate];
+    const nextOffset = offset + trialItems.length;
+    const nextCursor =
+      nextOffset < candidates.length ? discoveryCursor(candidatesHash, nextOffset) : null;
+    const trial: NativeDiscoveredStatusPageProjection = {
+      schema,
+      total: candidates.length,
+      offset,
+      items: trialItems,
+      nextCursor,
+      ...pageAction(path.resolve(options.projectRoot), nextCursor),
+      limits: { ...NATIVE_STATUS_PAGE_LIMITS },
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(trial), 'utf8') >
+      NATIVE_STATUS_PAGE_LIMITS.maxSerializedBytes
+    ) {
+      if (items.length === 0) {
+        throw new Error('Native workspace status item exceeds its page serialization budget');
+      }
+      break;
+    }
+    items.push(candidate);
+  }
+  const nextOffset = offset + items.length;
+  const nextCursor =
+    nextOffset < candidates.length ? discoveryCursor(candidatesHash, nextOffset) : null;
+  return {
+    schema,
+    total: candidates.length,
+    offset,
+    items,
+    nextCursor,
+    ...pageAction(path.resolve(options.projectRoot), nextCursor),
+    limits: { ...NATIVE_STATUS_PAGE_LIMITS },
+  };
+}

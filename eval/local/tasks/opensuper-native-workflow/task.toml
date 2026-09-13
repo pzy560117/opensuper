@@ -1,0 +1,38 @@
+[metadata]
+name = "opensuper-native-workflow"
+description = "Test the self-contained OpenSuper Native Shape to Archive workflow"
+difficulty = "hard"
+category = "opensuper-native"
+tags = ["opensuper-native", "workflow", "self-contained", "full-cycle"]
+default_treatments = ["OPENSUPER_NATIVE_PHASE1"]
+
+[template]
+required = []
+
+[environment]
+description = "Python workspace with Node.js and the OpenSuper Native Skill package, without OpenSpec or external workflow Skills."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_native_workflow.py"
+target_artifacts = ["docs/opensuper/archive", "docs/opensuper/specs/sentence-counting/spec.md"]
+timeout = 120
+
+[evaluation]
+profile = "generic"
+required_skills = ["opensuper-native"]
+expected_artifacts = [".opensuper/config.yaml", "docs/opensuper/archive", "docs/opensuper/specs/sentence-counting/spec.md"]
+require_skill_invocation = true
+rubric_criteria = [
+  "Uses only the OpenSuper Native Skill and bundled runtime",
+  "Creates a detailed brief and complete target specification",
+  "Advances through Shape, Build, Verify, and Archive with real evidence",
+  "Leaves no OpenSpec, Classic, or hidden Native artifact tree",
+]
+
+[interaction]
+mode = "auto_user"
+max_turns = 4
+decision_reply = "I confirm the shared understanding. Continue through Build, Verify, and Archive."
+continue_prompt = "Inspect the Native status from disk and continue the same change until it is verified and archived with its canonical specification."

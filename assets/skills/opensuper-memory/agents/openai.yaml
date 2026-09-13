@@ -1,0 +1,5 @@
+interface:
+  display_name: "OpenSuper Semantic Memory Review"
+  short_description: "Review opensuper.memory.review.v1 and return fixed actions"
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,102 @@
+import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'fs';
+import path from 'path';
+
+async function readTree(root: string): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(target);
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        result[path.relative(root, target).replace(/\\/gu, '/')] = await fs.readFile(
+          target,
+          'utf8',
+        );
+      }
+    }
+  }
+  await visit(root);
+  return result;
+}
+
+async function readOpenSuperAny(locale: 'zh' | 'en'): Promise<Record<string, string>> {
+  return readTree(
+    path.resolve('assets', locale === 'zh' ? 'skills-zh' : 'skills', 'opensuper-any'),
+  );
+}
+
+describe('opensuper-any Skill workflow contract docs', () => {
+  it('uses the new Workflow Contract vocabulary in Chinese docs', async () => {
+    const docs = await readOpenSuperAny('zh');
+    const combined = Object.values(docs).join('\n');
+
+    for (const expected of [
+      '基于 /opensuper-classic 的五阶段定制',
+      'Workflow Node',
+      'Skill Binding',
+      'Output Schema',
+      'Required Skill Call',
+      'Guardrail',
+      'Handoff',
+      'workflow-protocol.json',
+      'opensuper-five-phase-overlay',
+      'workflow-kernel',
+      'execute',
+      'subagent-execute',
+      'review',
+      'elementui',
+      'whitebox-code-standard',
+      'Output Schema 必须挂到具体 Workflow Node 才算生效',
+      'guarded',
+      'handoff-guarded',
+      'evidence-only',
+      'advisory',
+      '不得创建 `.opensuper/runs/<workflow>/state.json` 作为 OpenSuper overlay 主状态',
+      '当前 draft hash 的 eval evidence',
+      '六个职责独立的 subagent',
+      '主会话按 authoring DAG 为每个 lane 派发全新的 subagent',
+    ]) {
+      expect(combined).toContain(expected);
+    }
+    expect(combined).not.toContain('`/opensuper` 定制');
+    expect(combined).not.toContain('破坏 `/opensuper` 受保护语义');
+  });
+
+  it('uses the same Workflow Contract vocabulary in English docs', async () => {
+    const docs = await readOpenSuperAny('en');
+    const combined = Object.values(docs).join('\n');
+
+    for (const expected of [
+      'customize /opensuper-classic five-phase Skills',
+      'Workflow Node',
+      'Skill Binding',
+      'Output Schema',
+      'Required Skill Call',
+      'Guardrail',
+      'Handoff',
+      'workflow-protocol.json',
+      'opensuper-five-phase-overlay',
+      'workflow-kernel',
+      'execute',
+      'subagent-execute',
+      'review',
+      'elementui',
+      'whitebox-code-standard',
+      'Output Schema must be attached to a concrete Workflow Node',
+      'guarded',
+      'handoff-guarded',
+      'evidence-only',
+      'advisory',
+      'must not create `.opensuper/runs/<workflow>/state.json` as the OpenSuper overlay primary state',
+      'current draft hash eval evidence',
+      'six responsibility-specific subagents',
+      'dispatches a fresh subagent for every lane in the authoring DAG',
+    ]) {
+      expect(combined).toContain(expected);
+    }
+    expect(combined).not.toContain('without modifying the `/opensuper` command');
+    expect(combined).not.toContain('protected `/opensuper` semantics');
+  });
+});

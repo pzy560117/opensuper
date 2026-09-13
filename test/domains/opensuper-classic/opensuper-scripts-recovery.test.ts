@@ -1,0 +1,364 @@
+/**
+ * Recovery tests — split from opensuper-scripts.test.ts for maintainability.
+ *
+ * Tests the `check --recover` command that outputs structured recovery context
+ * for context compression recovery protocol.
+ */
+import { beforeEach, describe, expect, it } from 'vitest';
+import { execFileSync, spawnSync } from 'child_process';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { prepareClassicLegacyProject } from '../../helpers/classic-project.js';
+
+const scriptsDir = path.resolve('assets', 'skills', 'opensuper', 'scripts');
+const classicRuntimeRoot = path.resolve('assets', 'skills', 'opensuper', 'runtime', 'classic');
+const classicSkillRoot = classicRuntimeRoot;
+
+function runNode(cwd: string, script: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(process.execPath, [script, ...args], {
+    cwd,
+    encoding: 'utf-8',
+    env: {
+      ...process.env,
+      OPENSUPER_RUNTIME_CLASSIC_ROOT: classicRuntimeRoot,
+      OPENSUPER_CLASSIC_SKILL_ROOT: classicRuntimeRoot,
+      ...env,
+    },
+  });
+}
+
+async function writeFile(filePath: string, content: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content);
+}
+
+async function createChange(tmpDir: string, name: string, yaml: string, tasks = '- [x] done\n') {
+  const changeDir = path.join(tmpDir, 'openspec', 'changes', name);
+  await fs.mkdir(changeDir, { recursive: true });
+  await writeFile(path.join(changeDir, '.opensuper.yaml'), yaml);
+  await writeFile(path.join(changeDir, 'proposal.md'), 'proposal\n');
+  await writeFile(path.join(changeDir, 'design.md'), 'design\n');
+  await writeFile(path.join(changeDir, 'tasks.md'), tasks);
+}
+
+const FULL_YAML = [
+  'workflow: full',
+  'phase: build',
+  'build_mode: null',
+  'build_pause: null',
+  'tdd_mode: null',
+  'review_mode: null',
+  'isolation: null',
+  'verify_mode: null',
+  'design_doc: null',
+  'plan: null',
+  'verify_result: pending',
+  'archived: false',
+  '',
+].join('\n');
+
+describe('check --recover', () => {
+  let tmpDir: string;
+  let stateScript: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-recovery-'));
+    await prepareClassicLegacyProject(tmpDir);
+    const tmpScriptsDir = path.join(tmpDir, 'scripts');
+    await fs.mkdir(tmpScriptsDir, { recursive: true });
+    for (const name of [
+      'opensuper-runtime.mjs',
+      'opensuper-env.mjs',
+      'opensuper-archive.mjs',
+      'opensuper-guard.mjs',
+      'opensuper-handoff.mjs',
+      'opensuper-state.mjs',
+      'opensuper-yaml-validate.mjs',
+      'opensuper-hook-guard.mjs',
+    ]) {
+      const content = await fs.readFile(path.join(scriptsDir, name), 'utf-8');
+      await writeFile(path.join(tmpScriptsDir, name), content.replace(/\r\n/g, '\n'));
+    }
+    stateScript = path.join(tmpScriptsDir, 'opensuper-state.mjs');
+    execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: tmpDir });
+    await writeFile(path.join(tmpDir, '.openspec', 'config.yaml'), 'name: test\n');
+    execFileSync('git', ['add', '.'], { cwd: tmpDir });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, stdio: 'ignore' });
+  });
+
+  it('outputs recovery context for open phase', async () => {
+    await createChange(tmpDir, 'recover-open', FULL_YAML.replace('phase: build', 'phase: open'));
+
+    const result = runNode(tmpDir, stateScript, ['check', 'recover-open', 'open', '--recover']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Recovery Context: recover-open');
+    expect(result.stdout).toContain('Phase: open');
+    expect(result.stdout).toContain('Workflow: full');
+    expect(result.stdout).toContain('proposal.md: DONE');
+    expect(result.stdout).toContain('design.md: DONE');
+    expect(result.stdout).toContain('tasks.md: DONE');
+    expect(result.stdout).toContain('End Recovery Context');
+  });
+
+  it('outputs recovery context for build phase with partial progress', async () => {
+    const plan = 'docs/superpowers/plans/recover-build.md';
+    await writeFile(path.join(tmpDir, ...plan.split('/')), '- [ ] pending task\n');
+    await createChange(
+      tmpDir,
+      'recover-build',
+      FULL_YAML.replace('plan: null', `plan: ${plan}`),
+      ['- [x] done task', '- [ ] pending task'].join('\n'),
+    );
+
+    const result = runNode(tmpDir, stateScript, ['check', 'recover-build', 'build', '--recover']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Phase: build');
+    expect(result.stdout).toContain('isolation: PENDING');
+    expect(result.stdout).toContain('build_mode: PENDING');
+    expect(result.stdout).toContain('Tasks: 1/2 done, 1 pending');
+    expect(result.stdout).toContain(
+      'Resume /opensuper-open to restore the missing isolation decision without regenerating valid artifacts.',
+    );
+  });
+
+  it('returns full build recovery to plan creation when configuration is already selected', async () => {
+    await writeFile(
+      path.join(tmpDir, 'docs', 'superpowers', 'specs', 'recover-missing-plan-design.md'),
+      '# Design\n',
+    );
+    await createChange(
+      tmpDir,
+      'recover-missing-plan',
+      [
+        'workflow: full',
+        'phase: build',
+        'build_mode: executing-plans',
+        'build_pause: null',
+        'tdd_mode: direct',
+        'review_mode: standard',
+        'isolation: branch',
+        'verify_mode: null',
+        'design_doc: docs/superpowers/specs/recover-missing-plan-design.md',
+        'plan: null',
+        'verify_result: pending',
+        'archived: false',
+        '',
+      ].join('\n'),
+      ['- [x] done task', '- [ ] pending task'].join('\n'),
+    );
+
+    const result = runNode(tmpDir, stateScript, [
+      'check',
+      'recover-missing-plan',
+      'build',
+      '--recover',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('plan: PENDING');
+    expect(result.stdout).toContain('Next action: plan.');
+    expect(result.stdout).toContain('configured plans directory');
+    expect(result.stdout).toContain('Preserve existing work and confirmed execution strategy');
+    expect(result.stdout).not.toContain('Read tasks.md and continue');
+  });
+
+  it('reports a recorded but missing full build plan as broken', async () => {
+    await createChange(
+      tmpDir,
+      'recover-broken-plan',
+      [
+        'workflow: full',
+        'phase: build',
+        'build_mode: executing-plans',
+        'build_pause: null',
+        'tdd_mode: direct',
+        'review_mode: standard',
+        'isolation: branch',
+        'verify_mode: null',
+        'design_doc: docs/superpowers/specs/recover-broken-plan-design.md',
+        'plan: docs/superpowers/plans/missing-plan.md',
+        'verify_result: pending',
+        'archived: false',
+        '',
+      ].join('\n'),
+      '- [ ] pending task\n',
+    );
+
+    const result = runNode(tmpDir, stateScript, [
+      'check',
+      'recover-broken-plan',
+      'build',
+      '--recover',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      'plan: BROKEN (path docs/superpowers/plans/missing-plan.md does not exist)',
+    );
+    expect(result.stdout).toContain('Next action: plan.');
+    expect(result.stdout).toContain('Restore the implementation plan');
+  });
+
+  it('outputs plan-ready pause recovery context for build phase', async () => {
+    await writeFile(path.join(tmpDir, 'docs', 'superpowers', 'plans', 'pause-plan.md'), 'plan\n');
+    await createChange(
+      tmpDir,
+      'recover-plan-ready',
+      [
+        'workflow: full',
+        'phase: build',
+        'build_mode: null',
+        'build_pause: plan-ready',
+        'tdd_mode: null',
+        'review_mode: null',
+        'isolation: null',
+        'verify_mode: null',
+        'design_doc: null',
+        'plan: docs/superpowers/plans/pause-plan.md',
+        'verify_result: pending',
+        'archived: false',
+        '',
+      ].join('\n'),
+    );
+
+    const result = runNode(tmpDir, stateScript, [
+      'check',
+      'recover-plan-ready',
+      'build',
+      '--recover',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('build_pause: DONE (plan-ready)');
+    expect(result.stdout).toContain('Next action: workspace.');
+    expect(result.stdout).toContain(
+      'Resume /opensuper-open to restore the missing isolation decision without regenerating valid artifacts',
+    );
+  });
+
+  it('returns to the single joint Build decision when plan-ready config is incomplete', async () => {
+    await writeFile(
+      path.join(tmpDir, 'docs', 'superpowers', 'plans', 'pause-config-plan.md'),
+      'plan\n',
+    );
+    await createChange(
+      tmpDir,
+      'recover-plan-ready-config',
+      [
+        'workflow: full',
+        'phase: build',
+        'build_mode: null',
+        'build_pause: plan-ready',
+        'tdd_mode: null',
+        'review_mode: null',
+        'isolation: branch',
+        'verify_mode: null',
+        'design_doc: null',
+        'plan: docs/superpowers/plans/pause-config-plan.md',
+        'verify_result: pending',
+        'archived: false',
+        '',
+      ].join('\n'),
+    );
+
+    const result = runNode(tmpDir, stateScript, [
+      'check',
+      'recover-plan-ready-config',
+      'build',
+      '--recover',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      'Complete only the missing or invalid configuration in /opensuper-build before planning (missing: build_mode, tdd_mode, review_mode); retain confirmed settings and any valid plan.',
+    );
+  });
+
+  it('reconciles unmapped legacy plan tasks before dispatching more implementation', async () => {
+    await writeFile(
+      path.join(tmpDir, 'docs', 'superpowers', 'plans', 'subagent-plan.md'),
+      '- [ ] pending task\n',
+    );
+    await createChange(
+      tmpDir,
+      'recover-subagent',
+      [
+        'workflow: full',
+        'phase: build',
+        'build_mode: subagent-driven-development',
+        'build_pause: null',
+        'subagent_dispatch: confirmed',
+        'tdd_mode: tdd',
+        'review_mode: standard',
+        'isolation: branch',
+        'verify_mode: null',
+        'design_doc: null',
+        'plan: docs/superpowers/plans/subagent-plan.md',
+        'verify_result: pending',
+        'archived: false',
+        '',
+      ].join('\n'),
+      ['- [x] done task', '- [ ] pending task'].join('\n'),
+    );
+
+    const result = runNode(tmpDir, stateScript, [
+      'check',
+      'recover-subagent',
+      'build',
+      '--recover',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('build_mode: DONE (subagent-driven-development)');
+    expect(result.stdout).toContain('Tasks: 1/2 done, 1 pending');
+    expect(result.stdout).toContain(
+      'Inspect implementation and acceptance, then map legacy plan items to task IDs or add genuinely extra tasks',
+    );
+    expect(result.stdout).toContain('Do not reimplement from checkbox state');
+    expect(result.stdout).toContain('Next action: reconcile-plan.');
+  });
+
+  it('outputs recovery context for verify phase', async () => {
+    await createChange(
+      tmpDir,
+      'recover-verify',
+      FULL_YAML.replace('phase: build', 'phase: verify').replace(
+        'verify_result: pending',
+        'verify_result: pass',
+      ),
+    );
+
+    const result = runNode(tmpDir, stateScript, ['check', 'recover-verify', 'verify', '--recover']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Phase: verify');
+    expect(result.stdout).toContain('verify_result: DONE (pass)');
+  });
+
+  it('outputs recovery context for archive phase', async () => {
+    await createChange(
+      tmpDir,
+      'recover-archive',
+      FULL_YAML.replace('phase: build', 'phase: archive'),
+    );
+
+    const result = runNode(tmpDir, stateScript, [
+      'check',
+      'recover-archive',
+      'archive',
+      '--recover',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Phase: archive');
+    expect(result.stdout).toContain('archive_confirmation: PENDING');
+    expect(result.stdout).toContain(
+      'Recovery action: Ask for final archive confirmation in /opensuper-archive before running the archive command.',
+    );
+  });
+});

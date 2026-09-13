@@ -1,5 +1,5 @@
 name: 💬 Question
-description: Ask about installing, configuring, or using opensuper.
+description: Ask about installing, configuring, or using OpenSuper.
 title: 'Question: '
 labels: ['question']
 body:
@@ -7,9 +7,35 @@ body:
     attributes:
       label: ❓ Question
       description: What are you trying to understand or accomplish?
-      placeholder: 'I am trying to use opensuper to ...'
+      placeholder: 'I am trying to use OpenSuper to ...'
     validations:
       required: true
+
+  - type: dropdown
+    attributes:
+      label: 🎯 Topic
+      description: Which part of OpenSuper is your question about?
+      options:
+        - CLI command / user interaction (`app/`)
+        - Native workflow runtime (`domains/opensuper-native`)
+        - Bundle authoring (`domains/bundle`)
+        - Classic workflow runtime (`domains/opensuper-classic`, `assets/skills/opensuper/scripts/`)
+        - Shared Hook / Hook Router (`domains/opensuper-entry`)
+        - Dashboard (`domains/dashboard`)
+        - Engine (`domains/engine`)
+        - Eval (`domains/eval`)
+        - Factory (`domains/factory`)
+        - Integrations (`domains/integrations`)
+        - Skill domain (`domains/skill`)
+        - Workflow contract (`domains/workflow-contract`)
+        - Platform adapter / installer (`platform/*`)
+        - Bundled skills or assets (`assets/skills/`, `assets/skills-zh/`)
+        - Repository automation (`scripts/*`)
+        - Documentation
+        - CI / release / architecture checks
+        - Other
+    validations:
+      required: false
 
   - type: textarea
     attributes:
@@ -17,6 +43,7 @@ body:
       description: Include commands, configuration, docs you read, or workflow steps you followed.
       placeholder: |
         - Ran `opensuper init ...`
+        - Ran `opensuper doctor ...`
         - Read `README.md` section ...
     validations:
       required: false

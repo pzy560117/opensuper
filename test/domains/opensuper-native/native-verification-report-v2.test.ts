@@ -1,0 +1,212 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  applyNativeVerifierEnvelope,
+  confirmNativePortableAcceptance,
+  prepareNativePortableShapeConfirmation,
+  reserveNativeVerifierAttempt,
+  submitNativeBuilderCandidate,
+} from '../../../domains/opensuper-native/native-loop-runtime.js';
+import { createNativePortableState } from '../../../domains/opensuper-native/native-portable-state.js';
+import { toNativePortableText } from '../../../domains/opensuper-native/native-portable-text.js';
+import { createNativeRunnerChannel } from '../../../domains/opensuper-native/native-runner-protocol.js';
+import {
+  inspectNativeVerificationReportAlignment,
+  nativeVerificationReportStateVersion,
+  renderNativeVerificationReport,
+  writeNativeVerificationReport,
+} from '../../../domains/opensuper-native/native-verification-report-v2.js';
+
+describe('Native verification report projection', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  });
+
+  function passedState(verdict: 'pass' | 'fail' | 'blocked' = 'pass') {
+    const runner = createNativeRunnerChannel();
+    let state = confirmNativePortableAcceptance({
+      state: prepareNativePortableShapeConfirmation({
+        state: createNativePortableState({ name: 'report-change', language: 'en' }),
+        acceptance: [{ id: 'A1', source: 'brief.md', text: 'The report is readable.' }],
+      }),
+      acceptance: [{ id: 'A1', source: 'brief.md', text: 'The report is readable.' }],
+    });
+    state = submitNativeBuilderCandidate({
+      state,
+      input: {
+        identity: runner.captureExecutionIdentity({
+          identityProvider: 'test-host',
+          executionRef: 'builder',
+        }),
+        candidateId: 'candidate',
+        summary: 'Built it.',
+        addressedAcceptanceIds: ['A1'],
+        review: {
+          status: 'passed',
+          summary: 'Read-only review passed.',
+          reviewerExecutionRef: 'reviewer',
+        },
+      },
+    });
+    state = reserveNativeVerifierAttempt(state);
+    return applyNativeVerifierEnvelope({
+      state,
+      checks: [
+        {
+          id: 'test',
+          name: toNativePortableText('Tests'),
+          argv_display: [toNativePortableText('test')],
+          argv_truncated: false,
+          cwd_ref: '.',
+          status: 'passed',
+          exit_code: 0,
+          duration_ms: 10,
+        },
+      ],
+      maxVerifyFailures: 5,
+      envelope: runner.envelopeVerifierResponse({
+        candidateId: 'candidate',
+        identity: runner.captureExecutionIdentity({
+          identityProvider: 'test-host',
+          executionRef: 'verifier',
+        }),
+        payload: {
+          kind: 'final-result',
+          result: {
+            iteration: 1,
+            attempt: 1,
+            verdict,
+            acceptance: [
+              {
+                id: 'A1',
+                result: verdict === 'pass' ? 'passed' : verdict === 'fail' ? 'failed' : 'blocked',
+                reason: 'Read the generated report.',
+              },
+            ],
+            risks: [],
+            summary: verdict === 'pass' ? 'Verification passed.' : 'The report needs correction.',
+          },
+        },
+      }),
+    }).state;
+  }
+
+  it.each(['en', 'zh-CN'] as const)(
+    'preserves Builder evidence and limitations without promoting them to Runtime checks in %s',
+    (language) => {
+      const state = passedState();
+      state.language = language;
+      state.verification!.checks = [];
+      state.builder_handoff!.checks = [
+        {
+          name: toNativePortableText('Targeted tests'),
+          result: 'passed',
+          note: toNativePortableText('23 passed before the final review.'),
+        },
+      ];
+      state.builder_handoff!.known_limits = [
+        toNativePortableText('Hook integration was not tested.'),
+      ];
+      const report = renderNativeVerificationReport(state);
+      expect(report).toContain('23 passed before the final review.');
+      expect(report).toContain('Hook integration was not tested.');
+      expect(report).toContain(
+        language === 'en' ? 'No Runtime checks were recorded.' : '没有记录 Runtime 检查。',
+      );
+      expect(report).toContain(
+        language === 'en' ? 'not Runtime check receipts' : '不等同于 Runtime 检查凭据',
+      );
+    },
+  );
+
+  it('renders a human report bound only to the YAML state version', () => {
+    const state = passedState();
+    const report = renderNativeVerificationReport(state);
+    expect(nativeVerificationReportStateVersion(report)).toBe(state.state_version);
+    expect(report).toContain('| A1 | passed |');
+    expect(report).toContain('Verification passed.');
+    expect(report).toContain(
+      'Verification status: **Checks completed, but your confirmation is required**',
+    );
+    expect(report).not.toMatch(/sha-?256|snapshot|evidence hash/iu);
+  });
+
+  it.each(['fail', 'blocked'] as const)(
+    'guides %s results to repair instead of confirmation',
+    (verdict) => {
+      const state = passedState(verdict);
+      const report = renderNativeVerificationReport(state);
+      expect(report).not.toContain('your confirmation is required');
+      expect(report).toContain(
+        verdict === 'fail'
+          ? 'Fix unresolved acceptance criteria and verify again'
+          : 'Resolve the reported blockers and resume verification',
+      );
+      state.language = 'zh-CN';
+      expect(renderNativeVerificationReport(state)).toContain(
+        verdict === 'fail' ? '修复未通过的验收项后重新验证' : '解决报告中的阻塞项后恢复验证',
+      );
+      expect(renderNativeVerificationReport(state)).not.toContain('需要你确认验证结果');
+    },
+  );
+
+  it.each([
+    ['host-attested', 'Host independently verified'],
+    ['skill-coordinated', 'Checks completed, but your confirmation is required'],
+    [
+      'semantic-verification-unavailable',
+      'Full verification was unavailable; only automatic checks completed',
+    ],
+    ['user-confirmed-degraded', 'You accepted the incomplete verification result'],
+  ] as const)('renders a plain-language label for %s', (assurance, label) => {
+    const state = passedState();
+    state.verification!.assurance = assurance;
+    expect(renderNativeVerificationReport(state)).toContain(`Verification status: **${label}**`);
+  });
+
+  it('does not keep the confirmation prompt after skill-coordinated acceptance', () => {
+    const state = passedState();
+    state.phase = 'archive';
+    state.loop.next_action = 'archive';
+    state.verification!.assurance = 'skill-coordinated';
+    expect(state.phase).toBe('archive');
+    expect(state.loop.next_action).toBe('archive');
+    expect(state.verification!.assurance).toBe('skill-coordinated');
+    expect(renderNativeVerificationReport(state)).toContain(
+      'Verification status: **Checks completed; result confirmed**',
+    );
+    expect(renderNativeVerificationReport({ ...state, archived: true })).toContain(
+      'Result: **Archived**',
+    );
+    expect(renderNativeVerificationReport({ ...state, archived: true })).not.toContain(
+      'your confirmation is required',
+    );
+    state.language = 'zh-CN';
+    expect(renderNativeVerificationReport(state)).toContain(
+      '验证情况: **已完成检查，验证结果已确认**',
+    );
+  });
+
+  it('rebuilds a missing or stale report without rerunning verification', async () => {
+    const state = passedState();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-native-report-'));
+    roots.push(root);
+    const file = path.join(root, 'verification.md');
+    expect(
+      await inspectNativeVerificationReportAlignment({ file, stateVersion: state.state_version }),
+    ).toBe('missing');
+    await fs.writeFile(file, '---\ngenerated_from_state_version: 1\n---\nold\n');
+    expect(
+      await inspectNativeVerificationReportAlignment({ file, stateVersion: state.state_version }),
+    ).toBe('stale');
+    await writeNativeVerificationReport({ file, state });
+    expect(
+      await inspectNativeVerificationReportAlignment({ file, stateVersion: state.state_version }),
+    ).toBe('aligned');
+  });
+});

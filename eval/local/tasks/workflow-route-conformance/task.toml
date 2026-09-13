@@ -1,0 +1,21 @@
+[metadata]
+name = "workflow-route-conformance"
+description = "Validate generated Skill workflow route metadata."
+difficulty = "easy"
+category = "generic"
+tags = ["authoring", "skill", "opensuper-any", "route"]
+default_treatments = ["CONTROL"]
+
+[environment]
+description = "Workspace for generated Skill route inspection."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 600
+
+[validation]
+test_scripts = ["test_workflow_route_conformance.py"]
+target_artifacts = []
+timeout = 60
+
+[evaluation]
+profile = "authoring-skill"
+expected_artifacts = []

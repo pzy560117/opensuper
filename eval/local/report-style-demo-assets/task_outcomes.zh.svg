@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 430" role="img" aria-label="图 3. 任务通过矩阵">
+<style>
+text { font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif; }
+.title { fill: #1B1A18; font-size: 18px; font-weight: 700; }
+.subtitle, .tick { fill: #66615A; font-size: 12px; }
+.label { fill: #1B1A18; font-size: 13px; }
+.value { fill: #1B1A18; font-size: 12px; font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif; }
+.grid { stroke: #D8D2C7; stroke-width: 1; shape-rendering: crispEdges; }
+.axis { stroke: #1B1A18; stroke-width: 1; shape-rendering: crispEdges; }
+</style>
+<rect width="640" height="430" fill="#FFFFFF" />
+<text class="title" x="32" y="32">图 3. 任务通过矩阵</text>
+<text class="subtitle" x="32" y="54">绿色表示通过，红色表示失败；矩阵保留任务粒度，适合放在论文附录。</text>
+<text class="label" x="321.0" y="86" text-anchor="middle">当前 workflow</text>
+<text class="label" x="491.0" y="86" text-anchor="middle">0.3.9 基线</text>
+<text class="label" x="42" y="130" >API 缓存 TTL</text>
+<rect x="250" y="108" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="130" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<rect x="420" y="108" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="130" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">失败</text>
+<text class="label" x="42" y="173" >修复 median</text>
+<rect x="250" y="151" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="173" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<rect x="420" y="151" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="173" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">失败</text>
+<text class="label" x="42" y="216" >完整流程</text>
+<rect x="250" y="194" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="216" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<rect x="420" y="194" width="142" height="34" rx="2" fill="#28745C" />
+<text x="491.0" y="216" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<text class="label" x="42" y="259" >性能去重</text>
+<rect x="250" y="237" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="259" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<rect x="420" y="237" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="259" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">失败</text>
+<text class="label" x="42" y="302" >重构 counter</text>
+<rect x="250" y="280" width="142" height="34" rx="2" fill="#28745C" />
+<text x="321.0" y="302" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<rect x="420" y="280" width="142" height="34" rx="2" fill="#28745C" />
+<text x="491.0" y="302" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">通过</text>
+<text class="label" x="42" y="345" >健壮配置</text>
+<rect x="250" y="323" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="321.0" y="345" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">失败</text>
+<rect x="420" y="323" width="142" height="34" rx="2" fill="#A33A32" />
+<text x="491.0" y="345" text-anchor="middle" fill="#FFFFFF" font-family="'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif" font-size="12" font-weight="700">失败</text>
+</svg>

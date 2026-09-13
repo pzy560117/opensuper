@@ -1,0 +1,21 @@
+[metadata]
+name = "workflow-overlay-contract"
+description = "Validate generated overlay eval manifest contract evidence."
+difficulty = "easy"
+category = "generic"
+tags = ["authoring", "skill", "opensuper-any", "overlay", "eval"]
+default_treatments = ["CONTROL"]
+
+[environment]
+description = "Workspace for generated overlay eval manifest inspection."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 600
+
+[validation]
+test_scripts = ["test_workflow_overlay_contract.py"]
+target_artifacts = []
+timeout = 60
+
+[evaluation]
+profile = "authoring-skill"
+expected_artifacts = []

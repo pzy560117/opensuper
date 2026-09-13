@@ -1,0 +1,616 @@
+"""Python utilities - thin wrappers around shell scripts."""
+
+import json
+import ntpath
+import os
+import random
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from scaffold.python.agents import validate_agent_id
+from scaffold.python.execution import ResolvedExecution, build_agent_environment
+from scaffold.python.paths import EVAL_ROOT, get_suite_root
+
+TEST_CONTEXT_FILE = os.environ.get("BENCH_TEST_CONTEXT", "_test_context.json")
+TEST_RESULTS_FILE = os.environ.get("BENCH_TEST_RESULTS", "_test_results.json")
+SHELL_DIR = Path(__file__).parent.parent / "shell"
+SCAFFOLD_PYTHON_DIR = Path(__file__).parent
+
+
+def load_eval_environment() -> None:
+    """Load eval credentials only at an explicit execution boundary, never on import."""
+    original_environment = dict(os.environ)
+    try:
+        load_dotenv(EVAL_ROOT / ".env", override=True)
+        load_dotenv(get_suite_root() / ".env", override=True)
+        load_dotenv(Path.home() / ".opensuper" / "eval" / ".env", override=True)
+    finally:
+        for key, value in original_environment.items():
+            os.environ[key] = value
+
+
+def _uses_wsl_bash(bash_exec: str) -> bool:
+    normalized = bash_exec.replace("\\", "/").lower()
+    return normalized.endswith("/windowsapps/bash.exe") or normalized.endswith("/system32/bash.exe")
+
+
+def _resolve_bash(os_name: str | None = None) -> str:
+    """Resolve a reliable bash executable for running MSYS shell scripts.
+
+    On Windows, ``subprocess.run(['bash', ...])`` may resolve ``bash`` via
+    CreateProcess's PATH search to WSL's ``C:\\Windows\\System32\\bash.exe``,
+    which cannot run MSYS scripts (it uses ``/mnt/d`` paths). ``shutil.which``
+    honours the Python/MSYS PATH ordering and returns the git-bash binary
+    first, and passing that full path to subprocess bypasses the ambiguous
+    bare-name lookup. Prefer an explicit ``GIT_BASH`` env var when set.
+    """
+    import shutil
+
+    platform_name = os_name or os.name
+    if platform_name != "nt":
+        return "bash"
+
+    env_bash = os.environ.get("GIT_BASH")
+    if env_bash and os.path.isfile(env_bash):
+        return env_bash
+
+    resolved = shutil.which("bash")
+    if resolved and os.path.isfile(resolved) and not _uses_wsl_bash(resolved):
+        return resolved
+
+    git_exec = shutil.which("git")
+    if git_exec:
+        git_root = ntpath.dirname(ntpath.dirname(git_exec))
+        for candidate in (
+            ntpath.join(git_root, "bin", "bash.exe"),
+            ntpath.join(git_root, "usr", "bin", "bash.exe"),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+
+    return "bash"
+
+
+BASH_EXEC = _resolve_bash()
+WSL_ENV_KEYS = (
+    "BENCH_EVAL_AGENT",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "QODER_PERSONAL_ACCESS_TOKEN",
+    "QODER_BASE_URL",
+    "QODER_MODEL",
+    "CODEX_API_KEY",
+    "CODEX_BASE_URL",
+    "CODEX_MODEL",
+    "ANTHROPIC_API_KEY",
+    "LANGSMITH_API_KEY",
+    "LANGSMITH_PROJECT",
+    "LANGSMITH_TRACING",
+    "LANGSMITH_ENDPOINT",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_TRACING_ENVIRONMENT",
+    "TRACE_TO_LANGFUSE",
+    "LANGFUSE_CODEX_TAGS",
+    "LANGFUSE_CODEX_METADATA",
+    "TAVILY_API_KEY",
+    "TRACE_TO_LANGSMITH",
+    "CC_LANGSMITH_API_KEY",
+    "CC_LANGSMITH_PROJECT",
+    "CC_LANGSMITH_DEBUG",
+    "CC_LANGSMITH_LOG_FILE",
+    "CC_LANGSMITH_METADATA",
+    "CC_LANGSMITH_PARENT_DOTTED_ORDER",
+    "CC_LANGSMITH_PLUGIN_DIR",
+    "BENCH_EVAL_LANGSMITH_TRACE",
+    "BENCH_EVAL_BAGGAGE",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "BENCH_CC_VERSION",
+    "BENCH_CC_MODEL",
+    "BENCH_CODEX_VERSION",
+    "BENCH_CODEX_MODEL",
+    "BENCH_QODER_VERSION",
+    "BENCH_QODER_MODEL",
+    "CODEBUDDY_API_KEY",
+    "CODEBUDDY_AUTH_TOKEN",
+    "CODEBUDDY_BASE_URL",
+    "CODEBUDDY_MODEL",
+    "CODEBUDDY_SMALL_FAST_MODEL",
+    "CODEBUDDY_BIG_SLOW_MODEL",
+    "CODEBUDDY_CODE_SUBAGENT_MODEL",
+    "CODEBUDDY_CUSTOM_HEADERS",
+    "CODEBUDDY_INTERNET_ENVIRONMENT",
+    "BENCH_CODEBUDDY_VERSION",
+    "BENCH_CODEBUDDY_MODEL",
+    "OPENSUPER_EVAL_CUSTOM_AGENT_ID",
+    "OPENSUPER_EVAL_CUSTOM_EXECUTABLE",
+    "OPENSUPER_EVAL_CUSTOM_CREDENTIALS",
+    "OPENSUPER_EVAL_CUSTOM_MODEL",
+    "OPENSUPER_EVAL_CUSTOM_BASE_URL",
+    "OPENSUPER_EVAL_CUSTOM_MODEL_ENV",
+    "OPENSUPER_EVAL_CUSTOM_BASE_URL_ENV",
+    "OPENSUPER_EVAL_CUSTOM_INSTALL_KIND",
+    "OPENSUPER_EVAL_CUSTOM_INSTALL_PACKAGE",
+    "OPENSUPER_EVAL_CUSTOM_INSTALL_VERSION",
+)
+
+
+def _to_bash_path(value) -> str:
+    """Normalise a path argument for bash on Windows.
+
+    Git Bash/MSYS resolves script paths in ``/d/...`` form, while WSL bash
+    resolves Windows drives under ``/mnt/d/...``. Windows backslash paths get
+    their separators eaten as escapes, and ``D:/...`` drive-letter form is
+    rejected when passed as argv (no shell parsing). On non-Windows, pass
+    through.
+    """
+    s = str(value)
+    if os.name == "nt":
+        s = s.replace("\\", "/")
+        if len(s) >= 2 and s[1] == ":" and s[0].isalpha():
+            drive = s[0].lower()
+            prefix = f"/mnt/{drive}" if _uses_wsl_bash(BASH_EXEC) else f"/{drive}"
+            s = prefix + s[2:]
+    return s
+
+
+def _bash_env(source_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(source_env if source_env is not None else os.environ)
+    if os.name != "nt" or not _uses_wsl_bash(BASH_EXEC):
+        return env
+
+    existing = [item for item in env.get("WSLENV", "").split(":") if item]
+    custom_credentials = [
+        key.strip()
+        for key in env.get("OPENSUPER_EVAL_CUSTOM_CREDENTIALS", "").split(",")
+        if key.strip()
+    ]
+    custom_routing = [
+        key.strip()
+        for metadata_key in ("OPENSUPER_EVAL_CUSTOM_MODEL_ENV", "OPENSUPER_EVAL_CUSTOM_BASE_URL_ENV")
+        for key in [env.get(metadata_key, "")]
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", key.strip())
+    ]
+    exported = [key for key in WSL_ENV_KEYS if env.get(key)]
+    exported.extend(key for key in custom_credentials if env.get(key))
+    exported.extend(key for key in custom_routing if env.get(key))
+    merged = list(dict.fromkeys(existing + exported))
+    if merged:
+        env["WSLENV"] = ":".join(merged)
+    return env
+
+
+def run_shell(script, *args, timeout=None, check=True, env=None):
+    cmd = [BASH_EXEC, _to_bash_path(SHELL_DIR / script)] + [_to_bash_path(a) for a in args]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=check,
+        env=_bash_env(env),
+    )
+
+
+def check_docker_available():
+    try:
+        return run_shell("docker.sh", "check", check=False, timeout=10).returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def build_docker_image(test_dir, force=False, verbose=False, agent=None):
+    try:
+        args = ["build", str(test_dir)] + (["--force"] if force else [])
+        if agent:
+            args.extend(["--agent", validate_agent_id(agent)])
+        result = run_shell("docker.sh", *args, timeout=300, check=False)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _docker_run_script(mode, test_dir, script_name, timeout=120, args=None):
+    if not check_docker_available():
+        return False, "Docker not available"
+    try:
+        cmd = [mode, str(test_dir), script_name] + (args or [])
+        result = run_shell("docker.sh", *cmd, timeout=timeout, check=False)
+        output = result.stdout
+        if result.returncode != 0 and result.stderr:
+            output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+        return result.returncode == 0, output
+    except subprocess.TimeoutExpired:
+        return False, f"Timeout ({timeout}s)"
+    except Exception as e:
+        return False, str(e)
+
+
+def run_python_in_docker(test_dir, script_name, timeout=120, args=None):
+    return _docker_run_script("run-python", test_dir, script_name, timeout, args)
+
+
+def run_node_in_docker(test_dir, script_name, timeout=120, args=None):
+    return _docker_run_script("run-node", test_dir, script_name, timeout, args)
+
+
+def run_command_in_docker(test_dir, command, timeout=120):
+    """Run one user-authored validation command inside the task container."""
+    cmd = ["run-command", str(test_dir), "--timeout", str(timeout), "--", command]
+    if not check_docker_available():
+        return subprocess.CompletedProcess(cmd, 125, "", "Docker not available")
+    try:
+        return run_shell("docker.sh", *cmd, timeout=timeout + 30, check=False)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"Timeout after {timeout}s")
+
+
+def run_claude_in_docker(
+    test_dir,
+    prompt,
+    timeout=300,
+    model=None,
+    image_id=None,
+    base_url=None,
+    environment=None,
+):
+    if not check_docker_available():
+        raise RuntimeError("Docker not available")
+    cmd = ["run-claude", str(test_dir), prompt, "--timeout", str(timeout)]
+    if model:
+        cmd.extend(["--model", model])
+    if image_id:
+        cmd.extend(["--image-id", image_id])
+    child_env = environment
+    if child_env is None and (model or base_url):
+        child_env = build_agent_environment(
+            ResolvedExecution("claude-code", model, base_url, {}),
+        )
+    try:
+        return run_shell("docker.sh", *cmd, timeout=timeout + 30, check=False, env=child_env)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"Timeout after {timeout}s")
+
+
+def run_agent_in_docker(
+    test_dir,
+    prompt,
+    *,
+    agent="claude-code",
+    timeout=300,
+    model=None,
+    base_url=None,
+    image_id=None,
+    environment=None,
+):
+    """Run one subject, simulator, or judge turn through the selected adapter."""
+    agent_id = validate_agent_id(agent)
+    if not check_docker_available():
+        raise RuntimeError("Docker not available")
+    cmd = ["run-agent", str(test_dir), prompt, "--agent", agent_id]
+    if model:
+        cmd.extend(["--model", model])
+    cmd.extend(["--timeout", str(timeout)])
+    if image_id:
+        cmd.extend(["--image-id", image_id])
+    child_env = environment
+    if child_env is None and (model or base_url):
+        child_env = build_agent_environment(
+            ResolvedExecution(agent_id, model, base_url, {}),
+        )
+    try:
+        return run_shell("docker.sh", *cmd, timeout=timeout + 30, check=False, env=child_env)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"Timeout after {timeout}s")
+
+
+def run_claude_loop_in_docker(test_dir, loop_args, timeout=600, environment=None):
+    """Run the interactive driver and remove its container after host-side timeout."""
+    cmd = ["run-claude-loop", str(test_dir), *loop_args]
+    try:
+        return run_shell("docker.sh", *cmd, timeout=timeout, check=False, env=environment)
+    except subprocess.TimeoutExpired as error:
+        cleanup_error = ""
+        try:
+            cleanup = run_shell(
+                "docker.sh",
+                "cleanup-claude-loop",
+                test_dir,
+                timeout=30,
+                check=False,
+            )
+            if cleanup.returncode != 0:
+                cleanup_error = f"; cleanup failed: {cleanup.stderr or cleanup.stdout}"
+        except Exception as cleanup_exception:  # pragma: no cover - defensive cleanup
+            cleanup_error = f"; cleanup failed: {cleanup_exception}"
+        stdout = (
+            error.stdout.decode("utf-8", errors="replace")
+            if isinstance(error.stdout, bytes)
+            else (error.stdout or "")
+        )
+        stderr = (
+            error.stderr.decode("utf-8", errors="replace")
+            if isinstance(error.stderr, bytes)
+            else (error.stderr or "")
+        )
+        message = f"Timeout after {timeout}s{cleanup_error}"
+        return subprocess.CompletedProcess(
+            cmd, 124, stdout, "\n".join(filter(None, (stderr, message)))
+        )
+
+
+def run_agent_loop_in_docker(test_dir, loop_args, timeout=600, environment=None):
+    """Run the shared interactive driver for a non-default evaluation agent."""
+    cmd = ["run-agent-loop", str(test_dir), *loop_args]
+    try:
+        return run_shell("docker.sh", *cmd, timeout=timeout, check=False, env=environment)
+    except subprocess.TimeoutExpired as error:
+        cleanup_error = ""
+        try:
+            cleanup = run_shell(
+                "docker.sh",
+                "cleanup-agent-loop",
+                test_dir,
+                timeout=30,
+                check=False,
+            )
+            if cleanup.returncode != 0:
+                cleanup_error = f"; cleanup failed: {cleanup.stderr or cleanup.stdout}"
+        except Exception as cleanup_exception:  # pragma: no cover - defensive cleanup
+            cleanup_error = f"; cleanup failed: {cleanup_exception}"
+        stdout = (
+            error.stdout.decode("utf-8", errors="replace")
+            if isinstance(error.stdout, bytes)
+            else (error.stdout or "")
+        )
+        stderr = (
+            error.stderr.decode("utf-8", errors="replace")
+            if isinstance(error.stderr, bytes)
+            else (error.stderr or "")
+        )
+        message = f"Timeout after {timeout}s{cleanup_error}"
+        return subprocess.CompletedProcess(
+            cmd, 124, stdout, "\n".join(filter(None, (stderr, message)))
+        )
+
+
+def _copy_scaffold_to_docker(test_dir):
+    py_validation = SCAFFOLD_PYTHON_DIR / "validation"
+
+    def copy_validator_runtime(destination):
+        scaffold_dir = destination / "scaffold"
+        scaffold_dir.mkdir(parents=True, exist_ok=True)
+        (scaffold_dir / "__init__.py").write_text("", encoding="utf-8")
+        py_dest = scaffold_dir / "python"
+        py_dest.mkdir(exist_ok=True)
+        # The repository package initializer imports host-only orchestration
+        # dependencies. Validator containers need only the copied helper modules,
+        # so always replace a stale/full initializer with a minimal package stub.
+        (py_dest / "__init__.py").write_text("", encoding="utf-8")
+        shutil.copy(SCAFFOLD_PYTHON_DIR / "utils.py", py_dest / "utils.py")
+        if py_validation.is_dir():
+            shutil.copytree(py_validation, py_dest / "validation", dirs_exist_ok=True)
+
+        # Copy the shared opensuper-workflow checks as a TOP-LEVEL module so validators
+        # can import it without loading the host-side scaffold package initializer.
+        opensuper_checks_src = py_validation / "opensuper_workflow.py"
+        if opensuper_checks_src.exists():
+            shutil.copy(opensuper_checks_src, destination / "opensuper_checks.py")
+
+    copy_validator_runtime(test_dir)
+    # Python executes validation/<script>.py with validation/ as sys.path[0],
+    # not /workspace. Mirror the lightweight runtime beside the scripts so both
+    # scaffold and opensuper_checks remain importable inside the benchmark container.
+    copy_validator_runtime(test_dir / "validation")
+
+
+def _parse_json_output(output):
+    stripped = output.strip()
+    try:
+        result = json.loads(stripped)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+    for line in reversed(stripped.splitlines()):
+        try:
+            result = json.loads(line)
+            if isinstance(result, dict):
+                return result
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
+def run_eval_in_docker(test_dir, validation_dir, test_script, timeout=120, data_dir=None):
+    val_dir = test_dir / "validation"
+    val_dir.mkdir(exist_ok=True)
+    for f in validation_dir.iterdir():
+        if f.is_file():
+            shutil.copy(f, val_dir / f.name)
+    if data_dir and data_dir.is_dir():
+        dest_data = test_dir / "data"
+        dest_data.mkdir(exist_ok=True)
+        for f in data_dir.iterdir():
+            if f.is_file():
+                shutil.copy(f, dest_data / f.name)
+    _copy_scaffold_to_docker(test_dir)
+    results_path = test_dir / TEST_RESULTS_FILE
+    results_path.unlink(missing_ok=True)
+    script_path = f"validation/{test_script}"
+    if test_script.endswith((".ts", ".js")):
+        success, output = run_node_in_docker(test_dir, script_path, timeout=timeout)
+    else:
+        success, output = run_python_in_docker(test_dir, script_path, timeout=timeout)
+    if results_path.exists():
+        try:
+            return json.loads(results_path.read_text())
+        except (json.JSONDecodeError, ValueError):
+            pass
+    result = _parse_json_output(output)
+    if result is not None:
+        return result
+    return {"error": f"No JSON output. success={success}, output={output[:300]}"}
+
+
+def _format_structured_check(check):
+    name = str(check.get("check") or check.get("name") or "check")
+    detail = check.get("message") or check.get("reason") or check.get("error") or ""
+    return f"{name}: {detail}" if detail else name
+
+
+def _normalise_validation_results(results):
+    passed = list(results.get("passed") or [])
+    failed = list(results.get("failed") or [])
+
+    for check in results.get("checks") or []:
+        if not isinstance(check, dict):
+            continue
+        status = str(check.get("status") or "").lower()
+        message = _format_structured_check(check)
+        if status in {"passed", "pass", "ok", "success"}:
+            passed.append(message)
+        elif status in {"failed", "fail", "error"}:
+            failed.append(message)
+
+    return passed, failed
+
+
+def make_execution_validator(
+    validation_dir, test_scripts, target_artifacts, timeout=120, data_dir=None
+):
+    test_scripts = [test_scripts] if isinstance(test_scripts, str) else test_scripts
+    artifacts = [target_artifacts] if isinstance(target_artifacts, str) else target_artifacts
+
+    def validate_execution(test_dir, outputs):
+        passed, failed = [], []
+        for artifact in artifacts:
+            if any(c in artifact for c in "*?["):
+                if not list(test_dir.glob(artifact)):
+                    failed.append(f"Artifact not found: {artifact}")
+            elif not (test_dir / artifact).exists():
+                failed.append(f"Artifact not found: {artifact}")
+        if failed:
+            return passed, failed
+        context = dict(outputs) if outputs else {}
+        context["target_artifacts"] = artifacts
+        (test_dir / TEST_CONTEXT_FILE).write_text(json.dumps(context, default=str))
+        for script in test_scripts:
+            results = run_eval_in_docker(
+                test_dir, validation_dir, script, timeout=timeout, data_dir=data_dir
+            )
+            script_passed, script_failed = _normalise_validation_results(results)
+            passed.extend(script_passed)
+            failed.extend(script_failed)
+            if results.get("error") and not script_passed and not script_failed:
+                failed.append(f"Test execution error ({script}): {results['error']}")
+        return passed, failed
+
+    return validate_execution
+
+
+def check_claude_available():
+    try:
+        return (
+            subprocess.run(["claude", "--version"], capture_output=True, timeout=10).returncode == 0
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def retry_with_backoff(func, max_retries=3, base_delay=1.0, max_delay=10.0, retry_on=None):
+    retry_on = retry_on or (lambda e: "429" in str(e) or "rate limit" in str(e).lower())
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except Exception as e:
+            if not retry_on(e) or attempt == max_retries:
+                raise
+            time.sleep(min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay))
+
+
+def read_json_file(path):
+    if not path.exists():
+        return None, f"file not found: {path.name}"
+    try:
+        with open(path) as f:
+            return json.load(f), None
+    except json.JSONDecodeError as e:
+        return None, f"invalid JSON: {e}"
+    except Exception as e:
+        return None, str(e)
+
+
+def get_langsmith_client():
+    """Get LangSmith client if available.
+
+    Returns:
+        (client, None) on success, (None, error_message) on failure.
+        The client is a langsmith.Client instance configured from environment.
+    """
+    try:
+        from langsmith import Client
+    except ImportError:
+        return None, "langsmith package not installed (pip install langsmith)"
+
+    api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
+    if not api_key:
+        return None, "LANGSMITH_API_KEY not set"
+
+    try:
+        client = Client(api_key=api_key)
+        return client, None
+    except Exception as e:
+        return None, f"LangSmith client error: {e}"
+
+
+def safe_api_call(func, *args, **kwargs):
+    """Execute a LangSmith API call with error handling.
+
+    Returns:
+        (result, None) on success, (None, error_message) on failure.
+    """
+    try:
+        result = func(*args, **kwargs)
+        return result, None
+    except Exception as e:
+        return None, f"API error: {e}"
+
+
+def get_field(obj, *keys, default=None):
+    if not isinstance(obj, dict):
+        return default
+    for key in keys:
+        if key in obj:
+            return obj[key]
+    return default
+
+
+def get_nested_field(obj, outer_keys, inner_keys, default=None):
+    outer = get_field(obj, *outer_keys) or {}
+    return get_field(outer, *inner_keys, default=default) if isinstance(outer, dict) else default
+
+
+def normalize_score(score):
+    if isinstance(score, bool):
+        return 1.0 if score else 0.0
+    if isinstance(score, (int, float)) and score > 1:
+        return score / 100.0
+    return float(score) if score is not None else 0.0

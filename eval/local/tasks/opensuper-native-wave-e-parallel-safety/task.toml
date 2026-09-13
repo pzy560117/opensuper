@@ -1,0 +1,37 @@
+[metadata]
+name = "opensuper-native-wave-e-parallel-safety"
+description = "Test early conflict status and one-winner Native v4 Runtime mutation"
+difficulty = "hard"
+category = "opensuper-native"
+tags = ["opensuper-native", "parallel", "conflict", "state-version", "wave-e"]
+default_treatments = ["OPENSUPER_NATIVE_PHASE1"]
+
+[template]
+required = []
+
+[environment]
+description = "Passing baseline Python workspace for two overlapping active Native changes."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_native_wave_e_parallel_safety.py"
+target_artifacts = [".cache/opensuper-native-eval/conflict-status.json", ".cache/opensuper-native-eval/mutation-attempt-a.json", ".cache/opensuper-native-eval/mutation-attempt-b.json", "docs/opensuper/changes"]
+timeout = 120
+
+[evaluation]
+profile = "generic"
+required_skills = ["opensuper-native"]
+expected_artifacts = [".cache/opensuper-native-eval/conflict-status.json", ".cache/opensuper-native-eval/mutation-attempt-a.json", ".cache/opensuper-native-eval/mutation-attempt-b.json", "docs/opensuper/changes"]
+require_skill_invocation = true
+native_terminal = "active"
+rubric_criteria = [
+  "Creates two active v4 changes that target the same capability and artifact with distinct proposed behavior",
+  "Reports the definite conflict before Archive without exposing workspace identity details",
+  "Runs two concurrent state-version-bound writes with exactly one Runtime winner",
+  "Preserves both active changes and keeps machine state under the central Runtime directory",
+]
+
+[interaction]
+mode = "none"
+max_turns = 1

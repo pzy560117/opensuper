@@ -1,0 +1,608 @@
+"""Unit tests for eval stream parsing and experiment summaries."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from scaffold.python.logging import (
+    ExperimentLogger,
+    TreatmentResult,
+    extract_events,
+    parse_output,
+    rubric_columns,
+    save_events,
+    save_raw,
+    save_report,
+)
+from scaffold.python.report_outputs import ReportOutputConfig
+
+
+def test_save_artifacts_excludes_nested_git_metadata(tmp_path: Path):
+    from conftest import _save_artifacts
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "result.md").write_text("ok", encoding="utf-8")
+    git_dir = workspace / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n", encoding="utf-8")
+
+    _save_artifacts(tmp_path, "OPENSUPER_FULL_040_BETA", 1, workspace)
+
+    snapshot = tmp_path / "artifacts" / "opensuper_full_040_beta_rep1" / "claude"
+    assert (snapshot / "result.md").read_text(encoding="utf-8") == "ok"
+    assert not (snapshot / ".git").exists()
+
+
+def test_save_artifacts_redacts_configured_credentials(tmp_path: Path, monkeypatch):
+    from conftest import _save_artifacts
+
+    monkeypatch.setenv("FIXTURE_AGENT_CREDENTIAL", "artifact-secret-value")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "result.md").write_text(
+        "Authorization: Bearer artifact-secret-value\n", encoding="utf-8"
+    )
+
+    _save_artifacts(tmp_path, "OPENSUPER_FULL_040_BETA", 1, workspace)
+
+    snapshot = tmp_path / "artifacts" / "opensuper_full_040_beta_rep1" / "claude"
+    saved = (snapshot / "result.md").read_text(encoding="utf-8")
+    assert "artifact-secret-value" not in saved
+
+
+def test_save_artifacts_skips_non_text_content_instead_of_persisting_secrets(tmp_path: Path):
+    from conftest import _save_artifacts
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "secret.bin").write_bytes(b"artifact-secret-value\x00\xff")
+
+    _save_artifacts(tmp_path, "OPENSUPER_FULL_040_BETA", 1, workspace)
+
+    snapshot = tmp_path / "artifacts" / "opensuper_full_040_beta_rep1" / "claude"
+    assert not (snapshot / "secret.bin").exists()
+
+
+def test_save_artifacts_uses_selected_agent_root_and_excludes_codebuddy_config(
+    tmp_path: Path,
+):
+    from conftest import _save_artifacts
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "result.md").write_text("ok", encoding="utf-8")
+    (workspace / ".codebuddy" / "settings.json").parent.mkdir()
+    (workspace / ".codebuddy" / "settings.json").write_text(
+        '{"env":{"CODEBUDDY_API_KEY":"secret"}}', encoding="utf-8"
+    )
+
+    _save_artifacts(tmp_path, "OPENSUPER_FULL_040_BETA", 1, workspace, agent="codebuddy")
+
+    snapshot = tmp_path / "artifacts/opensuper_full_040_beta_rep1/codebuddy"
+    assert (snapshot / "result.md").read_text(encoding="utf-8") == "ok"
+    assert not (snapshot / ".codebuddy").exists()
+
+
+def test_save_artifacts_excludes_controller_cli_snapshot(tmp_path: Path):
+    from conftest import _save_artifacts
+
+    workspace = tmp_path / "workspace"
+    (workspace / "_eval_current_opensuper/dist").mkdir(parents=True)
+    (workspace / "_eval_current_opensuper/dist/index.js").write_text("export {};\n", encoding="utf-8")
+    (workspace / "result.md").write_text("ok", encoding="utf-8")
+
+    _save_artifacts(tmp_path, "OPENSUPER_NATIVE_PHASE1", 1, workspace)
+
+    snapshot = tmp_path / "artifacts/opensuper_native_phase1_rep1/claude"
+    assert (snapshot / "result.md").is_file()
+    assert not (snapshot / "_eval_current_opensuper").exists()
+
+
+def test_extract_events_captures_token_usage_and_cost():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "assistant", "message": {"content": []}}),
+            json.dumps(
+                {
+                    "type": "result",
+                    "duration_ms": 1200,
+                    "num_turns": 3,
+                    "total_cost_usd": 0.123456,
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 25,
+                        "cache_read_input_tokens": 300,
+                        "cache_creation_input_tokens": 50,
+                    },
+                    "modelUsage": {
+                        "mimo-v2.5-pro": {
+                            "inputTokens": 100,
+                            "outputTokens": 25,
+                            "cacheReadInputTokens": 300,
+                            "cacheCreationInputTokens": 50,
+                            "costUSD": 0.123456,
+                        }
+                    },
+                }
+            ),
+        ]
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["duration_seconds"] == 1.2
+    assert events["num_turns"] == 3
+    assert events["input_tokens"] == 100
+    assert events["output_tokens"] == 25
+    assert events["cache_read_input_tokens"] == 300
+    assert events["cache_creation_input_tokens"] == 50
+    assert events["total_tokens"] == 475
+    assert events["total_cost_usd"] == 0.123456
+    assert events["model_usage"]["mimo-v2.5-pro"]["costUSD"] == 0.123456
+
+
+def test_extract_events_normalizes_codex_turns_and_runtime_skill_evidence():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": "cat .agents/skills/demo/SKILL.md",
+                        "aggregated_output": "skill contents",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "file_change",
+                        "changes": [{"path": "result.md", "kind": "add"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 80, "output_tokens": 20},
+                    "duration_ms": 900,
+                }
+            ),
+        ]
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["role_sessions"]["subject"] == ["thread-1"]
+
+    assert events["subject_invocations"] == 1
+    assert events["num_turns"] == 1
+    assert events["input_tokens"] == 80
+    assert events["output_tokens"] == 20
+    assert events["total_tokens"] == 100
+    assert events["duration_seconds"] == 0.9
+    assert events["commands_run"] == ["cat .agents/skills/demo/SKILL.md"]
+    assert events["files_created"] == ["result.md"]
+    assert events["skills_invoked"] == ["demo"]
+
+
+def test_extract_events_recognizes_codebuddy_runtime_skill_evidence():
+    stdout = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {"command": "cat .codebuddy/skills/demo/SKILL.md"},
+                    }
+                ]
+            },
+        }
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["skills_invoked"] == ["demo"]
+
+
+def test_extract_events_trims_shell_suffix_from_runtime_skill_path():
+    stdout = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {
+                            "command": 'ls -la /workspace/.claude/skills/demo; echo "---"'
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["skills_invoked"] == ["demo"]
+
+
+def test_extract_events_trims_shell_parameter_expansion_from_runtime_skill_path():
+    stdout = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {
+                            "command": 'SKILL_DIR="${OPENSUPER_NATIVE_SKILL_DIR:-/workspace/.claude/skills/demo}"'
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["skills_invoked"] == ["demo"]
+
+
+def test_extract_events_ignores_shell_glob_in_runtime_skill_path():
+    stdout = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {
+                            "command": "find . -not -path '*/.claude/skills/*'"
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["skills_invoked"] == []
+
+
+def test_custom_agent_requires_explicit_skill_invocation_events():
+    path_only = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "cat .agents/skills/demo/SKILL.md",
+            },
+        }
+    )
+    inferred = extract_events(parse_output(path_only), agent="fixture-agent")
+    assert inferred["skills_invoked"] == []
+    assert inferred["skill_invocations"] == []
+
+    explicit = extract_events(
+        parse_output(json.dumps({"type": "skill_invocation", "skill": "demo"})),
+        agent="fixture-agent",
+    )
+    assert explicit["skills_invoked"] == ["demo"]
+    assert explicit["skill_invocations"] == ["demo"]
+
+
+def test_extract_events_accumulates_duration_across_results():
+    stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "result",
+                    "duration_ms": 1200,
+                    "num_turns": 2,
+                    "total_cost_usd": 0.1,
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "duration_ms": 800,
+                    "num_turns": 4,
+                    "total_cost_usd": 0.2,
+                    "usage": {"input_tokens": 200, "output_tokens": 40},
+                }
+            ),
+        ]
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["duration_seconds"] == 2.0
+    assert events["subject_invocations"] == 2
+    assert events["num_turns"] == 6
+    assert events["input_tokens"] == 300
+    assert events["output_tokens"] == 60
+    assert events["total_tokens"] == 360
+    assert events["total_cost_usd"] == pytest.approx(0.3)
+
+
+def test_extract_events_reports_deduplicated_context_pressure():
+    assistant = {
+        "type": "assistant",
+        "message": {
+            "id": "message-1",
+            "model": "mimo-v2.5-pro",
+            "content": [],
+            "usage": {
+                "input_tokens": 2_000,
+                "cache_read_input_tokens": 8_000,
+                "cache_creation_input_tokens": 0,
+            },
+        },
+    }
+    stdout = "\n".join(
+        [
+            json.dumps(assistant),
+            json.dumps(assistant),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "message-2",
+                        "model": "mimo-v2.5-pro",
+                        "content": [],
+                        "usage": {
+                            "input_tokens": 1_000,
+                            "cache_read_input_tokens": 4_000,
+                        },
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "modelUsage": {
+                        "mimo-v2.5-pro": {
+                            "contextWindow": 200_000,
+                            "inputTokens": 3_000,
+                        }
+                    },
+                }
+            ),
+        ]
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["peak_context_input_tokens"] == 10_000
+    assert events["p95_context_input_tokens"] == 10_000
+    assert events["average_context_input_tokens"] == 7_500
+    assert events["peak_context_window_tokens"] == 200_000
+    assert events["peak_context_occupancy_pct"] == 5
+
+
+def test_extract_events_ignores_missing_result_duration():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "result", "duration_ms": 1200}),
+            json.dumps({"type": "result"}),
+        ]
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["duration_seconds"] == 1.2
+
+
+def test_extract_events_keeps_duration_missing_without_observed_value():
+    events = extract_events(parse_output(json.dumps({"type": "result"})))
+
+    assert events["duration_seconds"] is None
+
+
+def test_extract_events_normalizes_openspec_skill_aliases():
+    stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "call_1",
+                                "name": "Skill",
+                                "input": {"skill": "opsx:new"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "call_2",
+                                "name": "Skill",
+                                "input": {"skill": "openspec-new-change"},
+                            },
+                        ]
+                    },
+                }
+            )
+        ]
+    )
+
+    events = extract_events(parse_output(stdout))
+
+    assert events["skills_invoked"] == ["openspec-new-change"]
+
+
+def test_experiment_summary_includes_token_and_cost_columns(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("BENCH_LOGS_DIR", str(tmp_path))
+    logger = ExperimentLogger(experiment_name="token-cost")
+    logger.add_result(
+        "OPENSUPER_FULL_040_BETA",
+        TreatmentResult(
+            name="OPENSUPER_FULL_040_BETA",
+            passed=True,
+            checks_passed=["baseline"],
+            checks_failed=[],
+            events_summary={
+                "num_turns": 2,
+                "duration_seconds": 12,
+                "tool_calls": 3,
+                "total_tokens": 475,
+                "total_cost_usd": 0.123456,
+            },
+        ),
+    )
+
+    summary = logger.generate_summary()
+
+    assert "| Treatment | Checks |" in summary
+    assert "Tokens" in summary
+    assert "Cost" in summary
+    assert "| OPENSUPER_FULL_040_BETA | 1/1 (100%) |" in summary
+    assert "475" in summary
+    assert "$0.1235" in summary
+
+
+def test_experiment_finalize_honors_html_report_output_config(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("BENCH_LOGS_DIR", str(tmp_path))
+    logger = ExperimentLogger(
+        experiment_name="html-summary",
+        report_outputs=ReportOutputConfig(markdown=False, html=True),
+    )
+    logger.add_result(
+        "OPENSUPER_FULL_040_BETA",
+        TreatmentResult(
+            name="OPENSUPER_FULL_040_BETA",
+            passed=True,
+            checks_passed=["baseline"],
+            checks_failed=[],
+        ),
+    )
+
+    output_path = logger.finalize()
+    summary_md = logger.base_dir / "summary.md"
+    summary_html = logger.base_dir / "summary.html"
+    metadata = json.loads((logger.base_dir / "metadata.json").read_text())
+
+    assert output_path == summary_html
+    assert not summary_md.exists()
+    summary = summary_html.read_text(encoding="utf-8")
+    assert "<html" in summary.lower()
+    assert "Experiment Results Summary" in summary
+    assert metadata["report_outputs"]["html"].endswith("summary.html")
+    assert "markdown" not in metadata["report_outputs"]
+
+
+def test_save_raw_writes_utf8_output(tmp_path: Path):
+    save_raw(tmp_path, "OPENSUPER_FULL_040_BETA", 1, '{"text":"中文 �"}\n', "stderr 中文")
+
+    stdout_path = tmp_path / "raw" / "OPENSUPER_FULL_040_BETA_rep1_stdout.json"
+    stderr_path = tmp_path / "raw" / "OPENSUPER_FULL_040_BETA_rep1_stderr.txt"
+
+    assert "中文" in stdout_path.read_text(encoding="utf-8")
+    assert "stderr 中文" == stderr_path.read_text(encoding="utf-8")
+
+
+def test_saved_eval_outputs_redact_configured_credentials(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FIXTURE_AGENT_API_KEY", "fixture-secret-value")
+    save_raw(
+        tmp_path,
+        "OPENSUPER_FULL_040_BETA",
+        1,
+        "Authorization: Bearer fixture-secret-value x-api-key: fixture-secret-value",
+        "token=fixture-secret-value",
+    )
+    save_events(tmp_path, "OPENSUPER_FULL_040_BETA", 1, {"token": "fixture-secret-value"})
+    save_report(tmp_path, "OPENSUPER_FULL_040_BETA", 1, {"credential": "fixture-secret-value"})
+
+    for path in (
+        tmp_path / "raw/OPENSUPER_FULL_040_BETA_rep1_stdout.json",
+        tmp_path / "raw/OPENSUPER_FULL_040_BETA_rep1_stderr.txt",
+        tmp_path / "events/OPENSUPER_FULL_040_BETA_rep1.json",
+        tmp_path / "reports/OPENSUPER_FULL_040_BETA_rep1_report.json",
+    ):
+        assert "fixture-secret-value" not in path.read_text(encoding="utf-8")
+
+
+def test_save_artifacts_preserve_stable_treatment_filenames(tmp_path: Path):
+    save_events(tmp_path, "OPENSUPER_FULL_040_BETA", 2, {"ok": True})
+    save_raw(tmp_path, "OPENSUPER_FULL_040_BETA", 2, "{}", "stderr")
+    save_report(tmp_path, "OPENSUPER_FULL_040_BETA", 2, {"ok": True})
+
+    assert sorted(path.name for path in (tmp_path / "events").iterdir()) == [
+        "OPENSUPER_FULL_040_BETA_rep2.json"
+    ]
+    assert sorted(path.name for path in (tmp_path / "raw").iterdir()) == [
+        "OPENSUPER_FULL_040_BETA_rep2_stderr.txt",
+        "OPENSUPER_FULL_040_BETA_rep2_stdout.json",
+    ]
+    assert sorted(path.name for path in (tmp_path / "reports").iterdir()) == [
+        "OPENSUPER_FULL_040_BETA_rep2_report.json"
+    ]
+
+
+def test_rubric_columns_accept_profile_dimensions():
+    columns = rubric_columns(("completion", "skill_invocation", "weighted_score"))
+
+    assert [column.name for column in columns] == [
+        "completion",
+        "skill_invocation",
+        "weighted_score",
+        "RubricAvg",
+    ]
+
+
+def test_rubric_average_excludes_weighted_score():
+    columns = rubric_columns(("completion", "skill_invocation", "weighted_score"))
+    avg_column = next(column for column in columns if column.name == "RubricAvg")
+    result = TreatmentResult(
+        name="OPENSUPER_FULL_040_BETA",
+        passed=True,
+        checks_passed=[
+            "[RUBRIC] completion: 0.00 - failed",
+            "[RUBRIC] skill_invocation: 1.00 - ok",
+            "[RUBRIC] weighted_score: 1.00",
+        ],
+        checks_failed=[],
+    )
+
+    assert avg_column.get_value(result) == "0.50"
+
+
+def test_treatment_result_exposes_eval_metadata():
+    result = TreatmentResult(
+        name="DYNAMIC_SKILL",
+        passed=True,
+        checks_passed=[],
+        checks_failed=[],
+        events_summary={
+            "profile": "generic",
+            "skill_sources": [{"name": "demo", "hash": "sha256:abc"}],
+            "eval_manifest": "demo/opensuper/eval.yaml",
+            "interaction": {"mode": "none"},
+            "artifact_references": {"report": "logs/reports/demo_report.json"},
+            "failure_attribution": [
+                {
+                    "bucket": "task",
+                    "check": "validator missing",
+                    "reason": "task or validator path assumption failed",
+                }
+            ],
+        },
+    )
+
+    assert result.events_summary["profile"] == "generic"
+    assert result.events_summary["skill_sources"][0]["hash"] == "sha256:abc"
+    assert result.events_summary["artifact_references"]["report"].endswith("demo_report.json")
+    assert result.events_summary["failure_attribution"][0]["bucket"] == "task"

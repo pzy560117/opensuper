@@ -1,0 +1,5 @@
+interface:
+  display_name: "OpenSuper 语义记忆评审"
+  short_description: "评审 opensuper.memory.review.v1 并返回固定动作包"
+policy:
+  allow_implicit_invocation: false

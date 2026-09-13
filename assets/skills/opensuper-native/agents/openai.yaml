@@ -1,0 +1,3 @@
+interface:
+  display_name: 'OpenSuper Native'
+  short_description: 'Manage Native requirements, implementation, and verification'

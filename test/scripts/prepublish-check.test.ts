@@ -1,0 +1,248 @@
+import { spawnSync } from 'child_process';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+const temporary: string[] = [];
+const prepublishCheck = path.resolve('scripts/release/prepublish-check.js');
+
+afterEach(async () => {
+  await Promise.all(temporary.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
+  const target = path.join(root, relativePath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, content, 'utf-8');
+}
+
+async function makePackageFixture(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-prepublish-check-'));
+  temporary.push(root);
+
+  await writeFile(
+    root,
+    'package.json',
+    JSON.stringify(
+      {
+        name: 'opensuper-prepublish-check-fixture',
+        version: '1.0.0',
+        files: ['index.js', 'README.md'],
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(root, 'README.md', '# Fixture\n');
+  await writeFile(root, 'index.js', 'export const ok = true;\n');
+  await writeFile(root, '.gitignore', ['eval/.cache/', 'eval/.pytest-basetemp-*/', ''].join('\n'));
+
+  return root;
+}
+
+async function makePublishFixture(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-publish-fixture-'));
+  temporary.push(root);
+  const packageJson = JSON.parse(await fs.readFile('package.json', 'utf-8')) as Record<
+    string,
+    unknown
+  >;
+  delete packageJson.scripts;
+  await writeFile(root, 'package.json', JSON.stringify(packageJson, null, 2));
+  await writeFile(root, 'README.md', '# OpenSuper publish fixture\n');
+  await writeFile(root, 'eval/pyproject.toml', '[project]\nname = "opensuper-eval-fixture"\n');
+  for (const relativePath of ['eval/.npmignore', 'eval/local/.npmignore']) {
+    await writeFile(root, relativePath, await fs.readFile(relativePath, 'utf-8'));
+  }
+  await writeFile(
+    root,
+    'eval/schemas/opensuper.eval/v1alpha1.schema.json',
+    '{"$schema":"https://json-schema.org/draft/2020-12/schema"}\n',
+  );
+  await writeFile(root, 'eval/local/tests/tasks/test_tasks.py', 'def test_fixture(): pass\n');
+  await writeFile(root, 'eval/scaffold/shell/agent-runtime-config.sh', '#!/usr/bin/env bash\n');
+  await writeFile(root, 'eval/scaffold/shell/run-agent-runtime.sh', '#!/usr/bin/env bash\n');
+  await writeFile(root, 'eval/.env', 'API_KEY=must-not-pack\n');
+  await writeFile(root, 'eval/.envrc', 'export API_KEY=must-not-pack\n');
+  await writeFile(root, 'eval/local/.env.test', 'API_KEY=must-not-pack\n');
+  await writeFile(root, 'eval/.venv/ignored.txt', 'ignored\n');
+  await writeFile(root, 'eval/.uv-cache/ignored.txt', 'ignored\n');
+  await writeFile(root, 'eval/local/logs/ignored.txt', 'ignored\n');
+  await writeFile(root, 'eval/eval/.pytest-cache-controller-aligned/ignored.txt', 'ignored\n');
+  return root;
+}
+
+describe('prepublish security check', () => {
+  it('packs the eval harness without derived artifacts', async () => {
+    const root = await makePublishFixture();
+    const npmCache = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-npm-cache-'));
+    temporary.push(npmCache);
+    const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+    const args =
+      process.platform === 'win32'
+        ? ['/d', '/s', '/c', `npm pack --dry-run --json --ignore-scripts --cache ${npmCache}`]
+        : ['pack', '--dry-run', '--json', '--ignore-scripts', '--cache', npmCache];
+    const result = spawnSync(command, args, {
+      cwd: root,
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        NPM_CONFIG_CACHE: npmCache,
+        npm_config_cache: npmCache,
+      },
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+
+    const jsonStart = result.stdout.lastIndexOf('\n[');
+    const [packed] = JSON.parse(result.stdout.slice(jsonStart + 1)) as Array<{
+      files: Array<{ path: string }>;
+    }>;
+    const published = packed.files.map((file) => `package/${file.path}`);
+
+    expect(published).toContain('package/eval/pyproject.toml');
+    expect(published).toContain('package/eval/schemas/opensuper.eval/v1alpha1.schema.json');
+    expect(published).toContain('package/eval/local/tests/tasks/test_tasks.py');
+    expect(published).toContain('package/eval/scaffold/shell/agent-runtime-config.sh');
+    expect(published).toContain('package/eval/scaffold/shell/run-agent-runtime.sh');
+    expect(published.some((file) => /\/(?:\.env)(?:[^/]*)$/u.test(file))).toBe(false);
+    expect(published.some((file) => file.startsWith('package/eval/.venv/'))).toBe(false);
+    expect(published.some((file) => file.startsWith('package/eval/.uv-cache/'))).toBe(false);
+    expect(published.some((file) => file.startsWith('package/eval/local/logs/'))).toBe(false);
+    expect(published.some((file) => file.includes('/.pytest-cache-'))).toBe(false);
+  });
+
+  it('scans only files that npm would publish', async () => {
+    const root = await makePackageFixture();
+    await writeFile(
+      root,
+      'eval/.cache/langsmith-cc-plugin/src/langsmith.test.ts',
+      'const api_key = "abcdefghijklmnopqrstuvwxyz";\n',
+    );
+    await writeFile(
+      root,
+      'eval/.pytest-basetemp-ci-green/token.txt',
+      'const api_key = "abcdefghijklmnopqrstuvwxyz";\n',
+    );
+
+    const result = spawnSync(process.execPath, [prepublishCheck], {
+      cwd: root,
+      encoding: 'utf-8',
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stderr).not.toContain('[SECURITY]');
+  });
+
+  it('does not traverse directories excluded by nested .npmignore files', async () => {
+    const root = await makePackageFixture();
+    const packageJson = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf-8'));
+    packageJson.files = ['eval/local'];
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(packageJson, null, 2));
+    await writeFile(root, 'eval/local/.npmignore', 'logs/\n');
+    await writeFile(
+      root,
+      'eval/local/logs/pytest-basetemp-final/credentials.txt',
+      'const api_key = "abcdefghijklmnopqrstuvwxyz";\n',
+    );
+    await writeFile(root, 'eval/local/tests/safe.js', 'export const safe = true;\n');
+
+    const result = spawnSync(process.execPath, [prepublishCheck], {
+      cwd: root,
+      encoding: 'utf-8',
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain('[SECURITY] No secrets detected. Safe to publish.');
+  });
+
+  it('scans explicit package files even when a root .npmignore pattern matches them', async () => {
+    const root = await makePackageFixture();
+    const packageJson = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf-8'));
+    packageJson.files = ['eval/.env.example.md'];
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(packageJson, null, 2));
+    await writeFile(root, '.npmignore', '.env*\n');
+    await writeFile(
+      root,
+      'eval/.env.example.md',
+      'const api_key = "abcdefghijklmnopqrstuvwxyz";\n',
+    );
+
+    const result = spawnSync(process.execPath, [prepublishCheck], {
+      cwd: root,
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('[SECURITY] Possible API key found in eval/.env.example.md');
+  });
+
+  it('does not stat excluded directories while expanding included package paths', async () => {
+    const root = await makePackageFixture();
+    const packageJson = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf-8'));
+    packageJson.files = ['eval', '!eval/.cache', '!eval/.pytest-basetemp-*', '!eval/**/.pytest*'];
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(packageJson, null, 2));
+    await writeFile(root, 'eval/pyproject.toml', '[project]\nname = "fixture"\n');
+
+    const missingTarget = path.join(root, 'removed-cache-target');
+    await fs.mkdir(missingTarget);
+    await fs.symlink(
+      missingTarget,
+      path.join(root, 'eval/.cache'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await fs.rm(missingTarget, { recursive: true });
+
+    const missingWildcardTarget = path.join(root, 'removed-pytest-target');
+    await fs.mkdir(missingWildcardTarget);
+    await fs.symlink(
+      missingWildcardTarget,
+      path.join(root, 'eval/.pytest-basetemp-broken'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await fs.rm(missingWildcardTarget, { recursive: true });
+
+    const missingNestedTarget = path.join(root, 'removed-nested-pytest-target');
+    await fs.mkdir(missingNestedTarget);
+    await fs.mkdir(path.join(root, 'eval/eval'), { recursive: true });
+    await fs.symlink(
+      missingNestedTarget,
+      path.join(root, 'eval/eval/.pytest-cache-controller-aligned'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await fs.rm(missingNestedTarget, { recursive: true });
+
+    const result = spawnSync(process.execPath, [prepublishCheck], {
+      cwd: root,
+      encoding: 'utf-8',
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain('[SECURITY] No secrets detected. Safe to publish.');
+  });
+
+  it('does not use a broad eval package entry that traverses derived pytest directories', async () => {
+    const packageJson = JSON.parse(await fs.readFile('package.json', 'utf-8')) as {
+      files?: string[];
+    };
+
+    expect(packageJson.files).not.toContain('eval');
+    expect(packageJson.files?.some((entry) => entry.startsWith('!eval'))).toBe(false);
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        'eval/.env.example',
+        'eval/CLAUDE.md',
+        'eval/README.md',
+        'eval/pyproject.toml',
+        'eval/report-html-config.json',
+        'eval/simulator-instruction.md',
+        'eval/langfuse',
+        'eval/langsmith',
+        'eval/local',
+        'eval/scaffold',
+        'eval/schemas',
+      ]),
+    );
+  });
+});

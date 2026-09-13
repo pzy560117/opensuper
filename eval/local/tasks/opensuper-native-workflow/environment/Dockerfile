@@ -1,0 +1,26 @@
+FROM python:3.12-slim
+
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git nodejs npm ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code@latest
+
+RUN pip install --no-cache-dir pyyaml pytest
+
+COPY wordcount.py /workspace/wordcount.py
+COPY test_wordcount.py /workspace/test_wordcount.py
+
+RUN useradd --create-home --shell /bin/bash agent && \
+    mkdir -p /home/agent/.opensuper && \
+    chown -R agent:agent /workspace /home/agent/.opensuper
+USER agent
+ENV HOME=/home/agent
+ENV PYTHONPATH=/workspace
+RUN git config --global user.email "agent@eval.local" && \
+    git config --global user.name "OpenSuper Native Eval Agent" && \
+    git config --global init.defaultBranch master
+
+CMD ["bash"]

@@ -1,0 +1,21 @@
+[metadata]
+name = "generic-skill-smoke"
+description = "Smoke task for evaluating an arbitrary Skill on a simple artifact-producing workflow."
+difficulty = "easy"
+category = "generic"
+tags = ["generic", "skill", "smoke"]
+default_treatments = ["CONTROL"]
+
+[environment]
+description = "Empty workspace for a generic Skill smoke test."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 600
+
+[validation]
+test_scripts = ["test_generic_skill_smoke.py"]
+target_artifacts = ["result.md"]
+timeout = 60
+
+[evaluation]
+profile = "generic"
+expected_artifacts = ["result.md"]

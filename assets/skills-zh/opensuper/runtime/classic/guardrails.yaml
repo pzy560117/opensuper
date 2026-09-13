@@ -1,0 +1,13 @@
+allowedSkills:
+  - opensuper-open
+  - opensuper-design
+  - opensuper-build
+  - opensuper-verify
+  - opensuper-archive
+  - opensuper-hotfix
+  - opensuper-tweak
+allowedAgents: []
+allowedTools: []
+maxIterations: 500
+maxRetriesPerAction: 3
+confirmationRequiredFor: []

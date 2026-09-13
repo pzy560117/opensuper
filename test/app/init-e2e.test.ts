@@ -1,0 +1,3255 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { parse } from 'yaml';
+import { getProjectRegistryPath } from '../../platform/install/project-registry.js';
+import { defaultProjectConfig } from '../../domains/opensuper-native/native-config.js';
+import { stageOpenSpecSkills, unquoteWindowsArg } from '../helpers/openspec-test-utils.js';
+
+vi.mock('child_process', () => ({
+  execFileSync: vi.fn(),
+}));
+
+const mockedExecFileSync = vi.mocked(execFileSync);
+
+vi.mock('@inquirer/prompts', () => ({
+  select: vi.fn(),
+  checkbox: vi.fn(),
+}));
+
+vi.mock('../../app/commands/platform-select-prompt.js', () => ({
+  platformSelectPrompt: vi.fn(),
+}));
+
+vi.mock('../../platform/version/version.js', () => ({
+  printVersionInfo: vi.fn(async (log: (message: string) => void) => {
+    log('  OpenSuper vtest');
+    return {
+      currentVersion: 'test',
+      latestVersion: null,
+      hasUpdate: false,
+      checked: false,
+    };
+  }),
+}));
+
+vi.mock('../../app/cli/opensuper-banner.js', () => ({
+  printOpenSuperBanner: vi.fn(async () => undefined),
+}));
+
+const manifestPath = path.resolve('assets', 'manifest.json');
+const INIT_E2E_TIMEOUT_MS = 60_000;
+
+async function readManifest() {
+  return JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+}
+
+function isNativeInstallSkillPath(skillPath: string): boolean {
+  return (
+    skillPath === 'opensuper/SKILL.md' ||
+    skillPath.startsWith('opensuper-review/') ||
+    skillPath === 'opensuper/scripts/opensuper-entry-runtime.mjs' ||
+    skillPath === 'opensuper/scripts/opensuper-hook-router.mjs' ||
+    skillPath.startsWith('opensuper-native/') ||
+    skillPath.startsWith('opensuper-any/') ||
+    skillPath.startsWith('opensuper-memory/')
+  );
+}
+
+function skillPathsForWorkflow(
+  manifest: { skills: string[] },
+  workflow: 'native' | 'classic' | 'both',
+): string[] {
+  if (workflow === 'both') return manifest.skills;
+  if (workflow === 'native') return manifest.skills.filter(isNativeInstallSkillPath);
+  return manifest.skills.filter((skillPath) => !skillPath.startsWith('opensuper-native/'));
+}
+
+function mockExternalSuccess(options: { openSpecConfig?: 'healthy' | 'missing' | 'corrupt' } = {}) {
+  const openSpecConfig = options.openSpecConfig ?? 'healthy';
+  mockedExecFileSync.mockImplementation((command: unknown, args?: unknown, opts?: unknown) => {
+    const cmd = String(command);
+    const cmdArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+
+    if (
+      (cmd === 'npx' || cmd === 'npx.cmd') &&
+      cmdArgs[0] === 'skills' &&
+      cmdArgs.includes('--agent') &&
+      cmdArgs.includes('claude-code')
+    ) {
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd ?? os.tmpdir();
+      const stagedSkill = cmdArgs.includes('obra/superpowers') ? 'brainstorming' : 'opensuper';
+      const stagedSkillsDir = path.join(cwd, '.claude', 'skills', stagedSkill);
+      mkdirSync(stagedSkillsDir, { recursive: true });
+      writeFileSync(
+        path.join(stagedSkillsDir, 'SKILL.md'),
+        stagedSkill === 'brainstorming' ? '# Superpowers\n' : '# Lingma OpenSuper\n',
+      );
+      return Buffer.from('installed');
+    }
+
+    if ((cmd === 'which' || cmd === 'where') && cmdArgs[0] === 'openspec') {
+      return Buffer.from('/usr/bin/openspec');
+    }
+    if (cmd === 'openspec' && cmdArgs[0] === '--version') {
+      return Buffer.from('1.6.0');
+    }
+    if (cmd === 'openspec' && cmdArgs[0] === 'init') {
+      const targetPath = unquoteWindowsArg(cmdArgs[1]);
+      if (targetPath) {
+        const toolsIndex = cmdArgs.indexOf('--tools');
+        const tools = toolsIndex >= 0 ? cmdArgs[toolsIndex + 1] : undefined;
+        if (tools && tools !== 'none') {
+          stageOpenSpecSkills(targetPath, tools);
+        } else {
+          const openSpecRoot = path.join(targetPath, 'openspec');
+          mkdirSync(path.join(openSpecRoot, 'changes', 'archive'), { recursive: true });
+          if (openSpecConfig === 'healthy') {
+            writeFileSync(path.join(openSpecRoot, 'config.yaml'), 'schema: spec-driven\n');
+          } else if (openSpecConfig === 'corrupt') {
+            writeFileSync(path.join(openSpecRoot, 'config.yaml'), 'schema: [broken\n');
+          }
+        }
+      }
+      return Buffer.from('ok');
+    }
+    if ((cmd === 'npx' || cmd === 'npx.cmd') && cmdArgs[0] === 'skills') {
+      return Buffer.from('installed');
+    }
+    return Buffer.from('');
+  });
+}
+
+async function captureJsonOutput(fn: () => Promise<void>): Promise<Record<string, unknown>> {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = vi.fn((...args: unknown[]) => lines.push(String(args[0])));
+  try {
+    await fn();
+  } finally {
+    console.log = orig;
+  }
+  return JSON.parse(lines.join('\n'));
+}
+
+async function captureTextOutput(fn: () => Promise<void>): Promise<string> {
+  const lines: string[] = [];
+  const errors: string[] = [];
+  const origLog = console.log;
+  const origError = console.error;
+  console.log = vi.fn((...args: unknown[]) => lines.push(args.map(String).join(' ')));
+  console.error = vi.fn((...args: unknown[]) => errors.push(args.map(String).join(' ')));
+  try {
+    await fn();
+  } finally {
+    console.log = origLog;
+    console.error = origError;
+  }
+  return [...lines, ...errors].join('\n');
+}
+
+describe('opensuper init E2E', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = path.join(
+      os.tmpdir(),
+      `opensuper-init-e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    await fs.mkdir(tmpDir, { recursive: true });
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(tmpDir, 'fake-home'));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('offers Native, Classic, and Both with concise user-facing descriptions', async () => {
+    const { workflowChoiceNames } = await import('../../app/commands/init.js');
+
+    expect(workflowChoiceNames('zh')).toEqual([
+      expect.objectContaining({ value: 'native', name: expect.stringContaining('强模型') }),
+      expect.objectContaining({ value: 'classic', name: expect.stringContaining('Spec/TDD') }),
+      expect.objectContaining({ value: 'both', name: expect.stringContaining('两套独立入口') }),
+    ]);
+  });
+
+  it('enables the banner for text output and disables it for JSON output', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { printOpenSuperBanner } = await import('../../app/cli/opensuper-banner.js');
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureTextOutput(() => initCommand(tmpDir, { yes: true, language: 'en' }));
+    expect(printOpenSuperBanner).toHaveBeenLastCalledWith({ enabled: true });
+
+    await captureJsonOutput(() => initCommand(tmpDir, { yes: true, json: true }));
+    expect(printOpenSuperBanner).toHaveBeenLastCalledWith({ enabled: false });
+  });
+
+  it('initializes CodeGraph when JSON init explicitly requests it', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const cmd = String(command);
+      const cmdArgs = Array.isArray(args) ? args.map(String) : [];
+      if (cmd === 'codegraph' && cmdArgs[0] === 'init') {
+        mkdirSync(path.join(tmpDir, '.codegraph'), { recursive: true });
+        writeFileSync(path.join(tmpDir, '.codegraph', 'codegraph.db'), '');
+        return Buffer.from('initialized');
+      }
+      if (cmd === 'codegraph' && cmdArgs[0] === 'status') {
+        return JSON.stringify({
+          initialized: true,
+          pendingChanges: { added: 0, modified: 0, removed: 0 },
+          index: { state: 'complete', reindexRecommended: false, pendingRefs: 0 },
+        });
+      }
+      return externalSuccess?.(command, args, options) ?? Buffer.from('');
+    });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const output = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        codegraph: 'init',
+      }),
+    );
+
+    expect(output.codegraph).toMatchObject({
+      requested: 'init',
+      status: 'index_ready',
+      cliStatus: 'installed',
+      indexStatus: 'current',
+      mcpStatus: expect.any(String),
+      agents: expect.any(Array),
+      effectiveForAgent: expect.any(Object),
+      repairable: false,
+      remediation: null,
+    });
+    expect(mockedExecFileSync.mock.calls).toContainEqual(
+      expect.arrayContaining(['codegraph', ['init', '-i']]),
+    );
+    expect(
+      mockedExecFileSync.mock.calls.some(
+        ([command, args]) =>
+          String(command) === 'codegraph' &&
+          Array.isArray(args) &&
+          args.map(String).join(' ') === 'install --yes',
+      ),
+    ).toBe(false);
+  });
+
+  it('records an explicit CodeGraph skip without invoking CodeGraph in JSON mode', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const output = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        codegraph: 'skip',
+      }),
+    );
+
+    expect(output.codegraph).toMatchObject({
+      requested: 'skip',
+      status: 'skipped',
+      cliStatus: 'skipped',
+      indexStatus: 'skipped',
+      mcpStatus: 'not_detected',
+      agents: [],
+      effectiveForAgent: {},
+      repairable: false,
+      remediation: null,
+      detail: 'CodeGraph setup explicitly skipped',
+    });
+    expect(mockedExecFileSync.mock.calls.some(([command]) => String(command) === 'codegraph')).toBe(
+      false,
+    );
+  });
+
+  it('waits for the banner before printing version info', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    let resolveBanner!: () => void;
+    const bannerDone = new Promise<void>((resolve) => {
+      resolveBanner = resolve;
+    });
+    const { printOpenSuperBanner } = await import('../../app/cli/opensuper-banner.js');
+    const { printVersionInfo } = await import('../../platform/version/version.js');
+    vi.mocked(printOpenSuperBanner).mockImplementationOnce(() => bannerDone);
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const initPromise = captureTextOutput(() => initCommand(tmpDir, { yes: true, language: 'en' }));
+    await vi.waitFor(() => expect(printOpenSuperBanner).toHaveBeenCalledWith({ enabled: true }));
+    expect(printVersionInfo).not.toHaveBeenCalled();
+
+    resolveBanner();
+    await initPromise;
+
+    expect(vi.mocked(printOpenSuperBanner).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(printVersionInfo).mock.invocationCallOrder[0],
+    );
+  });
+
+  it(
+    'initializes a genuinely new project as self-contained Native with --yes --json',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() => initCommand(tmpDir, { yes: true, json: true }));
+
+      expect(result.projectPath).toBe(tmpDir);
+      expect(result.scope).toBe('project');
+      expect(result.language).toBe('en');
+      expect(result.selectedPlatforms).toContain('claude');
+      expect(result.workingDirsCreated).toBe(true);
+      expect(result).toMatchObject({
+        workflow: 'native',
+        workflowSource: 'new-project-default',
+        projectConfigCreated: true,
+        nativeArtifactRoot: 'docs',
+      });
+
+      const claudeResult = (
+        result.results as {
+          platform: string;
+          opensuper: string;
+          openspec: string;
+          superpowers: string;
+        }[]
+      ).find((r) => r.platform === 'claude');
+      expect(claudeResult?.opensuper).toBe('installed');
+      expect(claudeResult?.openspec).toBe('skipped');
+      expect(claudeResult?.superpowers).toBe('skipped');
+
+      const manifest = await readManifest();
+      const managedSkillPaths = [
+        ...manifest.skills,
+        ...(manifest.internalSkills ?? []),
+      ] as string[];
+      for (const skillPath of managedSkillPaths.filter(isNativeInstallSkillPath)) {
+        const dest = path.join(tmpDir, '.claude', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+      for (const skillPath of managedSkillPaths.filter(
+        (skillPath) => !isNativeInstallSkillPath(skillPath),
+      )) {
+        const dest = path.join(tmpDir, '.claude', 'skills', skillPath);
+        await expect(fs.access(dest)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+
+      await expect(fs.stat(path.join(tmpDir, 'docs', 'opensuper', 'specs'))).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.join(tmpDir, 'docs', 'opensuper', 'changes')),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.join(tmpDir, 'docs', 'opensuper', 'archive')),
+      ).resolves.toBeDefined();
+      await expect(fs.access(path.join(tmpDir, 'opensuper'))).rejects.toThrow();
+      await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers'))).rejects.toThrow();
+      await expect(fs.stat(path.join(tmpDir, '.opensuper', 'config.yaml'))).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.join(tmpDir, '.claude', 'rules', 'opensuper-workflow-guard.md')),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.join(tmpDir, '.claude', 'settings.local.json')),
+      ).resolves.toBeDefined();
+
+      const projectConfig = await fs.readFile(
+        path.join(tmpDir, '.opensuper', 'config.yaml'),
+        'utf8',
+      );
+      expect(projectConfig).toContain('default_workflow: native');
+      expect(projectConfig).toContain('artifact_root: docs');
+      expect(projectConfig).toContain('clarification_mode: batch');
+      expect(projectConfig).not.toMatch(/^\s+snapshot:/mu);
+      await expect(fs.readFile(path.join(tmpDir, '.gitignore'), 'utf8')).resolves.toContain(
+        '!/.opensuper/config.yaml',
+      );
+      expect(mockedExecFileSync.mock.calls.some((call) => String(call[0]) === 'openspec')).toBe(
+        false,
+      );
+      expect(
+        mockedExecFileSync.mock.calls.some(
+          (call) =>
+            (String(call[0]) === 'npx' || String(call[0]) === 'npx.cmd') &&
+            Array.isArray(call[1]) &&
+            call[1].includes('skills'),
+        ),
+      ).toBe(false);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it('preserves a legacy Classic project and its dependency-aware setup by default', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, '.opensuper'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'language: en\n', 'utf8');
+    await fs.mkdir(path.join(tmpDir, 'openspec'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, 'openspec', 'config.yaml'),
+      'schema: spec-driven\n',
+      'utf8',
+    );
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() => initCommand(tmpDir, { yes: true, json: true }));
+
+    expect(result).toMatchObject({
+      workflow: 'classic',
+      workflowSource: 'legacy-project',
+      projectConfigCreated: false,
+    });
+    await expect(fs.access(path.join(tmpDir, 'opensuper.config.yaml'))).rejects.toThrow();
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers', 'specs'))).resolves.toBeDefined();
+    await expect(
+      fs.access(path.join(tmpDir, '.claude', 'rules', 'opensuper-workflow-guard.md')),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(tmpDir, '.claude', 'settings.local.json')),
+    ).resolves.toBeUndefined();
+    expect(mockedExecFileSync.mock.calls.some((call) => String(call[0]) === 'openspec')).toBe(true);
+  });
+
+  it('upgrades an incompatible OpenSpec CLI before non-interactive Classic setup', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    let openSpecVersion = '1.3.1';
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const cmd = String(command);
+      const cmdArgs = Array.isArray(args) ? args.map(String) : [];
+      if (cmd === 'openspec' && cmdArgs[0] === '--version') {
+        return Buffer.from(openSpecVersion);
+      }
+      if (
+        (cmd === 'npm' || cmd === 'npm.cmd') &&
+        cmdArgs.join(' ') === 'install -g @fission-ai/openspec@latest'
+      ) {
+        openSpecVersion = '1.5.0';
+        return Buffer.from('upgraded');
+      }
+      return externalSuccess?.(command, args, options) ?? Buffer.from('');
+    });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'classic', language: 'en' }),
+    );
+
+    expect(result).toMatchObject({ status: 'complete' });
+    expect(
+      mockedExecFileSync.mock.calls.some(
+        ([command, args]) =>
+          (String(command) === 'npm' || String(command) === 'npm.cmd') &&
+          Array.isArray(args) &&
+          args.map(String).join(' ') === 'install -g @fission-ai/openspec@latest',
+      ),
+    ).toBe(true);
+  });
+
+  it('supports an explicit Native artifact root through the main init command', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'native',
+        artifactRoot: 'docs',
+        installMode: 'symlink',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      workflow: 'native',
+      workflowSource: 'explicit-option',
+      projectConfigCreated: true,
+      nativeArtifactRoot: 'docs',
+    });
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'opensuper', 'changes'))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(tmpDir, 'opensuper'))).rejects.toThrow();
+    await expect(fs.stat(path.join(tmpDir, '.opensuper'))).resolves.toBeDefined();
+  });
+
+  it('initializes Native and Classic independently while defaulting /opensuper to Native', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      workflow: 'native',
+      initializedWorkflows: ['native', 'classic'],
+      nativeArtifactRoot: 'docs',
+    });
+    const config = await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8');
+    expect(config).toContain('default_workflow: native');
+    expect(config).toContain('- native');
+    expect(config).toContain('- classic');
+    expect(config).toContain('clarification_mode: batch');
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'opensuper', 'changes'))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers', 'specs'))).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(tmpDir, '.claude', 'rules', 'opensuper-workflow-guard.md')),
+    ).resolves.toBeDefined();
+    for (const skill of [
+      'opensuper-any',
+      'opensuper-native',
+      'opensuper-classic',
+      'opensuper-open',
+    ]) {
+      await expect(
+        fs.access(path.join(tmpDir, '.claude', 'skills', skill, 'SKILL.md')),
+      ).resolves.toBeUndefined();
+    }
+    await expect(
+      fs.access(path.join(tmpDir, '.opensuper', 'current-change.json')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('installs Ambient Resume instructions for Classic-only project init', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# User\n\nKeep this.\n', 'utf8');
+    await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), '# User\n\nAlso keep this.\n', 'utf8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'classic', language: 'en' }),
+    );
+
+    expect(result).toMatchObject({
+      workflow: 'classic',
+      initializedWorkflows: ['classic'],
+    });
+    const agents = await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8');
+    const claude = await fs.readFile(path.join(tmpDir, 'CLAUDE.md'), 'utf8');
+    for (const content of [agents, claude]) {
+      expect(content).toContain('<opensuper-ambient-resume>');
+      expect(content).toContain('opensuper resume-probe . --stdin --json');
+    }
+    expect(agents).toContain('# User\n\nKeep this.');
+    expect(claude).toContain('# User\n\nAlso keep this.');
+  });
+
+  it('adds Classic with the docs layout when a Native-only project is reinitialized as Both', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'native', language: 'en' }),
+    );
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'both', language: 'en' }),
+    );
+    const config = parse(
+      await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8'),
+    ) as {
+      workflows?: string[];
+      classic?: { artifact_layout?: string };
+    };
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      projectConfigCreated: false,
+      projectConfigUpdated: true,
+    });
+    expect(config.workflows).toEqual(['native', 'classic']);
+    expect(config.classic?.artifact_layout).toBe('docs');
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'openspec'))).resolves.toBeDefined();
+    await expect(fs.access(path.join(tmpDir, 'openspec'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('adopts a legacy Classic root when the project configuration is missing', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, 'openspec', 'changes', 'archive'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'classic',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      classicArtifactLayout: 'legacy',
+      projectConfigCreated: true,
+    });
+    const config = parse(
+      await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8'),
+    ) as {
+      classic?: { artifact_layout?: string };
+    };
+    expect(config.classic?.artifact_layout).toBe('legacy');
+    await expect(fs.stat(path.join(tmpDir, 'openspec', 'config.yaml'))).resolves.toBeDefined();
+    await expect(fs.access(path.join(tmpDir, 'docs', 'openspec'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('repairs missing Native defaults and removes legacy snapshot config while initializing Both', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, 'openspec', 'changes', 'archive'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, '.opensuper'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.opensuper', 'config.yaml'),
+      [
+        'schema: opensuper.project.v1',
+        'default_workflow: native',
+        'workflows: [native]',
+        'native:',
+        '  language: en',
+        '  snapshot:',
+        '    include: ["**/*"]',
+        '    exclude:',
+        '      - custom/init-generated/**',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      classicArtifactLayout: 'legacy',
+      projectConfigCreated: false,
+      projectConfigUpdated: true,
+    });
+    const config = parse(
+      await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8'),
+    ) as {
+      native?: { artifact_root?: string; snapshot?: unknown };
+      classic?: { artifact_layout?: string };
+    };
+    expect(config.native?.artifact_root).toBe('docs');
+    expect(config.native?.snapshot).toBeUndefined();
+    expect(config.classic?.artifact_layout).toBe('legacy');
+    await expect(fs.stat(path.join(tmpDir, 'openspec', 'config.yaml'))).resolves.toBeDefined();
+    await expect(fs.access(path.join(tmpDir, 'docs', 'openspec'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('preserves both configured workflows when non-interactive init is repeated without --workflow', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'both', language: 'en' }),
+    );
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, language: 'en', overwrite: true }),
+    );
+    const config = parse(
+      await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8'),
+    ) as {
+      default_workflow?: string;
+      workflows?: string[];
+      native?: unknown;
+      classic?: unknown;
+    };
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      initializedWorkflows: ['native', 'classic'],
+    });
+    expect(config).toMatchObject({
+      default_workflow: 'native',
+      workflows: ['native', 'classic'],
+      native: expect.any(Object),
+      classic: expect.any(Object),
+    });
+  });
+
+  it('uninstalls OpenSuper-owned directories after real Classic init while preserving the OpenSpec root', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+    const { removeWorkingDirs } = await import('../../domains/skill/uninstall.js');
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'classic', language: 'en' }),
+    );
+    const openSpecConfig = path.join(tmpDir, 'docs', 'openspec', 'config.yaml');
+    await expect(fs.readFile(openSpecConfig, 'utf8')).resolves.toContain('schema: spec-driven');
+
+    await expect(removeWorkingDirs(tmpDir)).resolves.toEqual({ removed: 1, failed: 0 });
+
+    await expect(fs.readFile(openSpecConfig, 'utf8')).resolves.toContain('schema: spec-driven');
+    await expect(fs.stat(path.join(tmpDir, '.opensuper'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('removes the working directories created by a fresh Native init', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+    const { removeWorkingDirs } = await import('../../domains/skill/uninstall.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'native',
+        language: 'en',
+        codegraph: 'skip',
+      }),
+    );
+    expect(result.status).toBe('complete');
+    await expect(removeWorkingDirs(tmpDir)).resolves.toEqual({ removed: 1, failed: 0 });
+    await expect(fs.stat(path.join(tmpDir, '.opensuper'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('preserves global workflows and policy settings when init does not explicitly replace them', async () => {
+    mockExternalSuccess();
+    const fakeHome = path.join(tmpDir, 'global-preservation');
+    await fs.mkdir(path.join(fakeHome, '.opensuper'), { recursive: true });
+    vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    const configPath = path.join(fakeHome, '.opensuper', 'config.yaml');
+    await fs.writeFile(
+      configPath,
+      [
+        'schema: opensuper.global.v1',
+        'default_workflow: classic',
+        'workflows: [native, classic]',
+        'ambient_resume: false',
+        'memory:',
+        '  learning: false',
+        '  retrieval: false',
+        'native:',
+        '  artifact_root: docs',
+        '  language: en',
+        'classic:',
+        '  artifact_layout: docs',
+        '  language: en',
+        '  context_compression: beta',
+        '  review_mode: standard',
+        '  auto_transition: false',
+        '',
+      ].join('\n'),
+    );
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'global',
+        platform: 'codex',
+        language: 'en',
+      }),
+    );
+    expect(result.status).toBe('complete');
+    expect(parse(await fs.readFile(configPath, 'utf8'))).toMatchObject({
+      default_workflow: 'classic',
+      workflows: ['native', 'classic'],
+      ambient_resume: false,
+      memory: { learning: false, retrieval: false },
+      classic: { context_compression: 'beta', auto_transition: false },
+    });
+    const initCall = mockedExecFileSync.mock.calls.find(
+      ([command, args]) => command === 'openspec' && Array.isArray(args) && args.includes('init'),
+    );
+    expect(initCall).toBeDefined();
+    expect((initCall?.[2] as { stdio?: unknown }).stdio).toEqual(['inherit', 2, 'pipe']);
+  });
+
+  it('keeps a Classic-only config lossless when reinitializing it as Both', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'classic', language: 'en' }),
+    );
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const classicOnly = await fs.readFile(configPath, 'utf8');
+    expect(parse(classicOnly)).toMatchObject({
+      default_workflow: 'classic',
+      workflows: ['classic'],
+      classic: { artifact_layout: 'docs' },
+    });
+    expect(parse(classicOnly)).not.toHaveProperty('native');
+    await fs.writeFile(
+      configPath,
+      classicOnly
+        .replace('classic:\n', 'classic:\n  custom_classic: keep-classic\n')
+        .concat('custom_top: keep-top\n'),
+      'utf8',
+    );
+
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+    const updated = parse(await fs.readFile(configPath, 'utf8'));
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      projectConfigCreated: false,
+      projectConfigUpdated: true,
+    });
+    expect(updated).toMatchObject({
+      default_workflow: 'native',
+      workflows: ['native', 'classic'],
+      native: { artifact_root: 'docs' },
+      classic: {
+        artifact_layout: 'docs',
+        custom_classic: 'keep-classic',
+      },
+      custom_top: 'keep-top',
+    });
+  });
+
+  it('keeps the prior Classic-only config when the final Both config write fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'classic', language: 'en' }),
+    );
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const classicOnly = await fs.readFile(configPath, 'utf8');
+    expect(parse(classicOnly)).toMatchObject({
+      default_workflow: 'classic',
+      workflows: ['classic'],
+    });
+
+    const configWriter = await import('../../domains/workflow-contract/project-config-writer.js');
+    vi.spyOn(configWriter, 'writeWorkflowProjectConfig').mockRejectedValueOnce(
+      new Error('config commit failed'),
+    );
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      projectConfigCreated: false,
+      projectConfigUpdated: false,
+      failures: [
+        expect.objectContaining({
+          component: 'Finalization',
+          reason: 'config commit failed',
+        }),
+      ],
+    });
+    expect(await fs.readFile(configPath, 'utf8')).toBe(classicOnly);
+  });
+
+  it('preserves the owned Classic root and journal when a fresh config commit fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'docs', 'keep.txt'), 'keep\n');
+    const configWriter = await import('../../domains/workflow-contract/project-config-writer.js');
+    vi.spyOn(configWriter, 'writeWorkflowProjectConfig').mockRejectedValueOnce(
+      new Error('config commit failed'),
+    );
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'classic',
+        language: 'en',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      projectConfigCreated: false,
+      projectConfigUpdated: false,
+    });
+    await expect(fs.readFile(path.join(tmpDir, 'docs', 'keep.txt'), 'utf8')).resolves.toBe(
+      'keep\n',
+    );
+    await expect(fs.stat(path.join(tmpDir, 'docs', 'openspec'))).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(tmpDir, '.opensuper', 'classic-init-ownership.json')),
+    ).resolves.toBeDefined();
+  });
+
+  it('does not overwrite config drift introduced after Classic directories are created', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'native', language: 'en' }),
+    );
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const projectInstructions = await import('../../domains/skill/project-instructions.js');
+    const syncInstructions = projectInstructions.syncOpenSuperProjectInstructions;
+    let drifted = false;
+    vi.spyOn(projectInstructions, 'syncOpenSuperProjectInstructions').mockImplementation(
+      async (...args) => {
+        await syncInstructions(...args);
+        if (!drifted) {
+          const source = await fs.readFile(configPath, 'utf8');
+          await fs.writeFile(
+            configPath,
+            source.replace('artifact_root: docs', 'artifact_root: artifacts'),
+            'utf8',
+          );
+          drifted = true;
+        }
+      },
+    );
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+    const driftedConfig = parse(await fs.readFile(configPath, 'utf8'));
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      projectConfigCreated: false,
+      projectConfigUpdated: false,
+      failures: [
+        expect.objectContaining({
+          component: 'Finalization',
+          reason: expect.stringMatching(
+            /project config changed during Classic layout initialization/iu,
+          ),
+        }),
+      ],
+    });
+    expect(driftedConfig).toMatchObject({
+      default_workflow: 'native',
+      workflows: ['native'],
+      native: { artifact_root: 'artifacts' },
+    });
+    expect(driftedConfig).not.toHaveProperty('classic');
+  });
+
+  it('does not use a stale workflow decision when config changes before Classic preflight', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'native', language: 'en' }),
+    );
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const platformInstall = await import('../../domains/skill/platform-install.js');
+    const prepareNativeTarget = platformInstall.prepareNativeSkillInstallTarget;
+    let drifted = false;
+    vi.spyOn(platformInstall, 'prepareNativeSkillInstallTarget').mockImplementation(
+      async (...args) => {
+        await prepareNativeTarget(...args);
+        if (!drifted) {
+          const source = await fs.readFile(configPath, 'utf8');
+          await fs.writeFile(
+            configPath,
+            source.replace('artifact_root: docs', 'artifact_root: artifacts'),
+            'utf8',
+          );
+          drifted = true;
+        }
+      },
+    );
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+    const driftedConfig = parse(await fs.readFile(configPath, 'utf8'));
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      projectConfigCreated: false,
+      projectConfigUpdated: false,
+    });
+    expect(result.failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: expect.stringMatching(
+            /project config changed (?:after the workflow decision|before commit)/iu,
+          ),
+        }),
+      ]),
+    );
+    expect(driftedConfig).toMatchObject({
+      default_workflow: 'native',
+      workflows: ['native'],
+      native: { artifact_root: 'artifacts' },
+    });
+    expect(driftedConfig).not.toHaveProperty('classic');
+    expect(
+      mockedExecFileSync.mock.calls.filter(
+        ([command, args]) =>
+          String(command) === 'openspec' && Array.isArray(args) && args.map(String)[0] === 'init',
+      ),
+    ).toHaveLength(0);
+    await expect(fs.access(path.join(tmpDir, 'docs', 'openspec'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('does not update an existing config when artifact-root OpenSpec init fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'native', language: 'en' }),
+    );
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const configBefore = await fs.readFile(configPath);
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const commandArgs = Array.isArray(args) ? args.map(String) : [];
+      const toolsIndex = commandArgs.indexOf('--tools');
+      if (
+        String(command) === 'openspec' &&
+        commandArgs[0] === 'init' &&
+        toolsIndex >= 0 &&
+        commandArgs[toolsIndex + 1] === 'none'
+      ) {
+        throw new Error('artifact root init failed');
+      }
+      return externalSuccess?.(command, args, options);
+    });
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      projectConfigCreated: false,
+      projectConfigUpdated: false,
+      failures: [
+        expect.objectContaining({
+          component: 'OpenSpec',
+          reason: expect.stringContaining('artifact root init failed'),
+        }),
+      ],
+    });
+    await expect(fs.readFile(configPath)).resolves.toEqual(configBefore);
+  });
+
+  it('reuses the Classic permit and reports a partial failure when config drifts during OpenSpec init', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'native', language: 'en' }),
+    );
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    let drifted = false;
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const commandArgs = Array.isArray(args) ? args.map(String) : [];
+      if (String(command) === 'openspec' && commandArgs[0] === 'init' && !drifted) {
+        const source = readFileSync(configPath, 'utf8');
+        writeFileSync(
+          configPath,
+          source.replace('artifact_root: docs', 'artifact_root: artifacts'),
+          'utf8',
+        );
+        drifted = true;
+      }
+      return externalSuccess?.(command, args, options);
+    });
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+    const driftedConfig = parse(await fs.readFile(configPath, 'utf8'));
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      projectConfigCreated: false,
+      projectConfigUpdated: false,
+    });
+    expect(result.failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          component: 'OpenSpec',
+          reason: expect.stringMatching(/partial failure.*project config changed/iu),
+        }),
+      ]),
+    );
+    expect(driftedConfig).toMatchObject({
+      default_workflow: 'native',
+      workflows: ['native'],
+      native: { artifact_root: 'artifacts' },
+    });
+    await expect(fs.access(path.join(tmpDir, 'docs', 'openspec'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it.each(['missing', 'corrupt'] as const)(
+    'does not commit the project config when OpenSpec exits successfully with a %s config',
+    async (openSpecConfig) => {
+      mockExternalSuccess({ openSpecConfig });
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          workflow: 'classic',
+          language: 'en',
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: 'incomplete',
+        projectConfigCreated: false,
+        projectConfigUpdated: false,
+      });
+      expect(result.failures).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            component: 'OpenSpec',
+            reason: expect.stringMatching(/OpenSpec root is unhealthy/iu),
+          }),
+        ]),
+      );
+      await expect(fs.access(path.join(tmpDir, '.opensuper', 'config.yaml'))).rejects.toMatchObject(
+        {
+          code: 'ENOENT',
+        },
+      );
+    },
+  );
+
+  it('initializes Classic with a config-bound permit when every OpenSpec asset is skipped', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'native', language: 'en' }),
+    );
+    await fs.mkdir(path.join(tmpDir, '.claude', 'skills', 'openspec-propose'), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'skills', 'openspec-propose', 'SKILL.md'),
+      '# OpenSpec\n',
+      'utf8',
+    );
+    mockedExecFileSync.mockClear();
+    mockExternalSuccess();
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'both',
+        language: 'en',
+        skipExisting: true,
+      }),
+    );
+    const config = parse(await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8'));
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      projectConfigUpdated: true,
+      classicArtifactLayout: 'docs',
+    });
+    expect(config).toMatchObject({
+      workflows: ['native', 'classic'],
+      classic: { artifact_layout: 'docs' },
+    });
+    expect(
+      mockedExecFileSync.mock.calls.some(
+        ([command, args]) =>
+          String(command) === 'openspec' && Array.isArray(args) && args.map(String)[0] === 'init',
+      ),
+    ).toBe(true);
+    expect(
+      mockedExecFileSync.mock.calls.filter(
+        ([command, args]) =>
+          String(command) === 'openspec' && Array.isArray(args) && args.map(String)[0] === 'init',
+      ),
+    ).toHaveLength(1);
+    expect(
+      mockedExecFileSync.mock.calls.find(
+        ([command, args]) =>
+          String(command) === 'openspec' && Array.isArray(args) && args.map(String)[0] === 'init',
+      )?.[1],
+    ).toEqual(expect.arrayContaining(['--tools', 'none']));
+    await expect(
+      fs.readFile(path.join(tmpDir, 'docs', 'openspec', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('schema: spec-driven');
+  });
+
+  it.each([
+    {
+      label: 'Native',
+      workflow: 'native' as const,
+      artifactRoot: undefined,
+      included: ['docs/opensuper/'],
+      excluded: ['docs/superpowers/'],
+    },
+    {
+      label: 'Native with a custom root',
+      workflow: 'native' as const,
+      artifactRoot: 'artifacts',
+      included: ['artifacts/opensuper/'],
+      excluded: ['docs/opensuper/', 'docs/superpowers/'],
+    },
+    {
+      label: 'Classic',
+      workflow: 'classic' as const,
+      artifactRoot: undefined,
+      included: ['docs/superpowers/specs/', 'docs/superpowers/plans/'],
+      excluded: ['docs/opensuper/'],
+    },
+    {
+      label: 'Both',
+      workflow: 'both' as const,
+      artifactRoot: undefined,
+      included: ['docs/opensuper/', 'docs/superpowers/specs/', 'docs/superpowers/plans/'],
+      excluded: [],
+    },
+  ])(
+    'prints only the actual $label workspace paths in the text summary',
+    async ({ workflow, artifactRoot, included, excluded }) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const output = (
+        await captureTextOutput(() =>
+          initCommand(tmpDir, {
+            yes: true,
+            workflow,
+            artifactRoot,
+            language: 'en',
+          }),
+        )
+      ).replaceAll('\\', '/');
+
+      for (const expected of included) expect(output).toContain(expected);
+      for (const unexpected of excluded) expect(output).not.toContain(unexpected);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it.each([
+    { workflow: 'classic' as const, migrated: true },
+    { workflow: 'native' as const, migrated: false },
+  ])(
+    'migrates Classic v1 selection only when init enables Classic ($workflow)',
+    async ({ workflow, migrated }) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+      const selectionPath = path.join(tmpDir, '.opensuper', 'current-change.json');
+      await fs.mkdir(path.dirname(selectionPath), { recursive: true });
+      await fs.writeFile(
+        selectionPath,
+        `${JSON.stringify({ version: 1, change: 'legacy-change', branch: null })}\n`,
+      );
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, workflow, language: 'en' }),
+      );
+
+      const selection = JSON.parse(await fs.readFile(selectionPath, 'utf8'));
+      expect(selection).toEqual(
+        migrated
+          ? {
+              schema: 'opensuper.selection.v2',
+              workflow: 'classic',
+              change: 'legacy-change',
+              branch: null,
+            }
+          : { version: 1, change: 'legacy-change', branch: null },
+      );
+    },
+  );
+
+  it('materializes an old symlink installation before Native copy without writing through it', async () => {
+    mockExternalSuccess();
+    const centralSkills = path.join(tmpDir, '.opensuper', 'skills', 'skills');
+    const centralOpenSuper = path.join(centralSkills, 'opensuper');
+    const platformSkills = path.join(tmpDir, '.claude', 'skills');
+    await fs.mkdir(centralOpenSuper, { recursive: true });
+    await fs.writeFile(
+      path.join(centralOpenSuper, 'SKILL.md'),
+      '# Central stale OpenSuper\n',
+      'utf8',
+    );
+    await fs.mkdir(path.dirname(platformSkills), { recursive: true });
+    await fs.symlink(
+      centralSkills,
+      platformSkills,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        workflow: 'native',
+        installMode: 'symlink',
+      }),
+    );
+
+    expect(result).toMatchObject({ workflow: 'native', projectConfigCreated: true });
+    expect((await fs.lstat(platformSkills)).isSymbolicLink()).toBe(false);
+    await expect(
+      fs.readFile(path.join(platformSkills, 'opensuper', 'SKILL.md'), 'utf8'),
+    ).resolves.toContain('opensuper workflow resolve . --activate --json');
+    await expect(fs.readFile(path.join(centralOpenSuper, 'SKILL.md'), 'utf8')).resolves.toBe(
+      '# Central stale OpenSuper\n',
+    );
+    await expect(
+      fs.access(path.join(centralSkills, 'opensuper-native', 'SKILL.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['native', 'classic'] as const)(
+    'installs project-scoped %s assets even when OpenSuper is installed globally',
+    async (workflow) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+      await fs.mkdir(path.join(os.homedir(), '.claude', 'skills', 'opensuper'), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(os.homedir(), '.claude', 'skills', 'opensuper', 'SKILL.md'),
+        '# global OpenSuper\n',
+        'utf8',
+      );
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, scope: 'project', workflow }),
+      );
+
+      const claudeResult = (result.results as { platform: string; opensuper: string }[]).find(
+        (candidate) => candidate.platform === 'claude',
+      );
+      expect(claudeResult?.opensuper).toBe('installed');
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, workflow)) {
+        await expect(
+          fs.access(path.join(tmpDir, '.claude', 'skills', skillPath)),
+        ).resolves.toBeUndefined();
+      }
+      const excludedPaths = manifest.skills.filter(
+        (skillPath: string) => !skillPathsForWorkflow(manifest, workflow).includes(skillPath),
+      );
+      for (const skillPath of excludedPaths) {
+        await expect(
+          fs.access(path.join(tmpDir, '.claude', 'skills', skillPath)),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    },
+  );
+
+  it('fills missing workflow entries without overwriting an existing OpenSuper Skill', async () => {
+    mockExternalSuccess();
+    const existingSkill = path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md');
+    await fs.mkdir(path.dirname(existingSkill), { recursive: true });
+    const bundledEntry = await fs.readFile(
+      path.resolve('assets', 'skills', 'opensuper', 'SKILL.md'),
+      'utf8',
+    );
+    await fs.writeFile(existingSkill, bundledEntry, 'utf8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        workflow: 'native',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      workflow: 'native',
+      projectConfigCreated: true,
+      results: [expect.objectContaining({ platform: 'claude', opensuper: 'installed' })],
+    });
+    await expect(fs.readFile(existingSkill, 'utf8')).resolves.toBe(bundledEntry);
+    await expect(
+      fs.access(path.join(tmpDir, '.claude', 'skills', 'opensuper-native', 'SKILL.md')),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(tmpDir, '.claude', 'skills', 'opensuper-classic', 'SKILL.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not activate Native with --skip-existing when required Native assets are missing', async () => {
+    mockExternalSuccess();
+    const skillsRoot = path.join(tmpDir, '.claude', 'skills');
+    const preinstalledFiles = [
+      'opensuper/SKILL.md',
+      'opensuper/scripts/opensuper-entry-runtime.mjs',
+    ];
+
+    for (const relativePath of preinstalledFiles) {
+      const destination = path.join(skillsRoot, ...relativePath.split('/'));
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.copyFile(path.resolve('assets', 'skills', ...relativePath.split('/')), destination);
+    }
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    await expect(
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        workflow: 'native',
+        skipExisting: true,
+      }),
+    ).rejects.toThrow(/required Native asset opensuper-any\/SKILL\.md is missing/u);
+
+    await expect(fs.access(path.join(tmpDir, '.opensuper', 'config.yaml'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fs.access(path.join(tmpDir, 'opensuper'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('does not activate Native over a mismatched existing /opensuper entry without overwrite', async () => {
+    mockExternalSuccess();
+    const existingSkill = path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md');
+    await fs.mkdir(path.dirname(existingSkill), { recursive: true });
+    await fs.writeFile(existingSkill, '# User-pinned legacy OpenSuper\n', 'utf8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    await expect(
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        workflow: 'native',
+      }),
+    ).rejects.toThrow(/differs from the bundled routing contract.*--overwrite/iu);
+
+    await expect(fs.readFile(existingSkill, 'utf8')).resolves.toBe(
+      '# User-pinned legacy OpenSuper\n',
+    );
+    await expect(fs.access(path.join(tmpDir, '.opensuper', 'config.yaml'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fs.access(path.join(tmpDir, 'opensuper'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('fails closed on malformed project config before installer writes', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, '.opensuper'), { recursive: true });
+    const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+    const malformed = 'schema: [broken\n';
+    await fs.writeFile(configPath, malformed, 'utf8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    await expect(initCommand(tmpDir, { yes: true, json: true, scope: 'project' })).rejects.toThrow(
+      /Invalid \.opensuper\/config\.yaml/u,
+    );
+
+    await expect(fs.readFile(configPath, 'utf8')).resolves.toBe(malformed);
+    await expect(fs.access(path.join(tmpDir, '.claude', 'skills'))).rejects.toThrow();
+    await expect(fs.access(path.join(tmpDir, 'opensuper'))).rejects.toThrow();
+    await expect(fs.access(path.join(tmpDir, '.opensuper'))).resolves.toBeUndefined();
+    expect(mockedExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('uses detected platforms without prompting in JSON mode', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        json: true,
+        scope: 'project',
+        language: 'en',
+        installMode: 'copy',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      workflow: 'native',
+      projectConfigCreated: true,
+      selectedPlatforms: ['codex'],
+      results: [expect.objectContaining({ platform: 'codex', opensuper: 'installed' })],
+    });
+    expect(platformSelectPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each(['native', 'classic', 'both'] as const)(
+    'initializes only the explicit platform target for %s',
+    async (workflow) => {
+      mockExternalSuccess();
+      const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          platform: 'codex',
+          workflow,
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: 'complete',
+        selectedPlatforms: ['codex'],
+        results: [expect.objectContaining({ platform: 'codex', opensuper: 'installed' })],
+      });
+      expect(platformSelectPrompt).not.toHaveBeenCalled();
+      await expect(fs.access(path.join(tmpDir, 'CLAUDE.md'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(
+        fs.access(path.join(tmpDir, '.agents', 'skills', 'opensuper', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.claude', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it('initializes project-scoped custom platform workflow assets', async () => {
+    mockExternalSuccess();
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        platform: 'test',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      selectedPlatforms: ['test'],
+      results: [expect.objectContaining({ platform: 'test', opensuper: 'installed' })],
+    });
+    await expect(
+      fs.access(path.join(tmpDir, '.test', 'skills', 'opensuper', 'SKILL.md')),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(
+        path.join(tmpDir, '.test', 'skills', 'opensuper', 'scripts', 'opensuper-hook-router.mjs'),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(tmpDir, '.test', 'rules', 'opensuper-workflow-guard.md')),
+    ).resolves.toBeUndefined();
+    const settings = JSON.parse(
+      await fs.readFile(path.join(tmpDir, '.test', 'settings.local.json'), 'utf8'),
+    ) as { hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> } };
+    expect(JSON.stringify(settings.hooks)).toContain('opensuper-hook-router.mjs');
+  });
+
+  it('applies workflow selection to an explicit custom platform target', async () => {
+    mockExternalSuccess();
+    const manifest = await readManifest();
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        platform: 'test',
+        workflow: 'native',
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'complete', selectedPlatforms: ['test'] });
+    for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+      await expect(
+        fs.access(path.join(tmpDir, '.test', 'skills', skillPath)),
+      ).resolves.toBeUndefined();
+    }
+    const excludedPaths = manifest.skills.filter(
+      (skillPath: string) => !skillPathsForWorkflow(manifest, 'native').includes(skillPath),
+    );
+    for (const skillPath of excludedPaths) {
+      await expect(
+        fs.access(path.join(tmpDir, '.test', 'skills', skillPath)),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  });
+
+  it('rejects custom platform targets for global init', async () => {
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await expect(
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'global',
+        platform: 'test',
+      }),
+    ).rejects.toThrow('custom --platform targets are only supported with project scope');
+  });
+
+  it('stores a project-relative Native artifact template at global scope without creating artifacts', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'global',
+        workflow: 'native',
+        artifactRoot: 'artifacts',
+      }),
+    );
+
+    expect(result).toMatchObject({ scope: 'global', workflow: 'native' });
+    await expect(
+      fs.readFile(path.join(os.homedir(), '.opensuper', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('artifact_root: artifacts');
+    await expect(
+      fs.readFile(path.join(os.homedir(), '.opensuper', 'config.yaml'), 'utf8'),
+    ).resolves.not.toMatch(/^\s+snapshot:/mu);
+    await expect(fs.access(path.join(os.homedir(), 'artifacts', 'opensuper'))).rejects.toThrow();
+    await expect(fs.access(path.join(tmpDir, '.opensuper', 'config.yaml'))).rejects.toThrow();
+  });
+
+  it('preserves an existing global Ambient Resume preference during re-initialization', async () => {
+    mockExternalSuccess();
+    const fakeHome = path.join(tmpDir, 'fake-home-existing-global');
+    await fs.mkdir(path.join(fakeHome, '.opensuper'), { recursive: true });
+    await fs.writeFile(
+      path.join(fakeHome, '.opensuper', 'config.yaml'),
+      [
+        'schema: opensuper.global.v1',
+        'default_workflow: native',
+        'workflows:',
+        '  - native',
+        'ambient_resume: false',
+        'native:',
+        '  artifact_root: docs',
+        '  snapshot:',
+        '    include: ["**/*"]',
+        '    exclude:',
+        '      - custom/global-generated/**',
+        '',
+      ].join('\n'),
+    );
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+    try {
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'global',
+          workflow: 'native',
+        }),
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+
+    await expect(
+      fs.readFile(path.join(fakeHome, '.opensuper', 'config.yaml'), 'utf8'),
+    ).resolves.toMatch(/ambient_resume: false/);
+    const globalConfig = parse(
+      await fs.readFile(path.join(fakeHome, '.opensuper', 'config.yaml'), 'utf8'),
+    ) as { native: { snapshot?: unknown } };
+    expect(globalConfig.native.snapshot).toBeUndefined();
+  });
+
+  it('migrates a project-schema Home config during global initialization', async () => {
+    mockExternalSuccess();
+    const projectConfig = defaultProjectConfig('artifacts', 'zh-CN');
+    await fs.mkdir(path.join(os.homedir(), '.opensuper'), { recursive: true });
+    await fs.writeFile(
+      path.join(os.homedir(), '.opensuper', 'config.yaml'),
+      JSON.stringify({ ...projectConfig, schema: 'opensuper.project.v1', ambient_resume: false }),
+      'utf8',
+    );
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'global',
+        workflow: 'native',
+        codegraph: 'skip',
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'complete', scope: 'global' });
+    const globalConfig = parse(
+      await fs.readFile(path.join(os.homedir(), '.opensuper', 'config.yaml'), 'utf8'),
+    ) as {
+      schema: string;
+      ambient_resume: boolean;
+      native: { artifact_root: string; language: string };
+    };
+    expect(globalConfig).toMatchObject({
+      schema: 'opensuper.global.v1',
+      ambient_resume: false,
+      native: { artifact_root: 'artifacts', language: 'zh-CN' },
+    });
+  });
+
+  it('does not publish a global Classic default when OpenSpec initialization fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const cmd = String(command);
+      const cmdArgs = Array.isArray(args) ? args.map(String) : [];
+      if (cmd === 'openspec' && cmdArgs[0] === 'init') {
+        throw new Error('OpenSpec global initialization failed');
+      }
+      return externalSuccess?.(command, args, options) ?? Buffer.from('');
+    });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'global',
+        workflow: 'classic',
+      }),
+    );
+
+    expect(result.status).toBe('incomplete');
+    await expect(
+      fs.access(path.join(os.homedir(), '.opensuper', 'config.yaml')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it(
+    'initializes both Native and Classic skills at global scope when explicitly selected',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'global',
+          workflow: 'both',
+          language: 'en',
+        }),
+      );
+
+      expect(result).toMatchObject({
+        scope: 'global',
+        workflow: 'native',
+        initializedWorkflows: ['native', 'classic'],
+        workingDirsCreated: false,
+      });
+      for (const skill of ['opensuper-native', 'opensuper-classic']) {
+        await expect(
+          fs.access(path.join(fakeHome, '.claude', 'skills', skill, 'SKILL.md')),
+        ).resolves.toBeUndefined();
+      }
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'offers Native, Classic, and Both during interactive global initialization',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      const { checkbox, select } = await import('@inquirer/prompts');
+      const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+      vi.mocked(select).mockResolvedValueOnce('both').mockResolvedValueOnce('copy');
+      vi.mocked(platformSelectPrompt).mockResolvedValue(['codex']);
+      vi.mocked(checkbox).mockResolvedValue([]);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureTextOutput(() =>
+        initCommand(tmpDir, {
+          scope: 'global',
+          language: 'en',
+        }),
+      );
+
+      expect(select).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          message: 'Select OpenSuper workflow(s):',
+          choices: [
+            expect.objectContaining({ value: 'native' }),
+            expect.objectContaining({ value: 'classic' }),
+            expect.objectContaining({ value: 'both' }),
+          ],
+          default: 'native',
+        }),
+      );
+      for (const skill of ['opensuper-native', 'opensuper-classic']) {
+        await expect(
+          fs.access(path.join(fakeHome, '.agents', 'skills', skill, 'SKILL.md')),
+        ).resolves.toBeUndefined();
+      }
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it.each([
+    { workflow: 'native' as const, expected: ['codegraph'] },
+    { workflow: 'both' as const, expected: ['openspec', 'superpowers', 'codegraph'] },
+  ])(
+    'offers the CodeGraph dependency for $workflow initialization',
+    async ({ workflow, expected }) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      const { checkbox, select } = await import('@inquirer/prompts');
+      const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+      vi.mocked(select).mockResolvedValueOnce(workflow);
+      if (workflow === 'both') vi.mocked(select).mockResolvedValueOnce('copy');
+      vi.mocked(platformSelectPrompt).mockResolvedValue(['codex']);
+      vi.mocked(checkbox).mockResolvedValue([]);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureTextOutput(() =>
+        initCommand(tmpDir, {
+          scope: 'global',
+          language: 'en',
+        }),
+      );
+
+      const prompt = vi.mocked(checkbox).mock.calls[0]?.[0] as {
+        choices: Array<{ value: string }>;
+      };
+      expect(prompt.choices.map((choice) => choice.value)).toEqual(expected);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it('leaves project workflow state untouched when every OpenSuper asset copy fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'skills'), 'not a directory', 'utf8');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, scope: 'project' }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      workflow: 'native',
+      projectConfigCreated: false,
+      workingDirsCreated: false,
+    });
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        platform: 'claude',
+        component: 'OpenSuper',
+        reason: expect.any(String),
+      }),
+    ]);
+    expect(result.results).toEqual([
+      expect.objectContaining({ platform: 'claude', opensuper: 'failed' }),
+    ]);
+    await expect(fs.access(path.join(tmpDir, '.opensuper', 'config.yaml'))).rejects.toThrow();
+    await expect(fs.access(path.join(tmpDir, 'opensuper'))).rejects.toThrow();
+    await expect(fs.access(path.join(tmpDir, '.opensuper'))).rejects.toThrow();
+  });
+
+  it('does not activate a project workflow when any selected platform copy fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'skills'), 'not a directory', 'utf8');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        workflow: 'native',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      workflow: 'native',
+      projectConfigCreated: false,
+      workingDirsCreated: false,
+      results: expect.arrayContaining([
+        expect.objectContaining({ platform: 'claude', opensuper: 'failed' }),
+        expect.objectContaining({ platform: 'codex', opensuper: 'installed' }),
+      ]),
+    });
+    await expect(fs.access(path.join(tmpDir, '.opensuper', 'config.yaml'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fs.access(path.join(tmpDir, 'opensuper'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it.each([
+    { label: 'create', existingWorkflow: null },
+    { label: 'switch', existingWorkflow: 'classic' as const },
+  ])(
+    'does not $label Native activation when the second project instructions file is invalid',
+    async ({ existingWorkflow }) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+      await fs.writeFile(
+        path.join(tmpDir, 'CLAUDE.md'),
+        '# User rules\n\n<opensuper-ambient-resume>\nincomplete\n',
+        'utf8',
+      );
+
+      const configPath = path.join(tmpDir, '.opensuper', 'config.yaml');
+      if (existingWorkflow) {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(
+          configPath,
+          [
+            'schema: opensuper.project.v1',
+            `default_workflow: ${existingWorkflow}`,
+            'native:',
+            '  artifact_root: .',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+      }
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'project',
+          workflow: 'native',
+        }),
+      );
+      expect(result).toMatchObject({
+        status: 'incomplete',
+        failures: [
+          expect.objectContaining({
+            component: 'Finalization',
+            reason: expect.stringMatching(/incomplete managed block/u),
+          }),
+        ],
+      });
+
+      if (existingWorkflow) {
+        const config = await fs.readFile(configPath, 'utf8');
+        expect(config).toContain(`default_workflow: ${existingWorkflow}`);
+        expect(config).not.toContain('default_workflow: native');
+      } else {
+        await expect(fs.access(configPath)).rejects.toThrow();
+      }
+    },
+  );
+
+  it(
+    'installs OpenSuper skills at global scope',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.scope).toBe('global');
+      expect(result.workingDirsCreated).toBe(false);
+
+      const config = await fs.readFile(path.join(fakeHome, '.opensuper', 'config.yaml'), 'utf-8');
+      expect(config).toContain('schema: opensuper.global.v1');
+      expect(config).toContain('default_workflow: native');
+      expect(config).toContain('language: en');
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+        const dest = path.join(fakeHome, '.claude', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+      await expect(
+        fs.access(path.join(fakeHome, '.claude', 'skills', 'opensuper-native', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+
+      await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers', 'specs'))).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs Codex skills under .agents while keeping phase rules under .codex',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, workflow: 'classic' }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['codex']);
+      await expect(
+        fs.access(path.join(tmpDir, '.agents', 'skills', 'opensuper', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.codex', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+
+      const ruleDest = path.join(tmpDir, '.codex', 'rules', 'opensuper-workflow-guard.md');
+      await expect(fs.access(ruleDest)).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.agents', 'rules', 'opensuper-workflow-guard.md')),
+      ).rejects.toThrow();
+
+      const hooks = JSON.parse(
+        await fs.readFile(path.join(tmpDir, '.codex', 'hooks.json'), 'utf8'),
+      );
+      const hookCommand = hooks.hooks.PreToolUse[0].hooks[0].command as string;
+      expect(hookCommand.replaceAll('\\', '/')).toContain(
+        '/.agents/skills/opensuper/scripts/opensuper-hook-router.mjs',
+      );
+      await expect(
+        fs.access(path.join(tmpDir, '.codex', 'settings.local.json')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'Skill failure skips dependent Rule and Hook installation and leaves init incomplete',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const centralOpenSuperDir = path.join(tmpDir, '.opensuper', 'skills', 'skills', 'opensuper');
+      await fs.mkdir(centralOpenSuperDir, { recursive: true });
+      await fs.writeFile(path.join(centralOpenSuperDir, 'scripts'), 'blocking file');
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const output = await captureTextOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          language: 'en',
+          installMode: 'symlink',
+          workflow: 'classic',
+        }),
+      );
+
+      expect(output).toMatch(/Codex \(OpenSuper failed\)/u);
+      await expect(
+        fs.access(path.join(tmpDir, '.codex', 'rules', 'opensuper-workflow-guard.md')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(
+        fs.access(getProjectRegistryPath(path.join(tmpDir, 'fake-home'))),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'init --yes reuses an existing managed Skill and restores missing Codex Rule and Hook components',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      await fs.rm(path.join(tmpDir, '.codex', 'rules'), { recursive: true, force: true });
+      await fs.rm(path.join(tmpDir, '.codex', 'hooks.json'), { force: true });
+      await fs.rm(getProjectRegistryPath(fakeHome), { force: true });
+
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      const codex = (result.results as Array<{ platform: string; opensuper: string }>).find(
+        (candidate) => candidate.platform === 'codex',
+      );
+
+      expect(codex?.opensuper).toBe('installed');
+      await expect(
+        fs.access(path.join(tmpDir, '.codex', 'rules', 'opensuper-workflow-guard.md')),
+      ).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).resolves.toBeUndefined();
+      const registry = JSON.parse(await fs.readFile(getProjectRegistryPath(fakeHome), 'utf8')) as {
+        projects: Array<{ lastTargets: Array<{ platform: string }> }>;
+      };
+      expect(registry.projects[0].lastTargets).toContainEqual(
+        expect.objectContaining({ platform: 'codex' }),
+      );
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'repeated init preserves both artifact roots and uses the configured Classic layout when both roots exist',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      await fs.mkdir(path.join(tmpDir, 'openspec'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, 'openspec', 'legacy-marker.txt'), 'legacy\n', 'utf8');
+      await fs.writeFile(
+        path.join(tmpDir, 'docs', 'openspec', 'docs-marker.txt'),
+        'docs\n',
+        'utf8',
+      );
+      mockedExecFileSync.mockClear();
+      mockExternalSuccess();
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+
+      expect(result).toMatchObject({
+        status: 'complete',
+        classicArtifactLayout: 'docs',
+      });
+      expect(
+        mockedExecFileSync.mock.calls.some(
+          ([command, args]) => command === 'openspec' && Array.isArray(args) && args[0] === 'init',
+        ),
+      ).toBe(true);
+      await expect(
+        fs.readFile(path.join(tmpDir, 'openspec', 'legacy-marker.txt'), 'utf8'),
+      ).resolves.toBe('legacy\n');
+      await expect(
+        fs.readFile(path.join(tmpDir, 'docs', 'openspec', 'docs-marker.txt'), 'utf8'),
+      ).resolves.toBe('docs\n');
+      const config = parse(
+        await fs.readFile(path.join(tmpDir, '.opensuper', 'config.yaml'), 'utf8'),
+      ) as {
+        classic?: { artifact_layout?: string };
+      };
+      expect(config.classic?.artifact_layout).toBe('docs');
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'init --yes project scope does not treat a global-only Skill as a complete local install',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', scope: 'global' }),
+      );
+      await fs.mkdir(path.join(tmpDir, '.agents'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, '.agents', 'skills'), 'blocking file', 'utf8');
+
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', scope: 'project' }),
+      );
+      const codex = (result.results as Array<{ platform: string; opensuper: string }>).find(
+        (candidate) => candidate.platform === 'codex',
+      );
+
+      expect(codex?.opensuper).toBe('failed');
+      await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(fs.access(getProjectRegistryPath(fakeHome))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'init --yes repairs a partial local Skill before restoring dependent Rule and Hook components',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+      const guardScript = path.join(
+        tmpDir,
+        '.agents',
+        'skills',
+        'opensuper',
+        'scripts',
+        'opensuper-hook-router.mjs',
+      );
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      await fs.rm(guardScript, { force: true });
+      await fs.rm(path.join(tmpDir, '.codex', 'rules'), { recursive: true, force: true });
+      await fs.rm(path.join(tmpDir, '.codex', 'hooks.json'), { force: true });
+      await fs.rm(getProjectRegistryPath(fakeHome), { force: true });
+
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      const codex = (result.results as Array<{ platform: string; opensuper: string }>).find(
+        (candidate) => candidate.platform === 'codex',
+      );
+
+      expect(codex?.opensuper).toBe('installed');
+      await expect(fs.access(guardScript)).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).resolves.toBeUndefined();
+      const registry = JSON.parse(await fs.readFile(getProjectRegistryPath(fakeHome), 'utf8')) as {
+        projects: Array<{ lastTargets: Array<{ platform: string }> }>;
+      };
+      expect(registry.projects[0].lastTargets).toContainEqual(
+        expect.objectContaining({ platform: 'codex' }),
+      );
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'init --yes does not register reused Skills when canonical Hook validation fails',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), '[]\n', 'utf8');
+      await fs.rm(getProjectRegistryPath(fakeHome), { force: true });
+
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      const codex = (result.results as Array<{ platform: string; opensuper: string }>).find(
+        (candidate) => candidate.platform === 'codex',
+      );
+
+      expect(codex?.opensuper).toBe('failed');
+      let projects: unknown[] = [];
+      try {
+        projects = (
+          JSON.parse(await fs.readFile(getProjectRegistryPath(fakeHome), 'utf8')) as {
+            projects: unknown[];
+          }
+        ).projects;
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'ENOENT' });
+      }
+      expect(projects).toEqual([]);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'an explicit skip of existing OpenSuper Skills does not register an incomplete target',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const { initCommand } = await import('../../app/commands/init.js');
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      await fs.rm(path.join(tmpDir, '.codex', 'rules'), { recursive: true, force: true });
+      await fs.rm(path.join(tmpDir, '.codex', 'hooks.json'), { force: true });
+      await fs.rm(getProjectRegistryPath(fakeHome), { force: true });
+
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          language: 'en',
+          workflow: 'classic',
+          skipExisting: true,
+        }),
+      );
+
+      let projects: unknown[] = [];
+      try {
+        projects = (
+          JSON.parse(await fs.readFile(getProjectRegistryPath(fakeHome), 'utf8')) as {
+            projects: unknown[];
+          }
+        ).projects;
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'ENOENT' });
+      }
+      expect(projects).toEqual([]);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it.each([
+    { component: 'Rule', outcome: 'returned' },
+    { component: 'Rule', outcome: 'thrown' },
+    { component: 'Hook', outcome: 'returned' },
+    { component: 'Hook', outcome: 'thrown' },
+  ] as const)(
+    '$component $outcome failure makes init OpenSuper failed and prevents registry success',
+    async ({ component, outcome }) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const platformInstall = await import('../../domains/skill/platform-install.js');
+
+      if (component === 'Rule') {
+        const ruleSpy = vi.spyOn(platformInstall, 'copyOpenSuperRulesForPlatform');
+        if (outcome === 'returned') {
+          ruleSpy.mockResolvedValueOnce({ copied: 0, skipped: 0, failed: 1 });
+        } else {
+          ruleSpy.mockRejectedValueOnce(new Error('rule install threw'));
+        }
+      } else {
+        const hookSpy = vi.spyOn(platformInstall, 'installOpenSuperHooksForPlatform');
+        if (outcome === 'returned') {
+          hookSpy.mockResolvedValueOnce({
+            status: 'failed',
+            reason: 'hook install returned failed',
+          });
+        } else {
+          hookSpy.mockRejectedValueOnce(new Error('hook install threw'));
+        }
+      }
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, language: 'en', workflow: 'classic' }),
+      );
+      const codexResult = (result.results as { platform: string; opensuper: string }[]).find(
+        (candidate) => candidate.platform === 'codex',
+      );
+
+      expect(codexResult?.opensuper).toBe('failed');
+      expect(result).toMatchObject({
+        status: 'incomplete',
+        failures: [
+          expect.objectContaining({
+            platform: 'codex',
+            component,
+            reason: expect.stringMatching(component === 'Rule' ? /rule/iu : /hook/iu),
+          }),
+        ],
+      });
+      await expect(
+        fs.access(getProjectRegistryPath(path.join(tmpDir, 'fake-home'))),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it('records project-scope OpenSuper installs in the user project registry', async () => {
+    const fakeHome = path.join(tmpDir, 'fake-home');
+    await fs.mkdir(fakeHome, { recursive: true });
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+    try {
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'project', json: true, language: 'en' }),
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+
+    const registry = JSON.parse(await fs.readFile(getProjectRegistryPath(fakeHome), 'utf-8'));
+    expect(registry.projects).toHaveLength(1);
+    expect(registry.projects[0]).toMatchObject({
+      path: path.resolve(tmpDir),
+      lastSource: 'init',
+    });
+    expect(registry.projects[0].lastTargets.length).toBeGreaterThan(0);
+  });
+
+  it('removes the historical global Router when project init installs the replacement', async () => {
+    mockExternalSuccess();
+    const fakeHome = os.homedir();
+    const globalHooksPath = path.join(fakeHome, '.codex', 'hooks.json');
+    const userHook = { type: 'command', command: 'node user-hook.mjs' };
+    const globalRouter = {
+      type: 'command',
+      command: `node "${path.join(
+        fakeHome,
+        '.agents',
+        'skills',
+        'opensuper',
+        'scripts',
+        'opensuper-hook-router.mjs',
+      )}" --platform codex`,
+    };
+    await fs.mkdir(path.dirname(globalHooksPath), { recursive: true });
+    await fs.writeFile(
+      globalHooksPath,
+      JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [userHook, globalRouter] }] },
+      }),
+      'utf8',
+    );
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        platform: 'codex',
+        workflow: 'native',
+        language: 'en',
+      }),
+    );
+
+    expect(result.status).toBe('complete');
+    const globalHooks = JSON.parse(await fs.readFile(globalHooksPath, 'utf8'));
+    expect(globalHooks.hooks.PreToolUse[0].hooks).toEqual([userHook]);
+    const projectHooks = await fs.readFile(path.join(tmpDir, '.codex', 'hooks.json'), 'utf8');
+    expect(projectHooks.replaceAll('\\', '/')).toContain(
+      `${tmpDir.replaceAll('\\', '/')}/.agents/skills/opensuper/scripts/opensuper-hook-router.mjs`,
+    );
+  });
+
+  it('reports project init as incomplete when historical global Hook cleanup is unsafe', async () => {
+    mockExternalSuccess();
+    const fakeHome = os.homedir();
+    const legacyPath = path.join(fakeHome, '.codex', 'settings.local.json');
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, '{not-json', 'utf8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        platform: 'codex',
+        workflow: 'native',
+        language: 'en',
+      }),
+    );
+
+    expect(result.status).toBe('incomplete');
+    expect(JSON.stringify(result)).toContain('historical global Hook');
+    await expect(fs.readFile(legacyPath, 'utf8')).resolves.toBe('{not-json');
+    await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).resolves.toBeUndefined();
+  });
+
+  it('preserves the installed language when reusing an explicit project target', async () => {
+    mockExternalSuccess();
+    const fakeHome = path.join(tmpDir, 'fake-home-explicit-reuse-language');
+    await fs.mkdir(path.join(tmpDir, '.agents', 'skills', 'opensuper'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.agents', 'skills', 'opensuper', 'SKILL.md'),
+      '# OpenSuper\n\n当用户提出需求时使用这个技能。',
+      'utf-8',
+    );
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+    try {
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          scope: 'project',
+          json: true,
+          workflow: 'classic',
+          platform: 'codex',
+          language: 'en',
+        }),
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+
+    const registry = JSON.parse(await fs.readFile(getProjectRegistryPath(fakeHome), 'utf-8'));
+    expect(registry.projects[0].lastTargets).toContainEqual({
+      platform: 'codex',
+      language: 'zh',
+    });
+  });
+
+  it('does not record global-scope installs in the user project registry', async () => {
+    const fakeHome = path.join(tmpDir, 'fake-home-global');
+    await fs.mkdir(fakeHome, { recursive: true });
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+    try {
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true, language: 'en' }),
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+
+    await expect(fs.access(getProjectRegistryPath(fakeHome))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it(
+    'reuses already-installed OpenSuper skills with --yes and validates lifecycle components',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result1 = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, json: true, workflow: 'classic' }),
+      );
+      const claude1 = (result1.results as { platform: string; opensuper: string }[]).find(
+        (r) => r.platform === 'claude',
+      );
+      expect(claude1?.opensuper).toBe('installed');
+
+      vi.resetModules();
+      vi.resetAllMocks();
+      vi.spyOn(os, 'homedir').mockReturnValue(path.join(tmpDir, 'fake-home'));
+      mockExternalSuccess();
+
+      const { initCommand: init2 } = await import('../../app/commands/init.js');
+      const result2 = await captureJsonOutput(() =>
+        init2(tmpDir, { yes: true, json: true, workflow: 'classic' }),
+      );
+      const claude2 = (result2.results as { platform: string; opensuper: string }[]).find(
+        (r) => r.platform === 'claude',
+      );
+      expect(claude2?.opensuper).toBe('installed');
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'overwrites existing OpenSuper skills with --overwrite',
+    async () => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() => initCommand(tmpDir, { yes: true, json: true }));
+
+      vi.resetModules();
+      vi.resetAllMocks();
+      vi.spyOn(os, 'homedir').mockReturnValue(path.join(tmpDir, 'fake-home'));
+      mockExternalSuccess();
+
+      const { initCommand: init2 } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        init2(tmpDir, { yes: true, overwrite: true, json: true }),
+      );
+      const claude = (result.results as { platform: string; opensuper: string }[]).find(
+        (r) => r.platform === 'claude',
+      );
+      expect(claude?.opensuper).toBe('installed');
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs all platforms from clean directory with --yes',
+    async () => {
+      mockExternalSuccess();
+
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+      const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      try {
+        const { initCommand } = await import('../../app/commands/init.js');
+        const result = await captureJsonOutput(() =>
+          initCommand(tmpDir, { yes: true, json: true }),
+        );
+
+        expect((result.results as unknown[]).length).toBeGreaterThanOrEqual(35);
+
+        const manifest = await readManifest();
+        const platformDirs = [
+          '.claude',
+          '.cursor',
+          '.opencode',
+          '.devin',
+          '.cline',
+          '.roo',
+          '.continue',
+          '.gemini',
+          '.amazonq',
+          '.qwen',
+          '.kilocode',
+          '.augment',
+          '.kiro',
+          '.kimi-code',
+          '.lingma',
+          '.junie',
+          '.codebuddy',
+          '.workbuddy',
+          '.cospec',
+          '.crush',
+          '.factory',
+          '.iflow',
+          '.pi',
+          '.omp',
+          '.qoder',
+          '.agents',
+          '.bob',
+          '.forge',
+          '.trae',
+          '.trae-cn',
+          '.github',
+          '.zcode',
+          '.mimocode',
+        ];
+        for (const platform of platformDirs) {
+          for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+            const dest = path.join(tmpDir, platform, 'skills', skillPath);
+            await expect(fs.access(dest)).resolves.toBeUndefined();
+          }
+        }
+
+        await expect(
+          fs.access(path.join(tmpDir, '.codex', 'skills', 'opensuper', 'SKILL.md')),
+        ).rejects.toThrow();
+
+        await expect(
+          fs.access(path.join(tmpDir, '.opencode', 'commands', 'opensuper-any.md')),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(tmpDir, '.mimocode', 'commands', 'opensuper-any.md')),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(tmpDir, '.opencode', 'commands', 'opensuper-open.md')),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(
+          fs.access(path.join(tmpDir, '.pi', 'extensions', 'opensuper-commands.ts')),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(tmpDir, '.omp', 'hooks', 'pre', 'opensuper-hook-router.ts')),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(tmpDir, '.omp', 'rules', 'opensuper-workflow-guard.mdc')),
+        ).resolves.toBeUndefined();
+      } finally {
+        homedirSpy.mockRestore();
+      }
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it('installs WorkBuddy Skills in the user-level .workbuddy directory', async () => {
+    mockExternalSuccess();
+
+    const fakeHome = path.join(tmpDir, 'fake-home');
+    await fs.mkdir(fakeHome, { recursive: true });
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+    try {
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'global',
+          platform: 'workbuddy',
+          workflow: 'native',
+        }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['workbuddy']);
+      await expect(
+        fs.access(path.join(fakeHome, '.workbuddy', 'skills', 'opensuper', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+    } finally {
+      homedirSpy.mockRestore();
+    }
+  });
+
+  it(
+    'installs Antigravity and Antigravity 2.0 OpenSuper skills to their respective global skills directories',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.agents'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      try {
+        const { initCommand } = await import('../../app/commands/init.js');
+        const result = await captureJsonOutput(() =>
+          initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+        );
+
+        expect(result.selectedPlatforms).toEqual(['antigravity', 'antigravity2']);
+
+        const manifest = await readManifest();
+        for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+          const dest = path.join(fakeHome, '.gemini', 'antigravity', 'skills', skillPath);
+          await expect(fs.access(dest)).resolves.toBeUndefined();
+
+          const dest2 = path.join(fakeHome, '.gemini', 'config', 'skills', skillPath);
+          await expect(fs.access(dest2)).resolves.toBeUndefined();
+        }
+      } finally {
+        homedirSpy.mockRestore();
+      }
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs OpenCode global OpenSuper skills and commands to the OpenCode config directory',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.opencode'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['opencode']);
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+        const dest = path.join(fakeHome, '.config', 'opencode', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+
+      await expect(
+        fs.access(path.join(fakeHome, '.config', 'opencode', 'commands', 'opensuper.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(fakeHome, '.config', 'opencode', 'commands', 'opensuper-open.md')),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(fakeHome, '.opencode', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs MimoCode global OpenSuper skills and commands to the MimoCode config directory',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.mimocode'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['mimocode']);
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+        const dest = path.join(fakeHome, '.config', 'mimocode', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+
+      await expect(
+        fs.access(path.join(fakeHome, '.config', 'mimocode', 'commands', 'opensuper.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(fakeHome, '.config', 'mimocode', 'commands', 'opensuper-open.md')),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(fakeHome, '.mimocode', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs Pi global skills and commands to the Pi agent directory',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.pi'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['pi']);
+
+      await expect(
+        fs.access(path.join(fakeHome, '.pi', 'agent', 'skills', 'opensuper', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(fakeHome, '.pi', 'agent', 'extensions', 'opensuper-commands.ts')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.readFile(path.join(fakeHome, '.pi', 'agent', 'settings.json'), 'utf-8'),
+      ).resolves.toContain('"enableSkillCommands": true');
+      await expect(
+        fs.access(path.join(fakeHome, '.pi', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs Lingma global OpenSuper skills to the user Lingma skills directory',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.lingma'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['lingma']);
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+        const dest = path.join(fakeHome, '.lingma', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+
+      await expect(
+        fs.access(path.join(tmpDir, '.lingma', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs Kimi Code global OpenSuper skills to the user Kimi Code skills directory',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.kimi-code'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['kimicode']);
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+        const dest = path.join(fakeHome, '.kimi-code', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+
+      await expect(
+        fs.access(path.join(tmpDir, '.kimi-code', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs ZCode global OpenSuper skills to the user ZCode skills directory',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.zcode'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['zcode']);
+
+      const manifest = await readManifest();
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
+        const dest = path.join(fakeHome, '.zcode', 'skills', skillPath);
+        await expect(fs.access(dest)).resolves.toBeUndefined();
+      }
+
+      // OpenSuper rules are distributed to the platform rules directory, but only
+      // the selected language's variant (default init selects English here) —
+      // not every language variant listed in the manifest.
+      const ruleDest = path.join(fakeHome, '.zcode', 'rules', 'opensuper-workflow-guard.md');
+      await expect(fs.access(ruleDest)).resolves.toBeUndefined();
+      const ruleContent = await fs.readFile(ruleDest, 'utf-8');
+      expect(ruleContent).toContain('OpenSuper Current-Change Phase Rule');
+
+      await expect(
+        fs.access(path.join(fakeHome, '.zcode', 'rules', 'opensuper-workflow-guard.en.md')),
+      ).rejects.toThrow();
+
+      await expect(
+        fs.access(path.join(tmpDir, '.zcode', 'skills', 'opensuper', 'SKILL.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs only the zh OpenSuper rule variant when initialized with language zh',
+    async () => {
+      mockExternalSuccess();
+
+      await fs.mkdir(path.join(tmpDir, '.zcode'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, { yes: true, scope: 'global', json: true, language: 'zh' }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['zcode']);
+
+      const config = await fs.readFile(path.join(fakeHome, '.opensuper', 'config.yaml'), 'utf-8');
+      expect(config).toContain('language: zh-CN');
+
+      // With zh selected, only the normalized zh rule file should be installed —
+      // the .en.md variant must not appear alongside it.
+      const ruleDest = path.join(fakeHome, '.zcode', 'rules', 'opensuper-workflow-guard.md');
+      await expect(fs.access(ruleDest)).resolves.toBeUndefined();
+      const ruleContent = await fs.readFile(ruleDest, 'utf-8');
+      expect(ruleContent).toContain('OpenSuper 当前需求阶段规则');
+
+      await expect(
+        fs.access(path.join(fakeHome, '.zcode', 'rules', 'opensuper-workflow-guard.en.md')),
+      ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs dsh Classic dependencies and mirrors Claude-shaped OpenSpec Skills',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'dsh-classic-init-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'project',
+          platform: 'dsh',
+          workflow: 'classic',
+          language: 'en',
+        }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['dsh']);
+      await expect(
+        fs.access(path.join(tmpDir, '.dsh', 'skills', 'openspec-propose', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.dsh', 'skills', 'brainstorming', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, 'AGENTS.local.md'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.dsh', 'hooks.json'))).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.dsh', 'cordis.patch.yml')),
+      ).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.claude'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'summarizes partial OpenCode failures by failed component only once',
+    async () => {
+      mockedExecFileSync.mockImplementation((command: unknown, args?: unknown) => {
+        const cmd = String(command);
+        const cmdArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+
+        if ((cmd === 'which' || cmd === 'where') && cmdArgs[0] === 'openspec') {
+          return Buffer.from('/usr/bin/openspec');
+        }
+        if (cmd === 'openspec' && cmdArgs[0] === 'init') {
+          throw new Error('OpenSpec init failed for opencode');
+        }
+        if ((cmd === 'which' || cmd === 'where') && cmdArgs[0] === 'codegraph') {
+          return Buffer.from('/usr/bin/codegraph');
+        }
+        if (cmd === 'codegraph') {
+          return Buffer.from('ok');
+        }
+        if ((cmd === 'npx' || cmd === 'npx.cmd') && cmdArgs[0] === 'skills') {
+          return Buffer.from('installed');
+        }
+        return Buffer.from('');
+      });
+
+      await fs.mkdir(path.join(tmpDir, '.opencode'), { recursive: true });
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const output = await captureTextOutput(() =>
+        initCommand(tmpDir, { yes: true, language: 'en', workflow: 'classic' }),
+      );
+
+      expect(output).not.toContain('Installed:\n    OpenCode -> .opencode/skills/');
+      expect(output).toContain('Failed:');
+      expect(output).toContain('OpenCode (OpenSpec failed)');
+      expect(output).toContain('OpenSuper setup incomplete.');
+      expect(output).not.toContain('OpenSuper setup complete!');
+      expect(output).not.toContain('Get started:');
+      expect(output.match(/OpenCode \(OpenSpec failed\)/g) ?? []).toHaveLength(1);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it('fails before installer writes when the project registry is corrupt', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    const registryPath = getProjectRegistryPath(path.join(tmpDir, 'fake-home'));
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, '{not-json', 'utf-8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    await expect(initCommand(tmpDir, { yes: true, json: true, scope: 'project' })).rejects.toThrow(
+      /registry is invalid JSON/iu,
+    );
+    await expect(fs.readFile(registryPath, 'utf-8')).resolves.toBe('{not-json');
+    await expect(fs.access(path.join(tmpDir, '.agents', 'skills'))).rejects.toThrow();
+  });
+
+  it('uses platform selection prompt with selected summary labels in English', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+
+    const { checkbox } = await import('@inquirer/prompts');
+    const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+    vi.mocked(platformSelectPrompt).mockResolvedValue(['codex']);
+    vi.mocked(checkbox).mockResolvedValue([]);
+
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureTextOutput(() =>
+      initCommand(tmpDir, {
+        scope: 'project',
+        language: 'en',
+        workflow: 'classic',
+      }),
+    );
+
+    expect(platformSelectPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Select platforms to set up:',
+        selectedLabel: 'Selected:',
+        emptyLabel: 'none',
+        requiredErrorLabel: 'Select at least one platform.',
+        required: true,
+      }),
+    );
+    expect(platformSelectPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        choices: expect.arrayContaining([
+          expect.objectContaining({
+            value: 'codex',
+            name: 'Codex (detected)',
+            summaryName: 'Codex',
+            checked: true,
+          }),
+        ]),
+      }),
+    );
+    expect(checkbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Select npm dependencies to install/upgrade:',
+      }),
+    );
+  });
+
+  it('uses localized selected summary labels in Chinese', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+
+    const { checkbox } = await import('@inquirer/prompts');
+    const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+    vi.mocked(platformSelectPrompt).mockResolvedValue(['codex']);
+    vi.mocked(checkbox).mockResolvedValue([]);
+
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    await captureTextOutput(() => initCommand(tmpDir, { scope: 'project', language: 'zh' }));
+
+    expect(platformSelectPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: '选择要配置的平台：',
+        selectedLabel: '已选择：',
+        emptyLabel: '无',
+        requiredErrorLabel: '请至少选择一个平台。',
+        required: true,
+      }),
+    );
+  });
+});

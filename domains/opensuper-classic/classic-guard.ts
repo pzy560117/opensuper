@@ -1,0 +1,1234 @@
+import { createHash } from 'crypto';
+import { inspectClassicAutonomousBuildProblems } from './classic-plan-readiness.js';
+import { classicIssue, type ClassicIssue } from './classic-issues.js';
+import { classicRecoveryContext } from './classic-recovery.js';
+import { handoffSourceHash } from './classic-handoff-source.js';
+import {
+  classicArchivedRequirementsProblems,
+  readClassicArtifactRequirements,
+} from './classic-artifact-requirements.js';
+import path from 'path';
+import {
+  inspectClassicPlanTasks,
+  parseClassicTasks,
+  validateClassicTaskPlan,
+} from './classic-tasks.js';
+import { parseDocument } from 'yaml';
+import type { ClassicCommandHandler, ClassicCommandResult } from './classic-cli.js';
+import { classicGuardCheckEnvelope, classicLocale } from './classic-output-language.js';
+import type { CliOutputEnvelope } from '../workflow-contract/output-envelope.js';
+import {
+  usableCommandCheck,
+  latestCommandCheck,
+  executeCommandCheck,
+  type CommandCheckScope,
+  type RecordedCommandCheck,
+} from './classic-command-checks.js';
+import { inspectClassicChange } from './classic-diagnostics.js';
+import { assertClassicLayoutWritable, classicProjectRelative } from './classic-layout.js';
+import {
+  collectClassicSpecFiles,
+  openSpecChangeNameError,
+  resolveClassicChangeDirectory,
+} from './classic-paths.js';
+import { ensureClassicRuntimeRun, transitionClassicRuntimeRun } from './classic-runtime-run.js';
+import type { ClassicRunContext } from './classic-migrate.js';
+import type { ClassicPhase, ClassicState } from './classic-state.js';
+import { appendClassicStateEvent } from './classic-state-events.js';
+import { CLASSIC_GUARD_TRANSITION_EVENT, applyClassicTransition } from './classic-transitions.js';
+import { classicValidateCommand } from './classic-validate-command.js';
+import { readClassicState, withClassicStateLock } from './classic-store.js';
+import { readClassicConfigValue } from './classic-project-config.js';
+import { readWorkflowProjectConfigDocument } from '../workflow-contract/project-config-reader.js';
+import {
+  classicProjectFileNonempty,
+  classicProjectTargetExists,
+  inspectClassicProjectTarget,
+  readClassicProjectFile,
+} from './classic-protected-path.js';
+import {
+  driftBlockedMessage,
+  resolveBranchBinding,
+  unboundDetachedMessage,
+  type BranchBindingOutcome,
+} from './classic-branch-binding.js';
+import {
+  classicCommandInvocationCwd,
+  classicCommandProjectRoot,
+  withProjectContext,
+} from './classic-command-context.js';
+
+const GREEN = '\u001b[32m';
+const RED = '\u001b[31m';
+const YELLOW = '\u001b[33m';
+const RESET = '\u001b[0m';
+const PHASES = ['open', 'design', 'build', 'verify', 'archive'] as const;
+const PHASE_HEADER: Record<string, string> = {
+  open: '=== Guard: open → next ===',
+  design: '=== Guard: design → build ===',
+  build: '=== Guard: build → verify ===',
+  verify: '=== Guard: verify → archive ===',
+  archive: '=== Guard: archive completeness ===',
+};
+const APPLY_MESSAGE: Record<string, string> = {
+  open: '  [APPLY] .opensuper.yaml updated: phase=PLACEHOLDER',
+  design: '  [APPLY] .opensuper.yaml updated: phase=build',
+  build: '  [APPLY] .opensuper.yaml updated: phase=verify, verify_result=pending',
+  verify: '  [APPLY] .opensuper.yaml updated: phase=archive, verify_result=pass',
+};
+const CLASSIC_FIELD_WIRE_NAMES: Partial<Record<keyof ClassicState, string>> = {
+  branchStatus: 'branch_status',
+  checkEpoch: 'check_epoch',
+  phase: 'phase',
+  verificationReport: 'verification_report',
+  verifiedAt: 'verified_at',
+  verifyResult: 'verify_result',
+};
+
+function green(message: string): string {
+  return `${GREEN}${message}${RESET}`;
+}
+
+function red(message: string): string {
+  return `${RED}${message}${RESET}`;
+}
+
+function yellow(message: string): string {
+  return `${YELLOW}${message}${RESET}`;
+}
+
+function wireField(field: keyof ClassicState): string {
+  return CLASSIC_FIELD_WIRE_NAMES[field] ?? String(field);
+}
+
+function wireValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+class GuardFailure extends Error {
+  constructor(
+    message: string,
+    readonly exitCode = 1,
+  ) {
+    super(message);
+  }
+}
+
+class GuardOutput {
+  readonly stderr: string[] = [];
+  diagnostics?: Record<string, unknown>;
+  envelope?: CliOutputEnvelope;
+  checksPassed = 0;
+  checksFailed = 0;
+  issues: ClassicIssue[] = [];
+  data?: Record<string, unknown>;
+
+  toResult(exitCode = 0): ClassicCommandResult {
+    return {
+      exitCode,
+      data: {
+        ...this.data,
+        checks: {
+          passed: this.checksPassed,
+          total: this.checksPassed + this.checksFailed,
+          blocked: exitCode !== 0,
+        },
+        issues: this.issues,
+        ...(this.diagnostics ? { diagnostics: this.diagnostics } : {}),
+      },
+      ...(this.diagnostics
+        ? { stdout: JSON.stringify({ diagnostics: this.diagnostics }) + '\n' }
+        : {}),
+      ...(this.stderr.length > 0 ? { stderr: this.stderr.join('\n') + '\n' } : {}),
+      ...(this.envelope === undefined ? {} : { envelope: this.envelope }),
+    };
+  }
+}
+
+async function exists(file: string): Promise<boolean> {
+  const projectRoot = classicCommandProjectRoot();
+  return classicProjectTargetExists(projectRoot, file, {
+    label: `Classic guard path ${path.relative(projectRoot, path.resolve(projectRoot, file)).replaceAll('\\', '/')}`,
+  });
+}
+
+async function nonempty(file: string): Promise<boolean> {
+  const projectRoot = classicCommandProjectRoot();
+  return classicProjectFileNonempty(
+    projectRoot,
+    file,
+    `Classic guard file ${path.relative(projectRoot, path.resolve(projectRoot, file)).replaceAll('\\', '/')}`,
+  );
+}
+
+function validateChangeName(name: string): void {
+  const error = openSpecChangeNameError(name);
+  if (error) throw new GuardFailure(red(`ERROR: ${error}`));
+}
+
+// Resolve an absolute change directory for filesystem and runtime consumers.
+// Frozen relative provenance strings are derived separately from projectRoot.
+async function resolveChangeDir(name: string): Promise<string> {
+  return (await resolveClassicChangeDirectory(name, classicCommandProjectRoot())).directory;
+}
+
+async function readField(changeDir: string, field: string): Promise<string> {
+  const file = path.join(changeDir, '.opensuper.yaml');
+  const document = parseDocument(
+    await readClassicProjectFile(classicCommandProjectRoot(), file, {
+      label: `Classic state ${changeDir}/.opensuper.yaml`,
+    }),
+    { uniqueKeys: false },
+  );
+  if (document.errors.length > 0) {
+    throw new GuardFailure(`ERROR: Invalid .opensuper.yaml: ${document.errors[0].message}`);
+  }
+  const record = document.toJS() as Record<string, unknown>;
+  const value = record[field];
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+async function projectConfigValue(field: string, changeDir: string): Promise<string> {
+  const changeValue = await readField(changeDir, field);
+  if (changeValue && changeValue !== 'null') return changeValue;
+  return (await readClassicConfigValue(field, { cwd: classicCommandProjectRoot() }))?.value ?? '';
+}
+
+async function configuredLanguage(changeDir: string): Promise<'en' | 'zh-CN'> {
+  const language = await projectConfigValue('language', changeDir);
+  if (!language) return 'en';
+  if (language === 'en' || language === 'zh-CN') return language;
+  throw new Error(`configured language '${language}' is invalid; expected en or zh-CN.`);
+}
+
+function stripFencedCodeBlocks(source: string): string {
+  const kept: string[] = [];
+  let inFence = false;
+  for (const line of source.split(/\r?\n/u)) {
+    if (/^\s*```/u.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+function countCjkChars(source: string): number {
+  return source.match(/[\u4e00-\u9fff]/gu)?.length ?? 0;
+}
+
+function countEnglishWords(source: string): number {
+  return source.match(/[A-Za-z][A-Za-z0-9_-]{2,}/gu)?.length ?? 0;
+}
+
+async function documentLanguageMatchesConfigured(
+  changeDir: string,
+  file: string,
+): Promise<CheckResult> {
+  const language = await configuredLanguage(changeDir);
+  const source = stripFencedCodeBlocks(
+    await readClassicProjectFile(classicCommandProjectRoot(), file, {
+      label: `Classic language-check artifact ${file}`,
+    }),
+  );
+  const cjk = countCjkChars(source);
+  const englishWords = countEnglishWords(source);
+
+  if (language === 'zh-CN' && cjk < 20 && englishWords >= 20) {
+    return fail(
+      `configured language is zh-CN, but ${file} appears to be English-dominant (cjk_chars=${cjk}, english_words=${englishWords}).\nNext: regenerate or rewrite this artifact in Chinese while preserving necessary technical terms.`,
+    );
+  }
+  if (language === 'en' && cjk > 20 && cjk > englishWords) {
+    return fail(
+      `configured language is en, but ${file} appears to be Chinese-dominant (cjk_chars=${cjk}, english_words=${englishWords}).\nNext: regenerate or rewrite this artifact in English while preserving necessary technical terms.`,
+    );
+  }
+  return pass();
+}
+
+async function hashFile(file: string): Promise<string> {
+  return handoffSourceHash(
+    file,
+    await readClassicProjectFile(classicCommandProjectRoot(), file, {
+      label: `Classic handoff source ${file}`,
+    }),
+  );
+}
+
+async function handoffSourceFiles(changeDir: string): Promise<string[]> {
+  // Use forward-slash concatenation (not path.join, which uses the OS separator)
+  // so the handoff-hash input and markdown `Source:` references match the frozen
+  // shell + opensuper-handoff provenance byte-for-byte. changeDir is a relative forward-slash
+  // path (openspec/changes/<name>); forward slashes are readable on Windows too.
+  const changeRef = classicProjectRelative(classicCommandProjectRoot(), changeDir);
+  const files = [`${changeRef}/proposal.md`, `${changeRef}/design.md`, `${changeRef}/tasks.md`];
+  if (await exists(`${changeRef}/.openspec.yaml`)) files.push(`${changeRef}/.openspec.yaml`);
+  files.push(...(await collectClassicSpecFiles(classicCommandProjectRoot(), `${changeRef}/specs`)));
+  return files;
+}
+
+async function computeHandoffHash(changeDir: string): Promise<string> {
+  const lines: string[] = [];
+  for (const file of await handoffSourceFiles(changeDir)) {
+    if (await exists(file)) {
+      lines.push(`path:${file}`, `sha256:${await hashFile(file)}`);
+    }
+  }
+  // Match the frozen shell: command substitution $(...) strips the trailing
+  // newline, so the hashed payload ends with the last sha256 line (no trailing \n).
+  return createHash('sha256').update(lines.join('\n')).digest('hex');
+}
+
+async function preflight(changeDir: string, name: string): Promise<void> {
+  if (!(await exists(changeDir))) {
+    throw new GuardFailure(red(`FATAL: change directory not found: ${changeDir}`));
+  }
+  if (!(await exists(path.join(changeDir, '.opensuper.yaml')))) {
+    throw new GuardFailure(red(`FATAL: .opensuper.yaml not found in ${changeDir}`));
+  }
+  await inspectClassicProjectTarget(
+    classicCommandProjectRoot(),
+    path.join(changeDir, '.opensuper'),
+    {
+      label: `Classic runtime directory for ${name}`,
+      expected: 'directory',
+    },
+  );
+  const result = await classicValidateCommand([name], { json: false });
+  if (result.exitCode !== 0) {
+    if (result.stderr)
+      process.stderr.write(result.stderr.endsWith('\n') ? result.stderr : `${result.stderr}\n`);
+    throw new GuardFailure(red('FATAL: .opensuper.yaml schema validation failed'));
+  }
+  const projection = await readClassicState(changeDir);
+  const unknownKeys = Array.from(new Set(projection.unknownKeys)).sort();
+  if (unknownKeys.length > 0) {
+    throw new GuardFailure(
+      red(`FATAL: .opensuper.yaml has unknown field(s): ${unknownKeys.join(', ')}`),
+    );
+  }
+}
+
+interface CheckOutcome {
+  description: string;
+  passed: boolean;
+  detail: string;
+}
+
+type CheckResult = { passed: true; detail?: string } | { passed: false; detail: string };
+
+function pushCheck(output: GuardOutput, outcome: CheckOutcome): void {
+  if (outcome.passed) {
+    output.checksPassed += 1;
+    output.stderr.push(green(`  [PASS] ${outcome.description}`));
+    if (outcome.detail) {
+      for (const line of outcome.detail.split('\n')) output.stderr.push(green(`    ${line}`));
+    }
+  } else {
+    output.checksFailed += 1;
+    output.issues.push(
+      classicIssue(outcome.detail || outcome.description, {
+        code: 'CLASSIC_GUARD_CHECK_FAILED',
+        path: `checks.${outcome.description}`,
+        expected: 'pass',
+        actual: 'fail',
+        remediation:
+          'Repair this prerequisite using the reported detail, then retry the same guard. Preserve valid artifacts and evidence.',
+      }),
+    );
+    output.stderr.push(red(`  [FAIL] ${outcome.description}`));
+    if (outcome.detail) {
+      for (const line of outcome.detail.split('\n')) output.stderr.push(red(`    ${line}`));
+    }
+  }
+}
+
+function check(description: string, run: () => Promise<CheckResult>): () => Promise<CheckOutcome> {
+  return async () => {
+    try {
+      const result = await run();
+      return {
+        description,
+        passed: result.passed,
+        detail: ('detail' in result ? result.detail : '') ?? '',
+      };
+    } catch (error) {
+      return {
+        description,
+        passed: false,
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+}
+
+function pass(detail?: string): CheckResult {
+  return { passed: true, ...(detail ? { detail } : {}) };
+}
+
+function fail(detail: string): CheckResult {
+  return { passed: false, detail };
+}
+
+async function runChecks(
+  output: GuardOutput,
+  builders: Array<() => Promise<CheckOutcome>>,
+): Promise<boolean> {
+  let blocked = false;
+  for (const build of builders) {
+    const outcome = await build();
+    pushCheck(output, outcome);
+    if (!outcome.passed) blocked = true;
+  }
+  return blocked;
+}
+
+interface CommandRun {
+  status: number;
+  output: string;
+}
+
+const INFERRED_COMMAND_SOURCES = [
+  'package.json with a build script',
+  'pom.xml',
+  'Cargo.toml',
+] as const;
+
+async function removedProjectCommandField(field: 'build_command' | 'verify_command') {
+  try {
+    const document = await readWorkflowProjectConfigDocument(classicCommandProjectRoot(), {
+      allowPartialProject: true,
+    });
+    if (!document) return false;
+    return Object.prototype.hasOwnProperty.call(document.value, field);
+  } catch (error) {
+    throw new Error(
+      `.opensuper/config.yaml is invalid YAML (${error instanceof Error ? error.message : String(error)}); cannot check for removed "${field}" field. Fix the config and retry.`,
+      { cause: error },
+    );
+  }
+}
+
+function removedProjectCommandRun(field: 'build_command' | 'verify_command'): CommandRun {
+  return {
+    status: 1,
+    output: `${field} has been removed from .opensuper/config.yaml. Delete this field and run any required ${field === 'build_command' ? 'build' : 'verification'} command manually before retrying.`,
+  };
+}
+
+function invocationTarget(relative: string): string {
+  return path.resolve(classicCommandInvocationCwd(), relative);
+}
+
+async function inferredBuildCommand(): Promise<string | null> {
+  const packageJson = invocationTarget('package.json');
+  if (await exists(packageJson)) {
+    const parsed = JSON.parse(
+      await readClassicProjectFile(classicCommandProjectRoot(), packageJson, {
+        label: 'package.json',
+      }),
+    ) as {
+      scripts?: Record<string, unknown>;
+    };
+    if (typeof parsed.scripts?.build === 'string') return 'npm run build';
+  }
+  if (await exists(invocationTarget('pom.xml'))) {
+    if (process.platform === 'win32') {
+      if (await exists(invocationTarget('mvnw.cmd'))) return 'mvnw.cmd compile -q';
+      return 'mvn.cmd compile -q';
+    }
+    if (await exists(invocationTarget('mvnw'))) return './mvnw compile -q';
+    return 'mvn compile -q';
+  }
+  if (await exists(invocationTarget('Cargo.toml'))) return 'cargo build';
+  return null;
+}
+
+function evidenceDetail(record: RecordedCommandCheck): string {
+  return `Evidence: recorded command-check at ${record.timestamp}; command: ${record.command}; cwd: ${record.cwd}`;
+}
+
+function recoveryCommand(change: string, scope: CommandCheckScope, command: string): string {
+  return `opensuper check run ${change} ${scope} --local -- ${command}`;
+}
+
+async function commandCheckPasses(
+  changeDir: string,
+  change: string,
+  run: ClassicRunContext['run'],
+  scope: CommandCheckScope,
+): Promise<CommandRun> {
+  if (process.env.OPENSUPER_SKIP_BUILD === '1') {
+    return { status: 0, output: 'SKIPPED via OPENSUPER_SKIP_BUILD=1' };
+  }
+  const removedFields: Array<'build_command' | 'verify_command'> =
+    scope === 'build' ? ['build_command'] : ['verify_command', 'build_command'];
+  for (const removedField of removedFields) {
+    if (await removedProjectCommandField(removedField)) {
+      return removedProjectCommandRun(removedField);
+    }
+  }
+  const root = classicCommandProjectRoot();
+  let recorded = await usableCommandCheck(root, changeDir, run, scope);
+  if (recorded && path.resolve(root, recorded.cwd) !== path.resolve(classicCommandInvocationCwd()))
+    recorded = null;
+  const inferred = scope === 'build' && !recorded ? await inferredBuildCommand() : null;
+  if (inferred) {
+    // Only this fixed, Runtime-inferred command is shell syntax. Attestations
+    // and check-run argv never enter this path.
+    recorded = await executeCommandCheck(root, changeDir, run, {
+      scope,
+      reusable: true,
+      cwd: path.relative(root, classicCommandInvocationCwd()) || '.',
+      argv:
+        process.platform === 'win32'
+          ? [process.env.ComSpec || 'cmd.exe', '/d', '/s', '/c', inferred]
+          : ['/bin/sh', '-c', inferred],
+    });
+    if (recorded.exitCode !== 0)
+      return { status: recorded.exitCode, output: `Build failed. Log: ${recorded.logRef}` };
+    if (recorded.inputBefore !== recorded.inputAfter)
+      return {
+        status: 1,
+        output: 'Build changed check inputs; rerun after the workspace is stable.',
+      };
+  }
+  if (!recorded) {
+    const previous = await latestCommandCheck(root, changeDir, run, scope);
+    if (previous && previous.exitCode !== 0)
+      return {
+        status: previous.exitCode,
+        output: `Latest recorded ${scope} check failed with exit code ${previous.exitCode}.\n${evidenceDetail(previous)}\nNext: ${recoveryCommand(change, scope, '<program> [args...]')}`,
+      };
+    return {
+      status: 1,
+      output:
+        scope === 'build'
+          ? `No current Runtime build evidence. Detection searched: ${INFERRED_COMMAND_SOURCES.join(', ')}.\nNext: ${recoveryCommand(change, scope, '<program> [args...]')}`
+          : `No current Runtime verify evidence. Manual attestations, stale inputs and recovered checks require a new execution.\nNext: ${recoveryCommand(change, scope, '<program> [args...]')}`,
+    };
+  }
+  if (recorded.exitCode !== 0) {
+    return {
+      status: recorded.exitCode,
+      output: `Latest recorded ${scope} check failed with exit code ${recorded.exitCode}.\n${evidenceDetail(recorded)}\nNext: rerun the command successfully, then record it with:\n${recoveryCommand(change, scope, recorded.command)}`,
+    };
+  }
+  return { status: 0, output: evidenceDetail(recorded) };
+}
+
+async function tasksAllDone(changeDir: string): Promise<CheckResult> {
+  const tasks = path.join(changeDir, 'tasks.md');
+  if (!(await exists(tasks))) {
+    return fail(
+      `tasks.md is missing at ${tasks}\nNext: restore or create tasks.md for this change before leaving build.`,
+    );
+  }
+  const source = await readClassicProjectFile(classicCommandProjectRoot(), tasks, {
+    label: `Classic tasks ${tasks}`,
+  });
+  const entries = parseClassicTasks(source);
+  if (!entries.some((task) => task.completed)) {
+    return fail(
+      "tasks.md has no completed tasks.\nNext: complete implementation tasks and mark them with '- [x]'.",
+    );
+  }
+  const unfinished = entries.filter((task) => !task.completed);
+  if (unfinished.length > 0) {
+    return fail(
+      `Unfinished tasks:\n${unfinished.map((entry) => `${entry.line}:${entry.text}`).join('\n')}\nNext: complete or explicitly remove unfinished tasks, then mark tasks.md with '- [x]'.`,
+    );
+  }
+  return pass();
+}
+
+async function tasksHasAny(changeDir: string): Promise<boolean> {
+  const tasks = path.join(changeDir, 'tasks.md');
+  if (!(await exists(tasks))) return false;
+  return (
+    parseClassicTasks(
+      await readClassicProjectFile(classicCommandProjectRoot(), tasks, {
+        label: `Classic tasks ${tasks}`,
+      }),
+    ).length > 0
+  );
+}
+
+async function planTaskMappingValid(changeDir: string): Promise<CheckResult> {
+  const plan = await readField(changeDir, 'plan');
+  if (!plan || plan === 'null') return pass();
+  if (!(await exists(plan))) {
+    return fail(
+      `plan file is missing at ${plan}\nNext: restore the implementation plan or update .opensuper.yaml plan before leaving build.`,
+    );
+  }
+  const source = await readClassicProjectFile(classicCommandProjectRoot(), plan, {
+    label: `Classic plan ${plan}`,
+  });
+  const taskFile = path.join(changeDir, 'tasks.md');
+  const tasks = parseClassicTasks(
+    await readClassicProjectFile(classicCommandProjectRoot(), taskFile, {
+      label: 'Classic plan task authority',
+    }),
+  );
+  const authority = path.relative(classicCommandProjectRoot(), taskFile).replaceAll('\\', '/');
+  if (validateClassicTaskPlan(source, authority, tasks) === 'canonical') return pass();
+  const { unmapped } = inspectClassicPlanTasks(source, tasks);
+  if (unmapped.length > 0) {
+    return fail(
+      `Unmapped implementation plan tasks:\n${unmapped.map((entry) => `${entry.line}:${entry.text}`).join('\n')}\nNext: reconcile these items against implementation and acceptance, map them to tasks.md IDs or add genuinely extra tasks. Checkbox state alone is not evidence of completion.`,
+    );
+  }
+  return pass();
+}
+
+async function boundBranchMatches(changeDir: string, change: string): Promise<CheckResult> {
+  let outcome: BranchBindingOutcome;
+  try {
+    outcome = await resolveBranchBinding(changeDir, {
+      heal: true,
+      cwd: classicCommandInvocationCwd(),
+    });
+  } catch (error) {
+    throw new GuardFailure(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  switch (outcome.status) {
+    case 'drift':
+      return fail(driftBlockedMessage(change, outcome.boundBranch, outcome.currentBranch));
+    case 'unbound-detached':
+      return fail(unboundDetachedMessage(change));
+    case 'healed':
+      return pass(`bound_branch lazily set to ${outcome.branch}`);
+    case 'needs-heal':
+    case 'ok':
+    case 'not-applicable':
+      return pass();
+    default: {
+      const exhaustive: never = outcome;
+      throw new Error(`unhandled branch binding status: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+async function isolationSelected(changeDir: string, change: string): Promise<CheckResult> {
+  const isolation = await readField(changeDir, 'isolation');
+  if (isolation === 'current' || isolation === 'branch' || isolation === 'worktree') return pass();
+  const allowedValues = '<current|branch|worktree>';
+  return fail(
+    `isolation must be current, branch, or worktree, got '${isolation || 'null'}'\nNext: choose a valid workspace mode, prepare it when needed, then run:\n  opensuper state set ${change} isolation ${allowedValues}`,
+  );
+}
+
+async function buildModeSelected(changeDir: string, change: string): Promise<CheckResult> {
+  const buildMode = await readField(changeDir, 'build_mode');
+  if (
+    ['subagent-driven-development', 'executing-plans', 'direct', 'autonomous'].includes(buildMode)
+  )
+    return pass();
+  return fail(
+    `build_mode must be selected before leaving build, got '${buildMode || 'null'}'\nNext: ask the user to choose an execution mode, then run:\n  opensuper state set ${change} build_mode <subagent-driven-development|executing-plans|autonomous>`,
+  );
+}
+
+async function buildModeAllowedForWorkflow(changeDir: string): Promise<CheckResult> {
+  const workflow = await readField(changeDir, 'workflow');
+  const buildMode = await readField(changeDir, 'build_mode');
+  const directOverride = await readField(changeDir, 'direct_override');
+  if (buildMode !== 'direct') return pass();
+  if (workflow === 'hotfix' || workflow === 'tweak') return pass();
+  if (directOverride === 'true') return pass();
+  return fail(
+    'build_mode=direct is only allowed for hotfix/tweak unless direct_override: true is recorded\nNext: choose executing-plans or subagent-driven-development, or stop and ask the user for an explicit direct override.',
+  );
+}
+
+async function subagentDispatchConfirmed(changeDir: string, change: string): Promise<CheckResult> {
+  const buildMode = await readField(changeDir, 'build_mode');
+  const subagentDispatch = await readField(changeDir, 'subagent_dispatch');
+  if (buildMode !== 'subagent-driven-development') return pass();
+  if (subagentDispatch === 'confirmed') return pass();
+  return fail(
+    `subagent_dispatch must be confirmed after the user selects subagent-driven-development\nNext: resume /opensuper-build and use the single joint decision to confirm the supported execution configuration for ${change}`,
+  );
+}
+
+async function tddModeSelected(changeDir: string, change: string): Promise<CheckResult> {
+  const workflow = await readField(changeDir, 'workflow');
+  if (workflow === 'hotfix' || workflow === 'tweak') return pass();
+  const tddMode = await readField(changeDir, 'tdd_mode');
+  if (tddMode === 'tdd' || tddMode === 'direct') return pass();
+  return fail(
+    `tdd_mode must be tdd or direct for full workflow, got '${tddMode || 'null'}'\nNext: ask the user to choose TDD enforcement level, then run:\n  opensuper state set ${change} tdd_mode <tdd|direct>`,
+  );
+}
+
+async function reviewModeSelected(changeDir: string, change: string): Promise<CheckResult> {
+  const workflow = await readField(changeDir, 'workflow');
+  if (workflow === 'hotfix' || workflow === 'tweak') return pass();
+  const reviewMode = await readField(changeDir, 'review_mode');
+  if (reviewMode === 'off' || reviewMode === 'standard' || reviewMode === 'thorough') {
+    return pass();
+  }
+  return fail(
+    `review_mode must be off, standard, or thorough before leaving build, got '${reviewMode || 'null'}'\nNext: ask the user to choose review strength, then run:\n  opensuper state set ${change} review_mode <off|standard|thorough>`,
+  );
+}
+
+async function verificationReportExists(changeDir: string): Promise<boolean> {
+  const report = await readField(changeDir, 'verification_report');
+  return Boolean(report) && report !== 'null' && (await exists(report));
+}
+
+async function branchStatusHandled(changeDir: string): Promise<boolean> {
+  return (await readField(changeDir, 'branch_status')) === 'handled';
+}
+
+async function archivedIsTrue(changeDir: string): Promise<boolean> {
+  return (await readField(changeDir, 'archived')) === 'true';
+}
+
+async function designDocFrontmatterHas(
+  designDoc: string,
+  field: string,
+  expected: string,
+): Promise<boolean> {
+  const source = (
+    await readClassicProjectFile(classicCommandProjectRoot(), designDoc, {
+      label: `Classic Design Doc ${designDoc}`,
+    })
+  ).replace(/^\uFEFF/u, '');
+  let inFrontmatter = false;
+  for (const line of source.split(/\r?\n/u)) {
+    if (!inFrontmatter) {
+      if (line === '---') inFrontmatter = true;
+      continue;
+    }
+    if (line === '---') break;
+    if (new RegExp(`^${field}: ['"]?${expected}['"]?\\s*$`, 'u').test(line)) return true;
+  }
+  return false;
+}
+
+async function designDocRecorded(changeDir: string, change: string): Promise<CheckResult> {
+  const designDoc = await readField(changeDir, 'design_doc');
+  if (designDoc && designDoc !== 'null' && (await exists(designDoc))) return pass();
+  return fail(
+    `design_doc must point to an existing Superpowers Design Doc for full workflow before leaving design.\nNext: create the Design Doc and run: opensuper state set ${change} design_doc <path>`,
+  );
+}
+
+async function designHandoffContextValid(changeDir: string, change: string): Promise<CheckResult> {
+  const context = await readField(changeDir, 'handoff_context');
+  const recordedHash = await readField(changeDir, 'handoff_hash');
+  if (!context || context === 'null') {
+    return fail(
+      `handoff_context is missing from .opensuper.yaml\nNext: run node "$OPENSUPER_HANDOFF" ${change} design --write before invoking Superpowers.`,
+    );
+  }
+  if (!(await nonempty(context))) {
+    return fail(
+      `handoff_context does not point to a non-empty file: ${context}\nNext: regenerate the design handoff with opensuper handoff ${change} design --write.`,
+    );
+  }
+  if (!/^[a-f0-9]{64}$/u.test(recordedHash)) {
+    return fail(
+      `handoff_hash is missing or invalid: ${recordedHash || 'null'}\nNext: regenerate the design handoff with opensuper handoff ${change} design --write.`,
+    );
+  }
+  const actualHash = await computeHandoffHash(changeDir);
+  if (actualHash !== recordedHash) {
+    return fail(
+      `OpenSpec artifacts changed after handoff was generated.\nExpected handoff_hash: ${recordedHash}\nActual handoff_hash:   ${actualHash}\nNext: run opensuper handoff ${change} design --write so Superpowers receives the current OpenSpec context.`,
+    );
+  }
+  const markdown = `${context.replace(/\.json$/u, '')}.md`;
+  if (!(await nonempty(markdown))) {
+    return fail(
+      `design handoff markdown is missing or empty: ${markdown}\nNext: regenerate the design handoff with opensuper handoff ${change} design --write.`,
+    );
+  }
+  return pass();
+}
+
+async function designHandoffMarkdownTraceable(changeDir: string): Promise<CheckResult> {
+  const context = await readField(changeDir, 'handoff_context');
+  if (!context || context === 'null')
+    return fail('handoff_context is missing from .opensuper.yaml');
+  const markdown = `${context.replace(/\.json$/u, '')}.md`;
+  if (!(await nonempty(markdown)))
+    return fail(`design handoff markdown is missing or empty: ${markdown}`);
+  const source = await readClassicProjectFile(classicCommandProjectRoot(), markdown, {
+    label: `Classic handoff markdown ${markdown}`,
+  });
+  const lines = new Set(source.split(/\r?\n/u));
+  const problems: string[] = [];
+  if (!/^Generated-by: opensuper-handoff\.sh$/mu.test(source)) {
+    problems.push('handoff markdown is missing Generated-by marker');
+  }
+  if (!/^- Mode: (compact|full|beta)$/mu.test(source)) {
+    problems.push('handoff markdown is missing Mode marker');
+  }
+  for (const file of await handoffSourceFiles(changeDir)) {
+    if (!(await exists(file))) continue;
+    if (!lines.has(`- Source: ${file}`)) {
+      problems.push(`handoff markdown is missing source reference: ${file}`);
+    }
+    if (!lines.has(`- SHA256: ${await hashFile(file)}`)) {
+      problems.push(`handoff markdown is missing current sha256 for: ${file}`);
+    }
+  }
+  return problems.length === 0 ? pass() : fail(problems.join('\n'));
+}
+
+async function contextCompressionMode(changeDir: string): Promise<string> {
+  return (await readField(changeDir, 'context_compression')) || 'off';
+}
+
+async function betaSpecJsonStructurallyValid(changeDir: string): Promise<CheckResult> {
+  if ((await contextCompressionMode(changeDir)) !== 'beta') return pass();
+  const context = await readField(changeDir, 'handoff_context');
+  if (!context || context === 'null')
+    return fail('handoff_context is missing from .opensuper.yaml');
+  if (!(await nonempty(context))) return fail(`spec-context.json is missing or empty: ${context}`);
+  const source = await readClassicProjectFile(classicCommandProjectRoot(), context, {
+    label: `Classic handoff context ${context}`,
+  });
+  const problems: string[] = [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    return fail(
+      `spec-context.json invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return fail('spec-context.json root must be an object');
+  }
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.change !== 'string') problems.push("spec-context.json missing 'change' field");
+  if (typeof record.phase !== 'string') problems.push("spec-context.json missing 'phase' field");
+  if (record.mode !== 'beta') problems.push('spec-context.json mode is not beta');
+  if (typeof record.context_hash !== 'string') {
+    problems.push("spec-context.json missing 'context_hash' field");
+  }
+  if (!Array.isArray(record.files)) problems.push("spec-context.json missing 'files' field");
+  const files = Array.isArray(record.files)
+    ? record.files.filter(
+        (file): file is Record<string, unknown> =>
+          Boolean(file) && typeof file === 'object' && !Array.isArray(file),
+      )
+    : [];
+  for (const file of await handoffSourceFiles(changeDir)) {
+    if (!(await exists(file))) continue;
+    if (!files.some((entry) => entry.path === file && typeof entry.sha256 === 'string')) {
+      problems.push(`spec-context.json missing source file reference: ${file}`);
+    }
+  }
+  return problems.length === 0 ? pass() : fail(problems.join('\n'));
+}
+
+async function guardOpenChecks(output: GuardOutput, changeDir: string): Promise<boolean> {
+  const workflow = await readField(changeDir, 'workflow');
+  const requirements = await readClassicArtifactRequirements(
+    classicCommandProjectRoot(),
+    changeDir,
+  );
+  const checks: Array<() => Promise<CheckOutcome>> = [
+    check('OpenSpec required dependency closure is ready', async () =>
+      requirements.problems.length ? fail(requirements.problems.join('\n')) : pass(),
+    ),
+    check('proposal.md exists and non-empty', async () =>
+      (await nonempty(path.join(changeDir, 'proposal.md'))) ? pass() : fail(''),
+    ),
+    check('proposal.md matches configured language', () =>
+      documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'proposal.md')),
+    ),
+    check('tasks.md exists and non-empty', async () =>
+      (await nonempty(path.join(changeDir, 'tasks.md'))) ? pass() : fail(''),
+    ),
+    check('tasks.md matches configured language', () =>
+      documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'tasks.md')),
+    ),
+    check('tasks.md has at least one task', async () =>
+      (await tasksHasAny(changeDir)) ? pass() : fail(''),
+    ),
+  ];
+  if (
+    workflow === 'full' &&
+    (requirements.designRequired || (await exists(path.join(changeDir, 'design.md'))))
+  ) {
+    checks.splice(
+      1,
+      0,
+      check('design.md exists and non-empty', async () =>
+        (await nonempty(path.join(changeDir, 'design.md'))) ? pass() : fail(''),
+      ),
+      check('design.md matches configured language', () =>
+        documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'design.md')),
+      ),
+    );
+  }
+  return runChecks(output, checks);
+}
+
+async function guardDesignChecks(
+  output: GuardOutput,
+  changeDir: string,
+  change: string,
+): Promise<boolean> {
+  const designDoc = await readField(changeDir, 'design_doc');
+  const workflow = await readField(changeDir, 'workflow');
+  const requirements = await readClassicArtifactRequirements(
+    classicCommandProjectRoot(),
+    changeDir,
+  );
+  const checkDesign =
+    requirements.designRequired || (await exists(path.join(changeDir, 'design.md')));
+  const builders: Array<() => Promise<CheckOutcome>> = [
+    check('OpenSpec required dependency closure is ready', async () =>
+      requirements.problems.length ? fail(requirements.problems.join('\n')) : pass(),
+    ),
+    check('proposal.md exists', async () =>
+      (await nonempty(path.join(changeDir, 'proposal.md'))) ? pass() : fail(''),
+    ),
+    check('proposal.md matches configured language', () =>
+      documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'proposal.md')),
+    ),
+    check('design.md exists', async () =>
+      !checkDesign || (await nonempty(path.join(changeDir, 'design.md'))) ? pass() : fail(''),
+    ),
+    check('design.md matches configured language', async () =>
+      checkDesign
+        ? documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'design.md'))
+        : pass(),
+    ),
+    check('tasks.md exists', async () =>
+      (await nonempty(path.join(changeDir, 'tasks.md'))) ? pass() : fail(''),
+    ),
+    check('tasks.md matches configured language', () =>
+      documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'tasks.md')),
+    ),
+    check('design handoff context exists', () => designHandoffContextValid(changeDir, change)),
+    check('design handoff markdown is traceable', () => designHandoffMarkdownTraceable(changeDir)),
+  ];
+  if ((await contextCompressionMode(changeDir)) === 'beta') {
+    builders.push(
+      check('beta spec-context.json is structurally valid', () =>
+        betaSpecJsonStructurallyValid(changeDir),
+      ),
+    );
+  }
+  if (workflow === 'full') {
+    builders.push(
+      check('design_doc is recorded for full workflow', () => designDocRecorded(changeDir, change)),
+    );
+  }
+  let blocked = await runChecks(output, builders);
+  if (designDoc && designDoc !== 'null') {
+    blocked =
+      (await runChecks(output, [
+        check(`Design Doc (${designDoc}) exists`, async () =>
+          (await nonempty(designDoc)) ? pass() : fail(''),
+        ),
+        check('Design Doc matches configured language', () =>
+          documentLanguageMatchesConfigured(changeDir, designDoc),
+        ),
+        check('Design Doc frontmatter links current change', async () => {
+          if (!(await nonempty(designDoc))) return fail('');
+          return (await designDocFrontmatterHas(designDoc, 'opensuper_change', change))
+            ? pass()
+            : fail('');
+        }),
+        check('Design Doc declares technical design role', async () => {
+          if (!(await nonempty(designDoc))) return fail('');
+          return (await designDocFrontmatterHas(designDoc, 'role', 'technical-design'))
+            ? pass()
+            : fail('');
+        }),
+        check('Design Doc declares OpenSpec as canonical spec', async () => {
+          if (!(await nonempty(designDoc))) return fail('');
+          return (await designDocFrontmatterHas(designDoc, 'canonical_spec', 'openspec'))
+            ? pass()
+            : fail('');
+        }),
+      ])) || blocked;
+  } else if (workflow !== 'full') {
+    output.stderr.push(
+      yellow('  [WARN] No design_doc recorded in .opensuper.yaml (optional for hotfix/tweak)'),
+    );
+  }
+  return blocked;
+}
+
+async function guardBuildChecks(
+  output: GuardOutput,
+  changeDir: string,
+  change: string,
+  run: ClassicRunContext['run'],
+): Promise<boolean> {
+  const blocked = await runChecks(output, [
+    check('bound branch matches workspace mode', () => boundBranchMatches(changeDir, change)),
+    check('isolation selected', () => isolationSelected(changeDir, change)),
+    check('build_mode selected', () => buildModeSelected(changeDir, change)),
+    check('build_mode allowed for workflow', () => buildModeAllowedForWorkflow(changeDir)),
+    check('autonomous full build prerequisites', async () => {
+      const state = (await readClassicState(changeDir, { migrate: false })).classic;
+      if (!state) return fail('Classic state is missing');
+      const problems = await inspectClassicAutonomousBuildProblems(
+        classicCommandProjectRoot(),
+        change,
+        state,
+      );
+      return problems.length ? fail(problems.join('\n')) : pass();
+    }),
+    check('subagent dispatch confirmed', () => subagentDispatchConfirmed(changeDir, change)),
+    check('tdd_mode selected', () => tddModeSelected(changeDir, change)),
+    check('review_mode selected', () => reviewModeSelected(changeDir, change)),
+    check('tasks.md all tasks checked', () => tasksAllDone(changeDir)),
+    check('plan task mapping is valid', () => planTaskMappingValid(changeDir)),
+    check('proposal.md exists', async () =>
+      (await nonempty(path.join(changeDir, 'proposal.md'))) ? pass() : fail(''),
+    ),
+    check('proposal.md matches configured language', () =>
+      documentLanguageMatchesConfigured(changeDir, path.join(changeDir, 'proposal.md')),
+    ),
+    check('Superpowers plan matches configured language', async () => {
+      const plan = await readField(changeDir, 'plan');
+      if (!plan || plan === 'null' || !(await exists(plan))) return pass();
+      return documentLanguageMatchesConfigured(changeDir, plan);
+    }),
+  ]);
+  if (blocked) return true;
+  return runChecks(output, [
+    check('Build passes', async () => {
+      const buildResult = await commandCheckPasses(changeDir, change, run, 'build');
+      return buildResult.status === 0 ? pass(buildResult.output) : fail(buildResult.output);
+    }),
+  ]);
+}
+
+async function guardVerifyChecks(
+  output: GuardOutput,
+  changeDir: string,
+  change: string,
+  run: ClassicRunContext['run'],
+): Promise<boolean> {
+  const blocked = await runChecks(output, [
+    check('bound branch matches workspace mode', () => boundBranchMatches(changeDir, change)),
+    check('tasks.md all tasks checked', () => tasksAllDone(changeDir)),
+    check('verification_report exists', async () =>
+      (await verificationReportExists(changeDir)) ? pass() : fail(''),
+    ),
+    check('verification_report matches configured language', async () => {
+      const report = await readField(changeDir, 'verification_report');
+      if (!report || report === 'null' || !(await exists(report))) return pass();
+      return documentLanguageMatchesConfigured(changeDir, report);
+    }),
+  ]);
+  if (blocked) return true;
+  return runChecks(output, [
+    check('Verification passes', async () => {
+      const result = await commandCheckPasses(changeDir, change, run, 'verify');
+      return result.status === 0 ? pass(result.output) : fail(result.output);
+    }),
+  ]);
+}
+
+async function guardArchiveChecks(
+  output: GuardOutput,
+  changeDir: string,
+  change: string,
+): Promise<boolean> {
+  return runChecks(output, [
+    check('bound branch matches workspace mode', () => boundBranchMatches(changeDir, change)),
+    check('archived is true', async () => ((await archivedIsTrue(changeDir)) ? pass() : fail(''))),
+    check('proposal.md exists', async () =>
+      (await nonempty(path.join(changeDir, 'proposal.md'))) ? pass() : fail(''),
+    ),
+    check('archived required artifacts exist', async () => {
+      const problems = await classicArchivedRequirementsProblems(
+        classicCommandProjectRoot(),
+        changeDir,
+      );
+      return problems.length ? fail(problems.join('\n')) : pass();
+    }),
+    check('tasks.md all tasks checked', () => tasksAllDone(changeDir)),
+    check('branch_status=handled', async () =>
+      (await branchStatusHandled(changeDir)) ? pass() : fail(''),
+    ),
+  ]);
+}
+
+async function applyStateUpdate(
+  output: GuardOutput,
+  change: string,
+  changeDir: string,
+  phase: string,
+): Promise<void> {
+  return withClassicStateLock(changeDir, () =>
+    applyStateUpdateLocked(output, change, changeDir, phase),
+  );
+}
+
+async function applyStateUpdateLocked(
+  output: GuardOutput,
+  change: string,
+  changeDir: string,
+  phase: string,
+): Promise<void> {
+  const event = CLASSIC_GUARD_TRANSITION_EVENT[phase as ClassicPhase];
+  if (!event) return;
+
+  // Re-read instead of reusing the run context captured before the checks:
+  // boundBranchMatches may have lazily healed bound_branch on disk, and a
+  // stale projection would write the pre-heal null back over it.
+  const context = await ensureClassicRuntimeRun(changeDir);
+  if ((phase === 'build' || phase === 'verify') && process.env.OPENSUPER_SKIP_BUILD !== '1') {
+    const record = await usableCommandCheck(
+      classicCommandProjectRoot(),
+      changeDir,
+      context.run,
+      phase,
+    );
+    if (
+      !record ||
+      path.resolve(classicCommandProjectRoot(), record.cwd) !==
+        path.resolve(classicCommandInvocationCwd())
+    )
+      throw new GuardFailure('Check evidence changed before transition; rerun the check.');
+  }
+  const result = applyClassicTransition(context.classic, event);
+  await transitionClassicRuntimeRun(changeDir, result.classic, context.run, {
+    event,
+    phase,
+    source: 'opensuper-guard',
+  });
+  await appendClassicStateEvent(changeDir, {
+    change,
+    event,
+    source: 'opensuper-guard',
+    from: context.classic,
+    to: result.classic,
+    effects: result.effects,
+  });
+
+  for (const effect of result.effects) {
+    output.stderr.push(green(`[SET] ${wireField(effect.field)}=${wireValue(effect.to)}`));
+  }
+  output.stderr.push(green(`[TRANSITION] ${event}`));
+  const template = APPLY_MESSAGE[phase];
+  const message =
+    phase === 'open' ? template.replace('PLACEHOLDER', result.classic.phase) : template;
+  output.stderr.push(green(message));
+}
+
+export const classicGuardCommand: ClassicCommandHandler = withProjectContext(
+  async (args, options) => {
+    const output = new GuardOutput();
+    const [change, phase, flag] = args;
+    try {
+      if (args.length < 2 || args.length > 3 || (flag !== undefined && flag !== '--apply')) {
+        throw new GuardFailure(
+          'Usage: opensuper guard <change-name> <open|design|build|verify|archive> [--apply]',
+        );
+      }
+      validateChangeName(change);
+      if (!phase || !PHASES.includes(phase as (typeof PHASES)[number])) {
+        throw new GuardFailure(
+          `${red(`Unknown phase: ${phase ?? ''}`)}\nValid phases: open, design, build, verify, archive`,
+        );
+      }
+      await assertClassicLayoutWritable(classicCommandProjectRoot());
+      const changeDir = await resolveChangeDir(change);
+      await preflight(changeDir, change);
+      const runContext = await ensureClassicRuntimeRun(changeDir);
+      output.data = {
+        change,
+        phase: runContext.classic.phase,
+        projectRoot: classicCommandProjectRoot(),
+        changeDir,
+      };
+      const diagnostic = await inspectClassicChange(changeDir, change);
+      if (options.json) {
+        output.diagnostics = {
+          change,
+          phase,
+          currentStep: diagnostic.currentStep,
+          runtimeEval: diagnostic.runtimeEval,
+        };
+      }
+      output.stderr.push(PHASE_HEADER[phase]);
+
+      let blocked: boolean;
+      if (phase === 'open') blocked = await guardOpenChecks(output, changeDir);
+      else if (phase === 'design') blocked = await guardDesignChecks(output, changeDir, change);
+      else if (phase === 'build')
+        blocked = await guardBuildChecks(output, changeDir, change, runContext.run);
+      else if (phase === 'verify')
+        blocked = await guardVerifyChecks(output, changeDir, change, runContext.run);
+      else blocked = await guardArchiveChecks(output, changeDir, change);
+
+      const envelope = classicGuardCheckEnvelope({
+        name: change,
+        phase,
+        failed: output.checksFailed,
+        total: output.checksPassed + output.checksFailed,
+        locale: classicLocale(runContext.classic.language),
+      });
+      output.envelope = envelope;
+
+      if (blocked) {
+        output.stderr.push('');
+        output.stderr.push(envelope.summary);
+        if (envelope.user_message) output.stderr.push(`RELAY TO USER: ${envelope.user_message}`);
+        output.stderr.push('');
+        output.stderr.push(red('BLOCKED — fix failing checks before proceeding to next phase'));
+        return output.toResult(1);
+      }
+      output.stderr.push('');
+      output.stderr.push(envelope.summary);
+      if (phase === 'archive') {
+        output.stderr.push(
+          green('ALL CHECKS PASSED — archive completeness verified; no further phase transition.'),
+        );
+      } else if (flag === '--apply') {
+        output.stderr.push(green('ALL CHECKS PASSED — ready for next phase'));
+        await applyStateUpdate(output, change, changeDir, phase);
+        const updated = await readClassicState(changeDir, { migrate: false });
+        if (updated.classic)
+          output.data = {
+            ...(await classicRecoveryContext(
+              classicCommandProjectRoot(),
+              changeDir,
+              updated.classic,
+            )),
+            change,
+            phase: updated.classic.phase,
+            configuration: updated.classic,
+          };
+      } else {
+        output.stderr.push(green('ALL CHECKS PASSED — ready for next phase'));
+        output.stderr.push(
+          `Check only: phase unchanged. To advance, run opensuper guard ${change} ${phase} --apply`,
+        );
+      }
+      return output.toResult(0);
+    } catch (error) {
+      output.issues.push(classicIssue(error));
+      if (error instanceof GuardFailure) {
+        for (const line of error.message.split('\n')) output.stderr.push(line);
+        return output.toResult(error.exitCode);
+      }
+      output.stderr.push(error instanceof Error ? error.message : String(error));
+      return output.toResult(70);
+    }
+  },
+);

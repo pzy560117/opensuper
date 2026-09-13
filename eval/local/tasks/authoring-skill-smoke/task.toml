@@ -1,0 +1,21 @@
+[metadata]
+name = "authoring-skill-smoke"
+description = "Smoke task for generated OpenSuper-native Skill packages."
+difficulty = "easy"
+category = "generic"
+tags = ["authoring", "skill", "opensuper-any"]
+default_treatments = ["CONTROL"]
+
+[environment]
+description = "Workspace for generated Skill package inspection."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 600
+
+[validation]
+test_scripts = ["test_authoring_skill_smoke.py"]
+target_artifacts = []
+timeout = 60
+
+[evaluation]
+profile = "authoring-skill"
+expected_artifacts = []

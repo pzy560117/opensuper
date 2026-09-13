@@ -1,0 +1,5 @@
+interface:
+  display_name: 'OpenSuper Classic Phase 1: Open'
+  short_description: 'Create a change and confirm its requirements with the user'
+policy:
+  allow_implicit_invocation: true

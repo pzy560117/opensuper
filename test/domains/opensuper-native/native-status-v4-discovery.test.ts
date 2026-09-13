@@ -1,0 +1,192 @@
+import { execFileSync } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as gitWorktree from '../../../platform/paths/git-worktree.js';
+
+import { runNativeCli } from '../../../domains/opensuper-native/native-cli.js';
+import { createNativeChange } from '../../../domains/opensuper-native/native-change.js';
+import {
+  defaultProjectConfig,
+  writeProjectConfig,
+} from '../../../domains/opensuper-native/native-config.js';
+import {
+  ensureNativeDirectories,
+  nativeProjectPaths,
+} from '../../../domains/opensuper-native/native-paths.js';
+import { createNativePortableChange } from '../../../domains/opensuper-native/native-portable-runtime.js';
+import { listDiscoveredNativeStatusPage } from '../../../domains/opensuper-native/native-status-discovery.js';
+
+interface RepositoryFixture {
+  root: string;
+  targetBranch: string;
+}
+
+function git(root: string, args: readonly string[]): string {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+}
+
+async function createRepository(): Promise<RepositoryFixture> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-native-v4-discovery-'));
+  execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+  git(root, ['config', 'user.email', 'native-status@example.test']);
+  git(root, ['config', 'user.name', 'Native Status Test']);
+  await writeProjectConfig(root, defaultProjectConfig('docs', 'en'));
+  await fs.writeFile(path.join(root, 'README.md'), '# Native status fixture\n');
+  git(root, ['add', '.opensuper/config.yaml', 'README.md']);
+  git(root, ['commit', '-m', 'seed Native status fixture']);
+  return { root, targetBranch: git(root, ['branch', '--show-current']) };
+}
+
+function addWorktree(repository: RepositoryFixture, directoryName: string, branch: string): string {
+  const worktreeRoot = path.join(repository.root, '.worktrees', directoryName);
+  git(repository.root, ['worktree', 'add', '-b', branch, worktreeRoot, repository.targetBranch]);
+  return worktreeRoot;
+}
+
+function json(result: Awaited<ReturnType<typeof runNativeCli>>): Record<string, unknown> {
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toBeTruthy();
+  return JSON.parse(result.stdout!) as Record<string, unknown>;
+}
+
+describe('Native v4 registered-worktree status discovery', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  });
+
+  it('filters named discovery before inspecting unrelated Runtime and shares worktree observations', async () => {
+    const repository = await createRepository();
+    roots.push(repository.root);
+    const { runNativeCli } = await import('../../../domains/opensuper-native/native-cli.js');
+    for (const name of ['target', 'unrelated']) {
+      const root = addWorktree(repository, name, `opensuper/${name}`);
+      const result = await runNativeCli(['new', name, '--project-root', root, '--json']);
+      expect(result.exitCode).toBe(0);
+    }
+    const archiveDir = path.join(repository.root, 'docs/opensuper/archive/2026-09-10-unrelated');
+    await fs.mkdir(archiveDir, { recursive: true });
+    await fs.writeFile(path.join(archiveDir, 'opensuper-state.yaml'), 'corrupt: [');
+    const read = vi.spyOn(fs, 'readFile');
+    const list = vi.spyOn(gitWorktree, 'listGitWorktrees');
+    const inspect = vi.spyOn(gitWorktree, 'inspectGitWorktree');
+    const { inspectDiscoveredNativeStatus } =
+      await import('../../../domains/opensuper-native/native-status-discovery.js');
+    const status = await inspectDiscoveredNativeStatus({
+      projectRoot: repository.root,
+      name: 'target',
+    });
+    expect(status).toMatchObject({
+      name: 'target',
+      phase: 'shape',
+      workspace: { bindingState: 'aligned' },
+    });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(inspect).not.toHaveBeenCalled();
+    const files = read.mock.calls.map(([file]) => String(file).replaceAll('\\', '/'));
+    expect(files.filter((file) => file.includes('/changes/unrelated/'))).toEqual([]);
+    expect(files.filter((file) => file.includes('/2026-09-10-unrelated/'))).toEqual([]);
+  });
+
+  it('uses the portable adapter for named and list status from another registered worktree', async () => {
+    const repository = await createRepository();
+    roots.push(repository.root);
+    const worktreeRoot = addWorktree(repository, 'portable-side', 'opensuper/portable-side');
+    const paths = await nativeProjectPaths(worktreeRoot, 'docs');
+    await ensureNativeDirectories(paths);
+    await createNativePortableChange({
+      paths,
+      name: 'portable-side',
+      language: 'en',
+      workspaceBinding: {
+        isolation: 'worktree',
+        changeBranch: 'opensuper/portable-side',
+        targetBranch: repository.targetBranch,
+      },
+    });
+
+    const named = json(
+      await runNativeCli([
+        'status',
+        'portable-side',
+        '--details',
+        '--json',
+        '--project-root',
+        repository.root,
+      ]),
+    );
+    expect(named.data).toMatchObject({
+      schema: 'opensuper.native.status.v2',
+      name: 'portable-side',
+      phase: 'shape',
+      workspace: {
+        projectRoot: path.resolve(worktreeRoot),
+        bindingState: 'aligned',
+      },
+      continuation: {
+        disposition: 'continue',
+        action: 'prepare-shape-confirmation',
+      },
+    });
+
+    const listed = json(
+      await runNativeCli(['status', '--json', '--project-root', repository.root]),
+    );
+    expect(listed.data).toMatchObject({
+      schema: 'opensuper.native.status-page.v2',
+      total: 1,
+      items: [
+        expect.objectContaining({
+          schema: 'opensuper.native.status.v2',
+          name: 'portable-side',
+          workspace: expect.objectContaining({
+            projectRoot: path.resolve(worktreeRoot),
+            bindingState: 'aligned',
+          }),
+        }),
+      ],
+    });
+  });
+
+  it('merges portable and legacy changes instead of returning early on the current v4', async () => {
+    const repository = await createRepository();
+    roots.push(repository.root);
+    const legacyRoot = addWorktree(repository, 'legacy-side', 'opensuper/legacy-side');
+    const legacyPaths = await nativeProjectPaths(legacyRoot, 'docs');
+    await ensureNativeDirectories(legacyPaths);
+    await createNativeChange({ paths: legacyPaths, name: 'legacy-side', language: 'en' });
+
+    const portablePaths = await nativeProjectPaths(repository.root, 'docs');
+    await ensureNativeDirectories(portablePaths);
+    await createNativePortableChange({
+      paths: portablePaths,
+      name: 'portable-main',
+      language: 'en',
+    });
+
+    const page = await listDiscoveredNativeStatusPage({ projectRoot: repository.root });
+    expect(page).toMatchObject({
+      schema: 'opensuper.native.status-page.v2',
+      total: 2,
+      offset: 0,
+      nextCursor: null,
+    });
+    expect(page.items.map(({ name }) => name)).toEqual(['legacy-side', 'portable-main']);
+    expect(page.items.find(({ name }) => name === 'legacy-side')).toMatchObject({
+      migrationRequired: true,
+      workspace: { projectRoot: path.resolve(legacyRoot) },
+    });
+    expect(page.items.find(({ name }) => name === 'portable-main')).toMatchObject({
+      schema: 'opensuper.native.status.v2',
+      workspace: {
+        projectRoot: path.resolve(repository.root),
+        bindingState: 'aligned',
+      },
+      continuation: { action: 'prepare-shape-confirmation' },
+    });
+  });
+});

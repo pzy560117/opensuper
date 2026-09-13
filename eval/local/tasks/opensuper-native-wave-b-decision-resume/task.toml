@@ -1,0 +1,40 @@
+[metadata]
+name = "opensuper-native-wave-b-decision-resume"
+description = "Test one hidden product decision and a context-cleared Native v4 resume"
+difficulty = "hard"
+category = "opensuper-native"
+tags = ["opensuper-native", "decision", "cold-resume", "multi-turn", "wave-b"]
+default_treatments = ["OPENSUPER_NATIVE_PHASE1"]
+
+[template]
+required = []
+
+[environment]
+description = "Python word-count workspace with only the self-contained OpenSuper Native Skill available."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_native_wave_b_decision_resume.py"
+target_artifacts = [".cache/opensuper-native-eval/resume-status.json", "docs/opensuper/archive", "docs/opensuper/specs/unique-word-counting/spec.md"]
+timeout = 120
+
+[evaluation]
+profile = "generic"
+required_skills = ["opensuper-native"]
+expected_artifacts = [".cache/opensuper-native-eval/resume-status.json", "docs/opensuper/archive", "docs/opensuper/specs/unique-word-counting/spec.md"]
+require_skill_invocation = true
+rubric_criteria = [
+  "Surfaces exactly one user-visible token-normalization decision before Build",
+  "Records the deterministic answer in the brief and complete target specification",
+  "Resumes the same v4 change from portable state after context is cleared",
+  "Implements, independently verifies, and archives only after all acceptance items pass",
+]
+
+[interaction]
+mode = "auto_user"
+max_turns = 4
+decision_patterns = ["normalization", "punctuation", "apostrophe", "unique word"]
+decision_reply = "Treat words case-insensitively, strip surrounding punctuation, and preserve internal apostrophes."
+continue_prompt = "This is a context-cleared continuation. First invoke `/opensuper-native`. Then run the Runtime-provided read-only status command before any Read, Edit, test, or transition and redirect its complete stdout JSON envelope exactly once to `.cache/opensuper-native-eval/resume-status.json`. Recover the same change from the v4 portable state and artifacts on disk, continue through Build and independent Verify, and execute only the Runtime continuation returned for Archive. Do not recreate the saved status envelope."
+fresh_resume_marker = "OPENSUPER_NATIVE_COLD_RESUME_READY"

@@ -1,0 +1,255 @@
+import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { createDefaultOpenSuperPluginBridge } from '../../../domains/opensuper-plugin/index.js';
+import { createDefaultDashboardPluginHostFactory } from '../../../domains/dashboard/default-plugin-host.js';
+import { resolveStableProjectId } from '../../../platform/paths/project-identity.js';
+
+describe('default dashboard plugin host', () => {
+  it('preserves repository plugin pause state when the Dashboard uses a path ID', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-dashboard-repository-state-'));
+    const projectRoot = path.join(root, 'project');
+    await fs.mkdir(projectRoot);
+    try {
+      const repositoryId = resolveStableProjectId(projectRoot);
+      const options = {
+        homeDirectory: root,
+        stateRoot: path.join(root, 'plugins'),
+        memoryRoot: path.join(root, 'memory'),
+        knowledgeCacheRoot: path.join(root, 'knowledge'),
+      };
+      const bridge = await createDefaultOpenSuperPluginBridge({
+        ...options,
+        projectRoot,
+        projectId: repositoryId,
+      });
+      await bridge.pluginRuntime.disable('opensuper.project-knowledge', {
+        scope: 'project',
+        projectId: repositoryId,
+      });
+      const factory = createDefaultDashboardPluginHostFactory(options);
+      const host = await factory('dashboard-path-id', projectRoot);
+      await expect(host.list()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ pluginId: 'opensuper.project-knowledge', projectPaused: true }),
+        ]),
+      );
+      await host.lifecycle('opensuper.project-knowledge', 'enable');
+      const reopened = await createDefaultOpenSuperPluginBridge({
+        ...options,
+        projectRoot,
+        projectId: repositoryId,
+      });
+      expect(
+        (await reopened.pluginRuntime.get('opensuper.project-knowledge'))?.disabledProjects,
+      ).not.toContain(repositoryId);
+      await host.lifecycle('opensuper.project-knowledge', 'disable');
+      const disabled = await createDefaultOpenSuperPluginBridge({
+        ...options,
+        projectRoot,
+        projectId: repositoryId,
+      });
+      expect(
+        (await disabled.pluginRuntime.get('opensuper.project-knowledge'))?.disabledProjects,
+      ).toEqual([repositoryId]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it('shares an isolated project knowledge cache with CLI plugin bridges', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-default-plugin-host-cache-'));
+    const projectRoot = path.join(root, 'project');
+    const knowledgeCacheRoot = path.join(root, 'knowledge-cache');
+    await fs.mkdir(projectRoot, { recursive: true });
+    try {
+      const cliBridge = await createDefaultOpenSuperPluginBridge({
+        projectRoot,
+        projectId: 'project-1',
+        stateRoot: path.join(root, 'cli-state'),
+        memoryRoot: path.join(root, 'cli-memory'),
+        knowledgeCacheRoot,
+      });
+      await cliBridge.pluginRuntime.invoke(
+        'opensuper.project-knowledge',
+        'create',
+        {
+          type: 'constraint',
+          title: 'Shared cache rule',
+          summary: 'Dashboard and CLI use the same project knowledge records.',
+        },
+        { scope: 'project', projectId: 'project-1' },
+      );
+
+      const host = await createDefaultDashboardPluginHostFactory({
+        stateRoot: path.join(root, 'dashboard-state'),
+        memoryRoot: path.join(root, 'dashboard-memory'),
+        knowledgeCacheRoot,
+      })('project-1', projectRoot);
+
+      await expect(host.get('opensuper.project-knowledge')).resolves.toMatchObject({
+        data: {
+          records: [expect.objectContaining({ title: 'Shared cache rule' })],
+        },
+      });
+
+      await host.invoke('opensuper.project-knowledge', 'create', {
+        type: 'procedure',
+        title: 'Dashboard cache rule',
+        summary: 'CLI retrieval reads project knowledge created in the Dashboard.',
+      });
+      await expect(
+        cliBridge.pluginRuntime.invoke(
+          'opensuper.project-knowledge',
+          'list',
+          { state: 'all' },
+          { scope: 'project', projectId: 'project-1' },
+        ),
+      ).resolves.toMatchObject({
+        records: expect.arrayContaining([
+          expect.objectContaining({ title: 'Shared cache rule' }),
+          expect.objectContaining({ title: 'Dashboard cache rule' }),
+        ]),
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('registers the personal memory page against the shared plugin runtime', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-default-plugin-host-'));
+    const projectRoot = path.join(root, 'project');
+    await fs.mkdir(projectRoot, { recursive: true });
+    try {
+      const factory = createDefaultDashboardPluginHostFactory({
+        stateRoot: path.join(root, 'plugins'),
+        memoryRoot: path.join(root, 'memory'),
+      });
+      const host = await factory('project-1', projectRoot);
+      expect(await host.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ pluginId: 'opensuper.personal-memory', status: 'enabled' }),
+          expect.objectContaining({
+            pluginId: 'opensuper.project-knowledge',
+            label: '项目知识',
+            route: '/plugins/project-knowledge',
+            status: 'enabled',
+            projectPaused: false,
+          }),
+        ]),
+      );
+      await expect(host.get('opensuper.personal-memory')).resolves.toMatchObject({
+        data: { status: { learningEnabled: true, retrievalEnabled: true } },
+      });
+      await expect(host.get('opensuper.project-knowledge')).resolves.toMatchObject({
+        data: {
+          provider: 'local',
+          configured: true,
+          retrieval: expect.stringContaining('不会在项目中生成知识文件'),
+          diagnostics: [],
+        },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the project knowledge page reachable while the project is paused', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-default-plugin-host-pause-'));
+    const projectRoot = path.join(root, 'project');
+    await fs.mkdir(projectRoot, { recursive: true });
+    try {
+      const factory = createDefaultDashboardPluginHostFactory({
+        stateRoot: path.join(root, 'plugins'),
+        memoryRoot: path.join(root, 'memory'),
+      });
+      const host = await factory('project-1', projectRoot);
+
+      await host.lifecycle('opensuper.project-knowledge', 'disable');
+
+      await expect(host.list()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'opensuper.project-knowledge',
+            status: 'disabled',
+            globallyDisabled: false,
+            projectPaused: true,
+          }),
+        ]),
+      );
+      await expect(host.get('opensuper.project-knowledge')).resolves.toMatchObject({ data: null });
+
+      await host.lifecycle('opensuper.project-knowledge', 'enable');
+
+      await expect(host.list()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'opensuper.project-knowledge',
+            status: 'enabled',
+            globallyDisabled: false,
+            projectPaused: false,
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a globally disabled project knowledge page reachable for recovery', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-default-plugin-host-global-'));
+    const projectRoot = path.join(root, 'project');
+    const stateRoot = path.join(root, 'plugins');
+    await fs.mkdir(projectRoot, { recursive: true });
+    await fs.mkdir(stateRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(stateRoot, 'state.json'),
+      `${JSON.stringify({
+        plugins: [
+          {
+            id: 'opensuper.project-knowledge',
+            version: '1.0.0',
+            status: 'disabled',
+            explicitRemoval: false,
+            disabledProjects: [],
+            updatedAt: '2026-08-20T00:00:00.000Z',
+          },
+        ],
+      })}\n`,
+    );
+    try {
+      const factory = createDefaultDashboardPluginHostFactory({
+        stateRoot,
+        memoryRoot: path.join(root, 'memory'),
+      });
+      const host = await factory('project-1', projectRoot);
+
+      await expect(host.list()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'opensuper.project-knowledge',
+            status: 'disabled',
+            globallyDisabled: true,
+            projectPaused: false,
+          }),
+        ]),
+      );
+      await expect(host.get('opensuper.project-knowledge')).resolves.toMatchObject({ data: null });
+
+      await host.lifecycle('opensuper.project-knowledge', 'enable');
+
+      await expect(host.list()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'opensuper.project-knowledge',
+            status: 'enabled',
+            globallyDisabled: false,
+            projectPaused: false,
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

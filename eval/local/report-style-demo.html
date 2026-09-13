@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenSuper Eval 论文级报告样板</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f4ed;
+        --panel: #fffdf8;
+        --ink: #191817;
+        --muted: #66615a;
+        --line: #d7d0c3;
+        --grid: #e9e2d6;
+        --current: #1f5f8b;
+        --baseline: #9f3d2f;
+        --good: #28745c;
+        --bad: #a33a32;
+        --accent: #a87318;
+        --code: #eee7dc;
+        --paper-font:
+          'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', 'Source Han Serif SC', serif;
+        --mono: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--paper);
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          linear-gradient(90deg, rgba(25, 24, 23, 0.025) 1px, transparent 1px),
+          linear-gradient(180deg, rgba(25, 24, 23, 0.025) 1px, transparent 1px), var(--paper);
+        background-size: 28px 28px;
+        font: 16px/1.6 var(--paper-font);
+      }
+
+      .page {
+        width: min(1180px, calc(100vw - 40px));
+        margin: 28px auto 48px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        box-shadow: 0 18px 55px rgba(25, 24, 23, 0.08);
+      }
+
+      .toolbar {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+        padding: 16px 20px 0;
+      }
+
+      .toolbar button {
+        height: 30px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #fff;
+        color: var(--muted);
+        font: 12px/1 var(--paper-font);
+        cursor: pointer;
+      }
+
+      html[data-lang='zh'] button[data-set-lang='zh'],
+      html[data-lang='en'] button[data-set-lang='en'] {
+        border-color: var(--ink);
+        color: var(--ink);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 190px minmax(0, 1fr);
+        gap: 34px;
+        padding: 18px 42px 28px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .meta {
+        color: var(--muted);
+        font: 12px/1.45 var(--paper-font);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .meta span {
+        display: block;
+        margin-bottom: 10px;
+      }
+
+      h1 {
+        max-width: 900px;
+        margin: 0 0 14px;
+        font: 700 clamp(32px, 4vw, 54px) / 1.12 var(--paper-font);
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .dek {
+        max-width: 880px;
+        margin: 0;
+        color: var(--muted);
+        font: 17px/1.65 var(--paper-font);
+        text-wrap: pretty;
+      }
+
+      code {
+        padding: 0.08rem 0.28rem;
+        border-radius: 4px;
+        background: var(--code);
+        font-family: var(--mono);
+        font-size: 0.92em;
+      }
+
+      .abstract {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.75fr);
+        gap: 30px;
+        padding: 26px 42px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-label {
+        margin: 0 0 10px;
+        color: var(--accent);
+        font: 700 11px/1.2 var(--paper-font);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .abstract p {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.65;
+        text-wrap: pretty;
+      }
+
+      .findings {
+        margin: 0;
+        padding: 0 0 0 18px;
+        border-left: 2px solid var(--ink);
+        color: var(--muted);
+        font: 14px/1.55 var(--paper-font);
+        list-style: none;
+      }
+
+      .findings li + li {
+        margin-top: 10px;
+      }
+
+      .findings strong {
+        color: var(--ink);
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-bottom: 1px solid var(--line);
+      }
+
+      .metric {
+        min-height: 112px;
+        padding: 18px 22px;
+        border-right: 1px solid var(--line);
+      }
+
+      .metric:last-child {
+        border-right: 0;
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font: 12px/1.25 var(--paper-font);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .metric-value {
+        margin-top: 8px;
+        font: 700 32px/1 var(--paper-font);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .metric-note {
+        margin-top: 8px;
+        color: var(--muted);
+        font: 13px/1.35 var(--paper-font);
+      }
+
+      .positive {
+        color: var(--good);
+      }
+
+      .negative {
+        color: var(--bad);
+      }
+
+      .content {
+        padding: 34px 42px 46px;
+      }
+
+      .figure {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .figure + .figure,
+      .figure-grid,
+      .table-wrap,
+      .method {
+        margin-top: 28px;
+      }
+
+      .figure-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 16px 18px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      h2 {
+        margin: 0;
+        font: 700 15px/1.35 var(--paper-font);
+        letter-spacing: 0;
+      }
+
+      .kicker {
+        color: var(--muted);
+        font: 12px/1.25 var(--paper-font);
+        white-space: nowrap;
+      }
+
+      .figure-body {
+        padding: 16px 18px 18px;
+      }
+
+      .figure-body img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid var(--grid);
+      }
+
+      .caption {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font: 13px/1.55 var(--paper-font);
+        text-wrap: pretty;
+      }
+
+      .figure-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 24px;
+      }
+
+      .table-wrap {
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        overflow-x: auto;
+        background: #fff;
+      }
+
+      table {
+        width: 100%;
+        min-width: 920px;
+        border-collapse: collapse;
+        font: 13px/1.45 var(--paper-font);
+      }
+
+      caption {
+        caption-side: top;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        text-align: left;
+        font: 13px/1.5 var(--paper-font);
+      }
+
+      th,
+      td {
+        padding: 9px 11px;
+        border-bottom: 1px solid var(--grid);
+        text-align: left;
+        vertical-align: middle;
+      }
+
+      th {
+        background: #f5efe4;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .num {
+        text-align: right;
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 54px;
+        height: 22px;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        font: 700 11px/1 var(--paper-font);
+        letter-spacing: 0.04em;
+      }
+
+      .status.pass {
+        color: var(--good);
+        background: color-mix(in srgb, var(--good), transparent 92%);
+      }
+
+      .status.fail {
+        color: var(--bad);
+        background: color-mix(in srgb, var(--bad), transparent 92%);
+      }
+
+      .method {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 28px;
+        padding-top: 28px;
+        border-top: 1px solid var(--line);
+      }
+
+      .method h2 {
+        margin: 0 0 12px;
+        font: 700 25px/1.2 var(--paper-font);
+      }
+
+      .method p,
+      .method li {
+        color: var(--muted);
+        font: 14px/1.6 var(--paper-font);
+      }
+
+      .method ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      [data-i18n='en'],
+      .chart-en {
+        display: none;
+      }
+
+      html[data-lang='en'] [data-i18n='zh'],
+      html[data-lang='en'] .chart-zh {
+        display: none;
+      }
+
+      html[data-lang='en'] [data-i18n='en'],
+      html[data-lang='en'] .chart-en {
+        display: revert;
+      }
+
+      html[data-lang='en'] img.chart-en {
+        display: block;
+      }
+
+      html[data-lang='zh'] .status[data-i18n='zh'],
+      html[data-lang='en'] .status[data-i18n='en'] {
+        display: inline-flex;
+      }
+
+      @media (max-width: 860px) {
+        .page {
+          width: 100%;
+          margin: 0;
+          border-left: 0;
+          border-right: 0;
+        }
+
+        .hero,
+        .abstract,
+        .figure-grid,
+        .method {
+          grid-template-columns: 1fr;
+        }
+
+        .hero,
+        .abstract,
+        .content {
+          padding-left: 22px;
+          padding-right: 22px;
+        }
+
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .metric:nth-child(2) {
+          border-right: 0;
+        }
+
+        .metric:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="toolbar" aria-label="Language">
+        <button type="button" data-set-lang="zh">中文</button>
+        <button type="button" data-set-lang="en">English</button>
+      </div>
+
+      <header class="hero">
+        <div class="meta">
+          <span data-i18n="zh">OpenSuper Eval 报告</span>
+          <span data-i18n="en">OpenSuper Evaluation Report</span>
+          <span data-i18n="zh">论文级样板</span>
+          <span data-i18n="en">Paper-style demo</span>
+          <span>2026-07-02</span>
+        </div>
+        <div>
+          <h1 data-i18n="zh">Workflow 回归分析：以论文图表方式呈现 eval 结果</h1>
+          <h1 data-i18n="en">Workflow regression analysis with paper-grade comparative figures</h1>
+          <p class="dek" data-i18n="zh">
+            示例数据来自现有 current-vs-0.3.9 串行 eval：<code>OPENSUPER_FULL</code> 对比
+            <code>OPENSUPER_FULL_039</code>。中文为准，英文仅作为同版式翻译层。
+          </p>
+          <p class="dek" data-i18n="en">
+            Demo data comes from the existing current-vs-0.3.9 serial eval run:
+            <code>OPENSUPER_FULL</code> compared with <code>OPENSUPER_FULL_039</code>.
+          </p>
+        </div>
+      </header>
+
+      <section class="abstract">
+        <div>
+          <p class="section-label" data-i18n="zh">摘要</p>
+          <p class="section-label" data-i18n="en">Abstract</p>
+          <p data-i18n="zh">
+            当前 OpenSuper workflow 在任务通过率和 rubric 质量上高于 0.3.9 参考实现，但 token
+            与成本消耗更高。报告应优先呈现实验结论、效应大小、质量-成本权衡和失败归因，而不是只把日志表格包装成
+            HTML。
+          </p>
+          <p data-i18n="en">
+            The current OpenSuper workflow improves task success and rubric quality over the 0.3.9
+            reference, while consuming more tokens and cost. The report should foreground findings,
+            effect sizes, quality-cost trade-offs, and failure attribution rather than wrapping log
+            tables in HTML.
+          </p>
+        </div>
+        <ul class="findings">
+          <li data-i18n="zh">
+            <strong>主结论。</strong>任务通过率从 33.3% 提升到 83.3%，覆盖六个任务。
+          </li>
+          <li data-i18n="en">
+            <strong>Primary finding.</strong> Task pass rate increases from 33.3% to 83.3% across
+            six tasks.
+          </li>
+          <li data-i18n="zh"><strong>权衡。</strong>总 token 增加 5.90M，主要集中在长流程任务。</li>
+          <li data-i18n="en">
+            <strong>Trade-off.</strong> Token use increases by 5.90M tokens, mostly concentrated in
+            long workflow tasks.
+          </li>
+          <li data-i18n="zh">
+            <strong>风险信号。</strong>效率和决策点遵循度仍低于 0.3.9 参考实现。
+          </li>
+          <li data-i18n="en">
+            <strong>Risk signal.</strong> Efficiency and decision-point compliance remain below the
+            0.3.9 reference.
+          </li>
+        </ul>
+      </section>
+
+      <section class="metrics" aria-label="Headline metrics">
+        <div class="metric">
+          <div class="metric-label" data-i18n="zh">任务通过率</div>
+          <div class="metric-label" data-i18n="en">Task pass rate</div>
+          <div class="metric-value positive">+50.0 pp</div>
+          <div class="metric-note" data-i18n="zh">当前 5/6，基线 2/6</div>
+          <div class="metric-note" data-i18n="en">5/6 current vs 2/6 baseline</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label" data-i18n="zh">Rubric 平均分</div>
+          <div class="metric-label" data-i18n="en">Rubric average</div>
+          <div class="metric-value positive">+0.18</div>
+          <div class="metric-note" data-i18n="zh">当前 0.72，基线 0.54</div>
+          <div class="metric-note" data-i18n="en">0.72 current vs 0.54 baseline</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label" data-i18n="zh">检查通过率</div>
+          <div class="metric-label" data-i18n="en">Check pass rate</div>
+          <div class="metric-value positive">+8.9 pp</div>
+          <div class="metric-note" data-i18n="zh">当前 76/79，基线 69/79</div>
+          <div class="metric-note" data-i18n="en">76/79 current vs 69/79 baseline</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label" data-i18n="zh">总成本</div>
+          <div class="metric-label" data-i18n="en">Total cost</div>
+          <div class="metric-value negative">+$3.63</div>
+          <div class="metric-note" data-i18n="zh">当前 $7.5947，基线 $3.9688</div>
+          <div class="metric-note" data-i18n="en">$7.5947 current vs $3.9688 baseline</div>
+        </div>
+      </section>
+
+      <section class="content">
+        <article class="figure">
+          <div class="figure-head">
+            <h2 data-i18n="zh">图 1. Rubric 维度相对 0.3.9 的变化</h2>
+            <h2 data-i18n="en">Figure 1. Rubric dimension deltas relative to 0.3.9</h2>
+            <span class="kicker" data-i18n="zh">均值差，越靠右越好</span>
+            <span class="kicker" data-i18n="en">Mean score difference, higher is better</span>
+          </div>
+          <div class="figure-body">
+            <img
+              class="chart-zh"
+              src="report-style-demo-assets/rubric_delta.zh.svg"
+              alt="Rubric 维度变化图"
+            />
+            <img
+              class="chart-en"
+              src="report-style-demo-assets/rubric_delta.en.svg"
+              alt="Rubric dimension delta chart"
+            />
+            <p class="caption" data-i18n="zh">
+              Python 生成的 lollipop/forest plot 比手写 SVG 更接近论文图表：零线是 0.3.9
+              参考实现，蓝色代表当前 workflow 提升，红色代表退步。
+            </p>
+            <p class="caption" data-i18n="en">
+              The Python-generated lollipop/forest plot is closer to paper figures than hand-coded
+              SVG. The zero line is the 0.3.9 reference; blue favors the current workflow and red
+              marks regressions.
+            </p>
+          </div>
+        </article>
+
+        <div class="figure-grid">
+          <article class="figure">
+            <div class="figure-head">
+              <h2 data-i18n="zh">图 2. 质量-成本前沿</h2>
+              <h2 data-i18n="en">Figure 2. Quality-cost frontier</h2>
+              <span class="kicker" data-i18n="zh">Rubric vs token</span>
+              <span class="kicker" data-i18n="en">Rubric vs token budget</span>
+            </div>
+            <div class="figure-body">
+              <img
+                class="chart-zh"
+                src="report-style-demo-assets/quality_cost.zh.svg"
+                alt="质量成本前沿图"
+              />
+              <img
+                class="chart-en"
+                src="report-style-demo-assets/quality_cost.en.svg"
+                alt="Quality-cost frontier chart"
+              />
+              <p class="caption" data-i18n="zh">
+                这个图把质量和消耗分开呈现，避免把 token 成本混进质量分数里。
+              </p>
+              <p class="caption" data-i18n="en">
+                This chart separates quality and spend so token cost does not get mixed into the
+                quality score.
+              </p>
+            </div>
+          </article>
+
+          <article class="figure">
+            <div class="figure-head">
+              <h2 data-i18n="zh">图 3. 任务通过矩阵</h2>
+              <h2 data-i18n="en">Figure 3. Task outcome matrix</h2>
+              <span class="kicker" data-i18n="zh">六个 benchmark 任务</span>
+              <span class="kicker" data-i18n="en">Six benchmark tasks</span>
+            </div>
+            <div class="figure-body">
+              <img
+                class="chart-zh"
+                src="report-style-demo-assets/task_outcomes.zh.svg"
+                alt="任务通过矩阵"
+              />
+              <img
+                class="chart-en"
+                src="report-style-demo-assets/task_outcomes.en.svg"
+                alt="Task outcome matrix"
+              />
+              <p class="caption" data-i18n="zh">
+                任务矩阵保留 per-task 粒度，适合在正文给结论、在附录追踪具体失败。
+              </p>
+              <p class="caption" data-i18n="en">
+                The task matrix preserves per-task granularity, supporting conclusions in the main
+                text and failure tracing in the appendix.
+              </p>
+            </div>
+          </article>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <caption data-i18n="zh">
+              表 1. Per-task 对比摘要。Tokens 和成本为每个 task/treatment run 的观测总量。
+            </caption>
+            <caption data-i18n="en">
+              Table 1. Per-task comparison summary. Tokens and costs are total observed usage for
+              each task/treatment run.
+            </caption>
+            <thead>
+              <tr>
+                <th data-i18n="zh">任务</th>
+                <th data-i18n="en">Task</th>
+                <th>Treatment</th>
+                <th data-i18n="zh">状态</th>
+                <th data-i18n="en">Status</th>
+                <th class="num">Checks</th>
+                <th class="num">Rubric</th>
+                <th class="num">Tokens</th>
+                <th class="num">Cost</th>
+                <th data-i18n="zh">失败归因</th>
+                <th data-i18n="en">Failure attribution</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td data-i18n="zh">API 缓存 TTL</td>
+                <td data-i18n="en">API cache TTL</td>
+                <td><code>OPENSUPER_FULL</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">13/13</td>
+                <td class="num">0.79</td>
+                <td class="num">4,280,454</td>
+                <td class="num">$2.6856</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">API 缓存 TTL</td>
+                <td data-i18n="en">API cache TTL</td>
+                <td><code>OPENSUPER_FULL_039</code></td>
+                <td>
+                  <span class="status fail" data-i18n="zh">失败</span
+                  ><span class="status fail" data-i18n="en">FAIL</span>
+                </td>
+                <td class="num">10/13</td>
+                <td class="num">0.33</td>
+                <td class="num">202,121</td>
+                <td class="num">$0.1795</td>
+                <td data-i18n="zh">缺少 OpenSpec 产物和状态机证据</td>
+                <td data-i18n="en">OpenSpec artifacts and state machine evidence missing</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">修复 median</td>
+                <td data-i18n="en">Fix median</td>
+                <td><code>OPENSUPER_FULL</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">13/13</td>
+                <td class="num">0.70</td>
+                <td class="num">2,216,220</td>
+                <td class="num">$1.4787</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">修复 median</td>
+                <td data-i18n="en">Fix median</td>
+                <td><code>OPENSUPER_FULL_039</code></td>
+                <td>
+                  <span class="status fail" data-i18n="zh">失败</span
+                  ><span class="status fail" data-i18n="en">FAIL</span>
+                </td>
+                <td class="num">10/13</td>
+                <td class="num">0.33</td>
+                <td class="num">148,330</td>
+                <td class="num">$0.1217</td>
+                <td data-i18n="zh">缺少 OpenSpec 产物和状态机证据</td>
+                <td data-i18n="en">OpenSpec artifacts and state machine evidence missing</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">完整流程</td>
+                <td data-i18n="en">Full workflow</td>
+                <td><code>OPENSUPER_FULL</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">13/13</td>
+                <td class="num">0.84</td>
+                <td class="num">161,476</td>
+                <td class="num">$0.0942</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">完整流程</td>
+                <td data-i18n="en">Full workflow</td>
+                <td><code>OPENSUPER_FULL_039</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">13/13</td>
+                <td class="num">0.88</td>
+                <td class="num">224,163</td>
+                <td class="num">$0.1309</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">性能去重</td>
+                <td data-i18n="en">Perf dedupe</td>
+                <td><code>OPENSUPER_FULL</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">13/13</td>
+                <td class="num">0.79</td>
+                <td class="num">3,042,862</td>
+                <td class="num">$2.0644</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">性能去重</td>
+                <td data-i18n="en">Perf dedupe</td>
+                <td><code>OPENSUPER_FULL_039</code></td>
+                <td>
+                  <span class="status fail" data-i18n="zh">失败</span
+                  ><span class="status fail" data-i18n="en">FAIL</span>
+                </td>
+                <td class="num">10/13</td>
+                <td class="num">0.34</td>
+                <td class="num">49,682</td>
+                <td class="num">$0.0280</td>
+                <td data-i18n="zh">缺少 OpenSpec 产物和状态机证据</td>
+                <td data-i18n="en">OpenSpec artifacts and state machine evidence missing</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">重构 counter</td>
+                <td data-i18n="en">Refactor counter</td>
+                <td><code>OPENSUPER_FULL</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">14/14</td>
+                <td class="num">0.84</td>
+                <td class="num">1,536,724</td>
+                <td class="num">$1.0945</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">重构 counter</td>
+                <td data-i18n="en">Refactor counter</td>
+                <td><code>OPENSUPER_FULL_039</code></td>
+                <td>
+                  <span class="status pass" data-i18n="zh">通过</span
+                  ><span class="status pass" data-i18n="en">PASS</span>
+                </td>
+                <td class="num">14/14</td>
+                <td class="num">0.80</td>
+                <td class="num">4,304,050</td>
+                <td class="num">$3.0287</td>
+                <td data-i18n="zh">正常</td>
+                <td data-i18n="en">OK</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">健壮配置</td>
+                <td data-i18n="en">Robust config</td>
+                <td><code>OPENSUPER_FULL</code></td>
+                <td>
+                  <span class="status fail" data-i18n="zh">失败</span
+                  ><span class="status fail" data-i18n="en">FAIL</span>
+                </td>
+                <td class="num">10/13</td>
+                <td class="num">0.33</td>
+                <td class="num">208,867</td>
+                <td class="num">$0.1774</td>
+                <td data-i18n="zh">缺少 OpenSpec 产物和状态机证据</td>
+                <td data-i18n="en">OpenSpec artifacts and state machine evidence missing</td>
+              </tr>
+              <tr>
+                <td data-i18n="zh">健壮配置</td>
+                <td data-i18n="en">Robust config</td>
+                <td><code>OPENSUPER_FULL_039</code></td>
+                <td>
+                  <span class="status fail" data-i18n="zh">失败</span
+                  ><span class="status fail" data-i18n="en">FAIL</span>
+                </td>
+                <td class="num">12/13</td>
+                <td class="num">0.56</td>
+                <td class="num">621,935</td>
+                <td class="num">$0.4801</td>
+                <td data-i18n="zh">workflow 阶段证据不完整</td>
+                <td data-i18n="en">Workflow phase evidence incomplete</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <section class="method">
+          <div>
+            <p class="section-label" data-i18n="zh">方法</p>
+            <p class="section-label" data-i18n="en">Methods</p>
+            <h2 data-i18n="zh">图表由 Python 生成，HTML 只负责报告排版</h2>
+            <h2 data-i18n="en">Charts are generated by Python; HTML owns report layout only</h2>
+            <p data-i18n="zh">
+              这个样板把数据可视化从 HTML 中拆出来：Python 脚本生成可复现 SVG，HTML
+              引用图表资产并提供中英文切换。后续真实 report renderer 可以继续复用这个边界。
+            </p>
+            <p data-i18n="en">
+              This sample separates visualization from report layout: the Python script generates
+              reproducible SVG assets, while HTML references those figures and provides bilingual
+              switching.
+            </p>
+          </div>
+          <ul>
+            <li data-i18n="zh">中文内容是主版本；英文只作为同结构翻译。</li>
+            <li data-i18n="en">
+              Chinese is the source version; English is the same-structure translation.
+            </li>
+            <li data-i18n="zh">图表文件位于 <code>eval/local/report-style-demo-assets/</code>。</li>
+            <li data-i18n="en">
+              Chart files live under <code>eval/local/report-style-demo-assets/</code>.
+            </li>
+            <li data-i18n="zh">当前没有多次 run 的方差，因此不画置信区间。</li>
+            <li data-i18n="en">
+              The current demo has no multi-run variance, so confidence intervals are not drawn.
+            </li>
+          </ul>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const applyLanguage = (lang) => {
+        const next = lang === 'en' ? 'en' : 'zh';
+        document.documentElement.dataset.lang = next;
+        document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+        localStorage.setItem('opensuper-report-demo-lang', next);
+      };
+
+      document.querySelectorAll('[data-set-lang]').forEach((button) => {
+        button.addEventListener('click', () => applyLanguage(button.dataset.setLang));
+      });
+
+      applyLanguage(localStorage.getItem('opensuper-report-demo-lang') || 'zh');
+    </script>
+  </body>
+</html>

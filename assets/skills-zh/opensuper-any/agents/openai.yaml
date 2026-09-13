@@ -1,0 +1,5 @@
+interface:
+  display_name: "OpenSuper Any / Skill Creator"
+  short_description: "创建或升级 OpenSuper Classic workflow Skill"
+policy:
+  allow_implicit_invocation: false

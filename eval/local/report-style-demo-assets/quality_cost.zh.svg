@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 460" role="img" aria-label="图 2. 质量-成本前沿">
+<style>
+text { font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif; }
+.title { fill: #1B1A18; font-size: 18px; font-weight: 700; }
+.subtitle, .tick { fill: #66615A; font-size: 12px; }
+.label { fill: #1B1A18; font-size: 13px; }
+.value { fill: #1B1A18; font-size: 12px; font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', serif; }
+.grid { stroke: #D8D2C7; stroke-width: 1; shape-rendering: crispEdges; }
+.axis { stroke: #1B1A18; stroke-width: 1; shape-rendering: crispEdges; }
+</style>
+<rect width="820" height="460" fill="#FFFFFF" />
+<text class="title" x="32" y="32">图 2. 质量-成本前沿</text>
+<text class="subtitle" x="32" y="54">纵轴为 Rubric 平均分，横轴为总 token；点越靠左上越理想。</text>
+<line class="grid" x1="86.0" y1="72" x2="86.0" y2="372" />
+<text class="tick" x="86.0" y="402" text-anchor="middle">0M</text>
+<line class="grid" x1="292.7" y1="72" x2="292.7" y2="372" />
+<text class="tick" x="292.7" y="402" text-anchor="middle">4M</text>
+<line class="grid" x1="499.3" y1="72" x2="499.3" y2="372" />
+<text class="tick" x="499.3" y="402" text-anchor="middle">8M</text>
+<line class="grid" x1="706.0" y1="72" x2="706.0" y2="372" />
+<text class="tick" x="706.0" y="402" text-anchor="middle">12M</text>
+<line class="grid" x1="86" y1="372.0" x2="706" y2="372.0" />
+<text class="tick" x="60" y="376.0" text-anchor="end">0.3</text>
+<line class="grid" x1="86" y1="272.0" x2="706" y2="272.0" />
+<text class="tick" x="60" y="276.0" text-anchor="end">0.5</text>
+<line class="grid" x1="86" y1="172.0" x2="706" y2="172.0" />
+<text class="tick" x="60" y="176.0" text-anchor="end">0.7</text>
+<line class="grid" x1="86" y1="72.0" x2="706" y2="72.0" />
+<text class="tick" x="60" y="76.0" text-anchor="end">0.9</text>
+<line class="axis" x1="86" y1="372" x2="706" y2="372" />
+<line class="axis" x1="86" y1="72" x2="86" y2="372" />
+<line x1="372.8" y1="252.0" x2="677.4" y2="162.0" stroke="#9B9488" stroke-width="1.5" stroke-dasharray="5 5" />
+<circle cx="677.4" cy="162.0" r="8" fill="#1F5F8B" />
+<text class="value" x="663.4" y="152.0" text-anchor="end">当前 workflow</text>
+<text class="tick" x="663.4" y="171.0" text-anchor="end">0.72 / $7.59</text>
+<circle cx="372.8" cy="252.0" r="8" fill="#9F3D2F" />
+<text class="value" x="386.8" y="242.0" text-anchor="start">0.3.9 基线</text>
+<text class="tick" x="386.8" y="261.0" text-anchor="start">0.54 / $3.97</text>
+<text class="label" x="396.0" y="438" text-anchor="middle">总 token</text>
+<text class="label" x="24" y="222.0" transform="rotate(-90 24 222.0)" text-anchor="middle">Rubric 平均分</text>
+</svg>

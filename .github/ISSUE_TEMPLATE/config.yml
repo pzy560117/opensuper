@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 📚 opensuper documentation
+  - name: 📚 OpenSuper documentation
     url: https://github.com/pzy560117/opensuper#readme
     about: Read the installation guide, command reference, and workflow overview.
-  - name: 💬 opensuper discussions
+  - name: 💬 OpenSuper discussions
     url: https://github.com/pzy560117/opensuper/discussions
     about: Ask open-ended questions or discuss ideas that are not ready for an issue.

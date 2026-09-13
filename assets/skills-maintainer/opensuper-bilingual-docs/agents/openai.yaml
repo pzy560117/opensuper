@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenSuper 双语文档"
+  short_description: "同步中英文文档"
+  default_prompt: "使用 $opensuper-bilingual-docs 同步 OpenSuper 中英文文档。"
+policy:
+  allow_implicit_invocation: false

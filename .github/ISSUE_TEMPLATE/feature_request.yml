@@ -1,5 +1,5 @@
 name: 🚀 Feature Request
-description: Suggest an improvement to opensuper.
+description: Suggest an improvement to OpenSuper.
 title: 'feat: '
 labels: ['enhancement', 'needs-triage']
 body:
@@ -15,14 +15,14 @@ body:
     attributes:
       label: 🧭 Problem
       description: What workflow problem should this solve?
-      placeholder: 'When using opensuper to ..., I need ...'
+      placeholder: 'When using OpenSuper to ..., I need ...'
     validations:
       required: true
 
   - type: textarea
     attributes:
       label: ✨ Proposed solution
-      description: Describe the behavior you want opensuper to provide.
+      description: Describe the behavior you want OpenSuper to provide.
     validations:
       required: true
 
@@ -31,10 +31,22 @@ body:
       label: 🎯 Primary area
       description: Where would this feature live?
       options:
-        - CLI command
-        - Platform support
-        - Skill workflow
-        - Shell script
+        - CLI command / user interaction (`app/`)
+        - Native workflow runtime (`domains/opensuper-native`)
+        - Bundle authoring (`domains/bundle`)
+        - Classic workflow runtime (`domains/opensuper-classic`, `assets/skills/opensuper/scripts/`)
+        - Shared Hook / Hook Router (`domains/opensuper-entry`)
+        - Dashboard (`domains/dashboard`)
+        - Engine (`domains/engine`)
+        - Eval (`domains/eval`)
+        - Factory (`domains/factory`)
+        - Integrations (`domains/integrations`)
+        - Skill domain (`domains/skill`)
+        - Workflow contract (`domains/workflow-contract`)
+        - Platform adapter / installer (`platform/*`)
+        - Bundled skills or assets (`assets/skills/`, `assets/skills-zh/`)
+        - Repository automation (`scripts/*`)
+        - Tests / repository architecture
         - Documentation
         - CI / release
         - Other
@@ -44,7 +56,7 @@ body:
   - type: dropdown
     attributes:
       label: 🪐 Workflow phase
-      description: If this affects a opensuper phase, choose the closest one.
+      description: If this affects a OpenSuper phase, choose the closest one.
       options:
         - Not phase-specific
         - Open
@@ -66,8 +78,8 @@ body:
   - type: textarea
     attributes:
       label: 🧰 Compatibility notes
-      description: Mention affected platforms, install scopes, languages, or shell environments if relevant.
-      placeholder: 'For example: project/global scope, English/Chinese skills, macOS/Linux/Windows Git Bash.'
+      description: Mention affected platforms, install scopes, languages, test ownership, or runtime/generated assets if relevant.
+      placeholder: 'For example: project/global scope, English/Chinese skills, macOS/Linux/Windows, `test/domains/<domain>/`, or regenerated Classic runtime assets.'
     validations:
       required: false
 

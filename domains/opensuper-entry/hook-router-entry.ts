@@ -1,0 +1,124 @@
+import path from 'path';
+import { realpathSync } from 'fs';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+import { discoverNativeProject } from '../opensuper-native/native-paths.js';
+import {
+  OPENSUPER_HOOK_PLATFORM_IDS,
+  readOpenSuperHookRequest,
+  renderOpenSuperHookDecision,
+} from './hook-adapter.js';
+import { runWithHookReadCache } from '../../platform/process/hook-read-cache.js';
+import { inspectOpenSuperHook } from './hook-router.js';
+import type { OpenSuperHookDecision } from './hook-types.js';
+import { resolveOpenSuperHookProjectRoot } from './hook-project-root.js';
+import { readWorkflowProjectConfig } from '../workflow-contract/project-config-reader.js';
+
+const USAGE =
+  'Usage: opensuper-hook-router --platform <platform-id> [--project-root <project-root>]';
+
+interface ParsedArgs {
+  platformId: string;
+  projectRoot?: string;
+}
+
+function parseArgs(args: readonly string[]): ParsedArgs {
+  let platformId: string | undefined;
+  let projectRoot: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--platform') {
+      platformId = args[++index];
+      continue;
+    }
+    if (arg === '--project-root') {
+      projectRoot = args[++index];
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  if (!platformId || platformId.startsWith('--')) throw new Error('--platform is required');
+  if (!OPENSUPER_HOOK_PLATFORM_IDS.has(platformId)) {
+    throw new Error(`unsupported Hook platform: ${platformId}`);
+  }
+  if (projectRoot?.startsWith('--')) throw new Error('--project-root requires a value');
+  return { platformId, ...(projectRoot ? { projectRoot: path.resolve(projectRoot) } : {}) };
+}
+
+export async function projectRootFrom(
+  parsed: ParsedArgs,
+  request?: ReturnType<typeof readOpenSuperHookRequest>,
+): Promise<string | null> {
+  if (parsed.projectRoot) {
+    const candidate = request
+      ? await resolveOpenSuperHookProjectRoot(parsed.projectRoot, request)
+      : parsed.projectRoot;
+    return configuredProjectFrom(candidate);
+  }
+  // A Router without --project-root is a legacy/global installation. It must
+  // use the host-provided working directory when one is available; the
+  // process cwd is often the directory where the global Hook was installed,
+  // not the project that owns the current tool request. Without a trusted
+  // request cwd there is no safe project to inspect, so leave the legacy Hook
+  // neutral instead of applying another project's phase guard.
+  if (!request?.cwd) return null;
+
+  const discoveryStart = request.cwd;
+  return configuredProjectFrom(discoveryStart);
+}
+
+async function configuredProjectFrom(projectRoot: string): Promise<string | null> {
+  const discovered = await discoverNativeProject(projectRoot);
+  return (await readWorkflowProjectConfig(discovered)) === null ? null : discovered;
+}
+
+export async function runOpenSuperHookRouter(args: readonly string[]): Promise<number> {
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n${USAGE}\n`);
+    return 64;
+  }
+
+  let decision: OpenSuperHookDecision;
+  try {
+    const request = readOpenSuperHookRequest();
+    const projectRoot = await projectRootFrom(parsed, request);
+    decision = projectRoot
+      ? await runWithHookReadCache(() => inspectOpenSuperHook(projectRoot, request))
+      : { allowed: true, reason: 'No OpenSuper project discovered' };
+  } catch (error) {
+    decision = {
+      allowed: false,
+      reason: `OpenSuper Hook Router failed closed during project discovery: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const output = renderOpenSuperHookDecision(parsed.platformId, decision);
+  if (output.stdout) process.stdout.write(output.stdout);
+  if (output.stderr) process.stderr.write(output.stderr);
+  return output.exitCode;
+}
+
+export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+  return runOpenSuperHookRouter(argv);
+}
+
+export function isDirectEntry(
+  entry: string | undefined,
+  moduleUrl: string = import.meta.url,
+): boolean {
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return moduleUrl === pathToFileURL(entry).href;
+  }
+}
+
+const entry = process.argv[1];
+if (isDirectEntry(entry)) {
+  void main().then((exitCode) => {
+    process.exitCode = exitCode;
+  });
+}

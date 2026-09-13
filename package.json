@@ -1,13 +1,19 @@
 {
   "name": "@pzy560117/opensuper",
-  "version": "0.3.9",
-  "description": "OpenSpec + Superpowers dual-star development workflow",
+  "version": "0.4.0",
+  "description": "Agent Skill Harness For Turning Ideas Into Evaluated Workflows",
   "keywords": [
     "opensuper",
     "openspec",
     "superpowers",
     "skills",
-    "workflow"
+    "workflow",
+    "ai-coding",
+    "agent-workflow",
+    "spec-workflow",
+    "loop-engineering",
+    "skill-creator",
+    "skill-evaluation"
   ],
   "license": "MIT",
   "author": "benym",
@@ -24,54 +30,132 @@
     "access": "public"
   },
   "bin": {
-    "opensuper": "./bin/opensuper.js"
+    "opensuper": "bin/opensuper.js"
   },
   "files": [
     "dist",
     "bin",
     "assets",
-    "scripts/postinstall.js",
+    "!assets/AGENTS.md",
+    "!assets/skills-maintainer",
+    "!assets/skills-maintainer/**",
+    "eval/.env.example",
+    "eval/CLAUDE.md",
+    "eval/README.md",
+    "eval/pyproject.toml",
+    "eval/report-html-config.json",
+    "eval/simulator-instruction.md",
+    "eval/langfuse",
+    "eval/langsmith",
+    "eval/local",
+    "eval/scaffold",
+    "eval/schemas",
+    "scripts/install/postinstall.js",
     "!dist/**/*.test.js",
     "!dist/**/__tests__"
   ],
   "scripts": {
     "build": "node build.js",
+    "build:dashboard": "vite build --config domains/dashboard/web/vite.config.mjs",
+    "build:website-dashboard-demo": "node scripts/build/build-website-dashboard-demo.mjs",
+    "dev:dashboard": "node scripts/dev-dashboard.mjs",
+    "build:classic-runtime": "node scripts/build/build-classic-runtime.mjs",
+    "build:native-runtime": "node scripts/build/build-native-runtime.mjs",
+    "build:entry-runtime": "node scripts/build/build-entry-runtime.mjs",
+    "check:generated": "node scripts/build/build-classic-runtime.mjs --check && node scripts/build/build-native-runtime.mjs --check && node scripts/build/build-entry-runtime.mjs --check",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:native-parallel": "vitest run test/domains/opensuper-native/native-parallel-worktree.test.ts",
+    "test:script-smoke": "vitest run test/domains/opensuper-classic/opensuper-scripts.test.ts",
+    "test:runtime-smoke": "vitest run test/domains/opensuper-classic/opensuper-scripts.test.ts test/repository/native-runtime-assets.test.ts test/repository/opensuper-entry-runtime-assets.test.ts test/app/cli-smoke.test.ts",
+    "test:package-e2e": "node scripts/release/package-e2e.mjs",
+    "test:dashboard-e2e": "playwright test --config test/domains/dashboard/playwright.config.ts",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix",
-    "format": "prettier --write src/",
-    "format:check": "prettier --check src/",
-    "test:shell": "node scripts/run-bats.js test/shell/*.bats",
-    "benchmark:context": "node scripts/context-compression-benchmark.mjs",
-    "benchmark:execution": "node scripts/context-execution-benchmark.mjs",
-    "prepare": "husky && pnpm run build",
-    "prepublishOnly": "node scripts/prepublish-check.js && pnpm run build",
-    "postinstall": "node scripts/postinstall.js"
+    "lint": "eslint app/ domains/ platform/ && pnpm run lint:architecture",
+    "lint:architecture": "node scripts/lint/architecture.mjs",
+    "lint:fix": "eslint app/ domains/ platform/ --fix",
+    "format": "prettier --write app/ domains/ platform/ scripts/ test/ .github/ config/ package.json vitest.config.ts build.js tsconfig.json",
+    "format:check": "prettier --check app/ domains/ platform/ scripts/ test/ .github/ config/ package.json vitest.config.ts build.js tsconfig.json",
+    "benchmark:context": "node scripts/benchmark/context-compression-benchmark.mjs",
+    "benchmark:execution": "node scripts/benchmark/context-execution-benchmark.mjs",
+    "benchmark:classic": "node scripts/benchmark/classic-baseline-regression.mjs",
+    "benchmark:bundle": "pnpm build && node scripts/benchmark/opensuper-bundle-compatibility-benchmark.mjs",
+    "prepare": "node scripts/release/prepare.js",
+    "prepack": "node scripts/release/npm-readme.mjs apply",
+    "postpack": "node scripts/release/npm-readme.mjs restore",
+    "prepublishOnly": "node scripts/release/prepublish-check.js && node build.js",
+    "postinstall": "node scripts/install/postinstall.js"
   },
   "lint-staged": {
-    "src/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write"
+    "app/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write",
+    "domains/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write",
+    "platform/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write",
+    "scripts/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write",
+    "test/**/*.{ts,tsx,js,mjs,cjs,json,md,yaml,yml}": "prettier --write",
+    ".github/**/*.{json,md,yaml,yml}": "prettier --write",
+    "config/**/*.{json,md,yaml,yml}": "prettier --write"
   },
   "packageManager": "pnpm@10.18.3",
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "esbuild": "0.28.2",
+    "postcss": "8.5.26",
+    "undici": "7.29.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion": "5.0.9",
+      "esbuild": "0.28.2",
+      "postcss": "8.5.26",
+      "undici": "7.29.0"
+    }
+  },
   "engines": {
-    "node": ">=20"
+    "node": "^22.16.0 || >=24.0.0"
   },
   "devDependencies": {
+    "@ant-design/cssinjs": "2.1.2",
     "@eslint/js": "^10.0.1",
-    "@types/node": "^24.2.0",
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/vite": "^4.3.1",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "^4.1.6",
+    "esbuild": "0.28.2",
     "eslint": "^10.4.0",
     "husky": "^9.1.7",
+    "jsdom": "^30.0.1",
     "lint-staged": "^17.0.7",
+    "postcss": "8.5.26",
     "prettier": "^3.8.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.59.3",
+    "vite": "8.2.2",
     "vitest": "^4.1.6"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.4.3",
-    "commander": "^14.0.0"
+    "@ant-design/icons": "^6.3.2",
+    "@fission-ai/openspec": "^1.11.0",
+    "@inquirer/ansi": "^2.0.7",
+    "@inquirer/core": "^12.0.1",
+    "@inquirer/figures": "^2.0.8",
+    "@inquirer/prompts": "^8.7.0",
+    "@inquirer/type": "^4.1.0",
+    "@vscode/ripgrep": "^1.18.0",
+    "ajv": "^8.17.1",
+    "antd": "^6.6.2",
+    "commander": "^15.0.0",
+    "dompurify": "^3.4.14",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.0.11",
+    "mermaid": "11.17.2",
+    "smol-toml": "^1.8.0",
+    "yaml": "^2.9.0"
   }
 }

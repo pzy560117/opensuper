@@ -1,0 +1,246 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createServer } from 'node:http';
+
+import { afterEach, describe, expect, test, vi } from 'vitest';
+
+import {
+  projectKnowledgeCorrectCommand,
+  projectKnowledgeFeedbackCommand,
+  projectKnowledgeForgetCommand,
+  projectKnowledgeGetCommand,
+  projectKnowledgeListCommand,
+  projectKnowledgeQueryCommand,
+  projectKnowledgeRebuildCommand,
+  projectKnowledgeStatusCommand,
+  projectKnowledgeReviewCommand,
+} from '../../app/commands/project-knowledge.js';
+import {
+  LocalProjectKnowledgeProvider,
+  type ProjectKnowledgeRecord,
+} from '../../domains/project-knowledge/index.js';
+import { resolveStableProjectId } from '../../platform/paths/project-identity.js';
+
+async function projectFixture(): Promise<{ root: string; cacheRoot: string; source: string }> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-knowledge-command-'));
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-knowledge-command-cache-'));
+  await fs.mkdir(path.join(root, '.opensuper'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, '.opensuper', 'config.yaml'),
+    [
+      'schema: opensuper.project.v1',
+      'default_workflow: native',
+      'workflows: [native]',
+      'native:',
+      '  artifact_root: docs',
+      'knowledge:',
+      '  provider: local',
+      '',
+    ].join('\n'),
+  );
+  const source = path.join(root, 'docs', 'opensuper', 'specs', 'retrieval.md');
+  await fs.mkdir(path.dirname(source), { recursive: true });
+  await fs.writeFile(source, '# 混合召回\n\n项目知识使用 SQLite FTS5 和 ripgrep。\n');
+  return { root, cacheRoot, source };
+}
+
+const originalExitCode = process.exitCode;
+afterEach(() => {
+  process.exitCode = originalExitCode;
+  vi.restoreAllMocks();
+});
+
+describe('opensuper knowledge commands', () => {
+  test.each([false, true])(
+    'reports remote outages without pretending a query succeeded (json=%s)',
+    async (json) => {
+      const { root, cacheRoot } = await projectFixture();
+      const server = createServer((_request, response) => {
+        response.writeHead(503);
+        response.end();
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as { port: number }).port;
+      await fs.writeFile(
+        path.join(root, '.opensuper', 'config.yaml'),
+        `schema: opensuper.project.v1\ndefault_workflow: native\nworkflows: [native]\nnative:\n  artifact_root: docs\nknowledge:\n  provider: remote\n  remote:\n    endpoint: http://127.0.0.1:${port}\n`,
+      );
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await projectKnowledgeQueryCommand(root, { task: 'ledger', json });
+        expect(process.exitCode).toBe(1);
+        if (json) {
+          expect(JSON.parse(String(log.mock.calls[0][0])).diagnostics).toEqual(
+            expect.arrayContaining([expect.objectContaining({ code: 'remote-status' })]),
+          );
+          expect(error).not.toHaveBeenCalled();
+        } else {
+          expect(log).not.toHaveBeenCalled();
+          expect(error).toHaveBeenCalledWith(expect.stringContaining('503'));
+        }
+        process.exitCode = originalExitCode;
+        await projectKnowledgeCorrectCommand(root, {
+          id: 'record',
+          text: 'Correction',
+          json: true,
+        });
+        expect(process.exitCode).toBe(1);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await fs.rm(root, { recursive: true, force: true });
+        await fs.rm(cacheRoot, { recursive: true, force: true });
+      }
+    },
+  );
+  test('keeps a successful empty query successful', async () => {
+    const { root, cacheRoot } = await projectFixture();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await projectKnowledgeQueryCommand(root, {
+        task: 'no-matching-vocabulary-xyz',
+        cacheRoot,
+        json: true,
+      });
+      expect(process.exitCode).toBe(originalExitCode);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(cacheRoot, { recursive: true, force: true });
+    }
+  });
+  test('rejects oversized and non-regular review action inputs before submission', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opensuper-review-input-'));
+    try {
+      const file = path.join(root, 'actions.json');
+      await fs.writeFile(file, Buffer.alloc(256 * 1024 + 1));
+      await expect(
+        projectKnowledgeReviewCommand(root, { cacheRoot: root, file, id: 'review' }),
+      ).rejects.toThrow('exceeds');
+      await expect(
+        projectKnowledgeReviewCommand(root, { cacheRoot: root, file: root, id: 'review' }),
+      ).rejects.toThrow('regular file');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  test('reports status, refreshes, and queries through the Local Provider', async () => {
+    const { root, cacheRoot } = await projectFixture();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await expect(
+        projectKnowledgeStatusCommand(root, { json: true, cacheRoot }),
+      ).resolves.toMatchObject({
+        provider: 'local',
+        status: { healthy: true, writable: true },
+      });
+
+      await expect(
+        projectKnowledgeRebuildCommand(root, { json: true, cacheRoot }),
+      ).resolves.toMatchObject({
+        provider: 'local',
+        result: { kind: 'refresh' },
+      });
+
+      await expect(
+        projectKnowledgeQueryCommand(root, {
+          json: true,
+          cacheRoot,
+          task: 'SQLite FTS5 项目知识混合召回',
+          path: 'docs/opensuper/specs',
+          operation: 'verify',
+        }),
+      ).resolves.toMatchObject({
+        result: {
+          kind: 'search',
+          results: expect.arrayContaining([
+            expect.objectContaining({ source: 'docs/opensuper/specs/retrieval.md' }),
+          ]),
+        },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('lists, gets, corrects, and forgets Records without project files', async () => {
+    const { root, cacheRoot, source } = await projectFixture();
+    const stat = await fs.stat(source);
+    const record: ProjectKnowledgeRecord = {
+      id: 'record-command',
+      projectId: resolveStableProjectId(root),
+      type: 'pattern',
+      state: 'proven',
+      authority: 'automatic',
+      title: '命令记录',
+      summary: '命令记录摘要。',
+      applicablePaths: ['docs/'],
+      operations: ['verify'],
+      conclusions: [
+        { text: '先验证来源。', sources: [{ source: 'docs/opensuper/specs/retrieval.md' }] },
+      ],
+      relations: [],
+      verification: [],
+      sourceVersions: [
+        {
+          source: 'docs/opensuper/specs/retrieval.md',
+          size: stat.size,
+          modifiedAt: Math.trunc(stat.mtimeMs),
+        },
+      ],
+      applicationCount: 0,
+      successCount: 0,
+      failureCount: 0,
+      updatedAt: '2026-08-23T00:00:00.000Z',
+    };
+    const seed = new LocalProjectKnowledgeProvider({
+      projectRoot: root,
+      cacheRoot,
+      corpus: [],
+    });
+    await seed.apply({ kind: 'upsert', record });
+    seed.close();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await expect(
+        projectKnowledgeListCommand(root, { json: true, cacheRoot, state: 'all' }),
+      ).resolves.toMatchObject({
+        result: { records: expect.arrayContaining([expect.objectContaining({ id: record.id })]) },
+      });
+      await expect(
+        projectKnowledgeGetCommand(root, { json: true, cacheRoot, id: record.id }),
+      ).resolves.toMatchObject({ result: { record: { id: record.id } } });
+      await expect(
+        projectKnowledgeCorrectCommand(root, {
+          json: true,
+          cacheRoot,
+          id: record.id,
+          text: '用户纠正后的说明。',
+        }),
+      ).resolves.toMatchObject({ result: { record: { authority: 'user' } } });
+      await expect(
+        projectKnowledgeFeedbackCommand(root, {
+          json: true,
+          cacheRoot,
+          id: record.id,
+          outcome: 'used-successfully',
+        }),
+      ).resolves.toMatchObject({
+        result: {
+          record: {
+            id: record.id,
+            applicationCount: 1,
+            successCount: 1,
+          },
+        },
+      });
+      await expect(
+        projectKnowledgeForgetCommand(root, { json: true, cacheRoot, id: record.id }),
+      ).resolves.toMatchObject({ result: { record: { state: 'superseded' } } });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(cacheRoot, { recursive: true, force: true });
+    }
+  });
+});

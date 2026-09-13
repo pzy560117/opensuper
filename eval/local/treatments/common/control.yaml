@@ -1,0 +1,4 @@
+# Control treatment: no skills injected (baseline)
+CONTROL:
+  description: "No skills baseline - Claude has no opensuper workflow guidance"
+  skills: []

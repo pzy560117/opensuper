@@ -1,0 +1,36 @@
+[metadata]
+name = "opensuper-native-wave-f-dashboard-readonly"
+description = "Test Dashboard v2 parity with Native v4 state and prove read-only collection"
+difficulty = "hard"
+category = "opensuper-native"
+tags = ["opensuper-native", "dashboard", "projection", "read-only", "wave-f"]
+default_treatments = ["OPENSUPER_NATIVE_PHASE1"]
+
+[template]
+required = []
+
+[environment]
+description = "Python workspace with an active beta17 Native change visible to Dashboard."
+dockerfile = "environment/Dockerfile"
+timeout_sec = 900
+
+[validation]
+test_scripts = "test_native_wave_f_dashboard_readonly.py"
+target_artifacts = [".cache/opensuper-native-eval/cli-before.json", ".cache/opensuper-native-eval/cli-after.json", ".cache/opensuper-native-eval/dashboard.json", ".cache/opensuper-native-eval/native-tree-before.json", ".cache/opensuper-native-eval/native-tree-after.json"]
+timeout = 120
+
+[evaluation]
+profile = "generic"
+required_skills = ["opensuper-native"]
+expected_artifacts = [".cache/opensuper-native-eval/cli-before.json", ".cache/opensuper-native-eval/cli-after.json", ".cache/opensuper-native-eval/dashboard.json", ".cache/opensuper-native-eval/native-tree-before.json", ".cache/opensuper-native-eval/native-tree-after.json"]
+require_skill_invocation = true
+rubric_criteria = [
+  "Creates one active beta17 Native change with a stable CLI projection",
+  "Matches Dashboard v2 stateVersion, phase, loop, and acceptance fields with Runtime state",
+  "Demonstrates that Dashboard collection changes no Native-owned file",
+  "Keeps raw paths, execution identifiers, and full logs out of the public projection",
+]
+
+[interaction]
+mode = "none"
+max_turns = 1

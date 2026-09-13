@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenSuper Issue 修复"
+  short_description: "实施已验证的 Issue 修复"
+  default_prompt: "使用 $opensuper-github-issue-fix 安全实施已验证的 OpenSuper Issue。"
+policy:
+  allow_implicit_invocation: false
